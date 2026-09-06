@@ -1,0 +1,8 @@
+{
+  "name": "dsh-desktop-shell",
+  "version": "1.0.0",
+  "description": "DeepSeek Harness desktop shell (thin launcher, engine stays in npm global)",
+  "main": "main.js",
+  "author": "LengMu-Cloud",
+  "license": "MIT"
+}

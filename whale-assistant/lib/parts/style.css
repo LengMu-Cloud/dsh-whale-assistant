@@ -1,0 +1,882 @@
+#dsh-whale {
+	position: fixed;
+	right: 18px;
+	bottom: 18px;
+	width: 88px;
+	height: 88px;
+	z-index: 40;
+	pointer-events: auto;
+	cursor: grab;
+	touch-action: none;
+	user-select: none;
+	-webkit-user-select: none;
+	color: #4176e6;
+	opacity: 0.95;
+	transition: none;
+	filter: drop-shadow(0 6px 14px rgba(37, 99, 235, 0.28));
+	animation: dsh-whale-bob 5s ease-in-out infinite;
+}
+#dsh-whale svg {
+	width: 100%;
+	height: 100%;
+	display: block;
+	pointer-events: none;
+	/* rotate/mirror around the whale's own center while swimming */
+	transform-box: fill-box;
+	transform-origin: 50% 50%;
+}
+#dsh-whale.dsh-whale-dragging {
+	cursor: grabbing;
+	animation: none;
+}
+#dsh-whale.dsh-whale-wiggle {
+	animation: dsh-whale-wiggle 0.45s ease-in-out;
+}
+#dsh-whale.dsh-whale-swimming {
+	/* motion is JS-driven (position + heading + ripple trail); pause the idle bob */
+	animation: none;
+}
+@keyframes dsh-whale-bob {
+	0%, 100% { transform: translateY(0) rotate(-1.5deg); }
+	50% { transform: translateY(-8px) rotate(1.5deg); }
+}
+@keyframes dsh-whale-wiggle {
+	0% { transform: translateY(0) rotate(0deg); }
+	25% { transform: translateY(-6px) rotate(-6deg); }
+	50% { transform: translateY(0) rotate(5deg); }
+	75% { transform: translateY(-4px) rotate(-3deg); }
+	100% { transform: translateY(0) rotate(0deg); }
+}
+/* water ripples trailed behind the swimming whale */
+.dsh-whale-ripple-layer {
+	position: fixed;
+	left: 0;
+	top: 0;
+	width: 0;
+	height: 0;
+	pointer-events: none;
+	z-index: 39;
+}
+.dsh-whale-ripple {
+	position: absolute;
+	box-sizing: border-box;
+	border-radius: 50%;
+	border: 2px solid rgba(86, 134, 254, 0.75);
+	opacity: 0.9;
+	transform: scale(0.3);
+	animation: dsh-whale-ripple 0.7s ease-out forwards;
+}
+@keyframes dsh-whale-ripple {
+	to {
+		transform: scale(3.4);
+		opacity: 0;
+	}
+}
+/* elliptical water-surface rings (arrival splash; motion is JS-driven) */
+.dsh-whale-waterring {
+	position: absolute;
+	box-sizing: border-box;
+	border-radius: 50%;
+	border: 2px solid rgba(86, 134, 254, 0.7);
+}
+/* radiating water jets (arrival splash; motion is JS-driven) */
+.dsh-whale-jet {
+	position: absolute;
+	width: 16px;
+	height: 3px;
+	margin: -1.5px 0 0 -8px;
+	border-radius: 2px;
+	background: linear-gradient(90deg, rgba(103, 158, 248, 0), rgba(103, 158, 248, 0.95) 45%, rgba(103, 158, 248, 0.2));
+}
+/* gravity spray droplets (arrival splash; motion is JS-driven) */
+.dsh-whale-spray {
+	position: absolute;
+	width: 5px;
+	height: 5px;
+	margin: -2.5px 0 0 -2.5px;
+	border-radius: 50%;
+	background: rgba(103, 158, 248, 0.9);
+}
+/* little bounce on arrival */
+#dsh-whale.dsh-whale-splash {
+	animation: dsh-whale-bounce 0.5s ease-in-out;
+}
+@keyframes dsh-whale-bounce {
+	0% { transform: translateY(0); }
+	30% { transform: translateY(-14px); }
+	55% { transform: translateY(0); }
+	75% { transform: translateY(-6px); }
+	100% { transform: translateY(0); }
+}
+.dsh-whale-bubble {
+	position: absolute;
+	bottom: calc(100% + 12px);
+	right: -8px;
+	max-width: min(340px, 72vw);
+	box-sizing: border-box;
+	padding: 8px 12px;
+	border-radius: 10px;
+	background: var(--dsh-whale-bubble-bg, #ffffff);
+	color: var(--dsh-whale-bubble-fg, #1f2a44);
+	box-shadow: 0 4px 16px rgba(20, 40, 90, 0.18);
+	font-size: 12px;
+	line-height: 18px;
+	font-family: var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	word-break: break-word;
+	pointer-events: none;
+	opacity: 0;
+	transform: translateY(6px) scale(0.96);
+	transform-origin: bottom right;
+	transition: opacity 0.18s ease;
+	z-index: 2;
+}
+.dsh-whale-bubble.show {
+	opacity: 1;
+	animation: dsh-whale-bubble-pop 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
+	/* only a VISIBLE bubble is interactive (double-click to jump to the
+	 * conversation it reports) — a hidden one must not eat clicks */
+	pointer-events: auto;
+}
+@keyframes dsh-whale-bubble-pop {
+	0% { opacity: 0; transform: translateY(10px) scale(0.6); }
+	60% { opacity: 1; transform: translateY(-3px) scale(1.05); }
+	100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+.dsh-whale-bubble::after {
+	content: "";
+	position: absolute;
+	top: 100%;
+	right: 22px;
+	border: 6px solid transparent;
+	border-top-color: var(--dsh-whale-bubble-bg, #ffffff);
+}
+.dsh-whale-badge {
+	position: absolute;
+	top: 2px;
+	right: 2px;
+	min-width: 18px;
+	height: 18px;
+	padding: 0 5px;
+	box-sizing: border-box;
+	border-radius: 9px;
+	background: #f43f5e;
+	color: #ffffff;
+	font-size: 11px;
+	line-height: 18px;
+	font-weight: 600;
+	text-align: center;
+	font-family: var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
+	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+	pointer-events: auto;
+	cursor: pointer;
+	display: none;
+}
+/* napping: dimmed, no bob; a floating 💤 appears */
+#dsh-whale.dsh-whale-asleep {
+	animation: none;
+	filter: grayscale(0.55) brightness(0.85);
+}
+.dsh-whale-zzz {
+	position: absolute;
+	top: -2%;
+	right: 2%;
+	font-size: 14px;
+	line-height: 1;
+	pointer-events: none;
+	display: none;
+	z-index: 1;
+}
+#dsh-whale.dsh-whale-asleep .dsh-whale-zzz {
+	display: block;
+	animation: dsh-whale-zzz 2.2s ease-in-out infinite;
+}
+@keyframes dsh-whale-zzz {
+	0%, 100% { transform: translateY(0) scale(0.9); opacity: 0.55; }
+	50% { transform: translateY(-5px) scale(1.1); opacity: 1; }
+}
+/* status panel: an independent surface LEFT or BELOW the whale, so live
+   tool status and the per-task token/pressure report never collide with
+   the speech bubble (notifications) or the click summary */
+.dsh-whale-status {
+	position: absolute;
+	right: calc(100% + 12px);
+	bottom: 10px;
+	width: max-content;
+	max-width: min(280px, 60vw); /* JS narrows this further near viewport edges */
+	box-sizing: border-box;
+	padding: 6px 10px;
+	border-radius: 8px;
+	background: rgba(15, 23, 42, 0.85);
+	color: #cfe0ff;
+	border: 1px solid rgba(99, 150, 255, 0.45);
+	box-shadow: 0 3px 10px rgba(10, 20, 50, 0.35);
+	font-size: 11px;
+	line-height: 16px;
+	font-family: var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	word-break: break-word;
+	pointer-events: none;
+	opacity: 0;
+	transform: translateX(-6px);
+	transition: opacity 0.18s ease;
+	z-index: 2;
+}
+.dsh-whale-status.show {
+	opacity: 1;
+	transform: translateX(0);
+}
+.dsh-whale-status.dsh-whale-status-below {
+	right: auto;
+	left: 4px;
+	bottom: auto;
+	top: calc(100% + 12px);
+	transform: translateY(-6px);
+}
+.dsh-whale-status.dsh-whale-status-below.show {
+	transform: translateY(0);
+}
+/* no room on the left at all: flip to the whale's right side */
+.dsh-whale-status.dsh-whale-status-leftflip {
+	left: calc(100% + 12px);
+	right: auto;
+}
+@media (prefers-color-scheme: dark) {
+	.dsh-whale-status {
+		background: rgba(10, 16, 32, 0.9);
+		border-color: rgba(110, 160, 255, 0.4);
+	}
+}
+/* little pop whenever the unread count changes */
+.dsh-whale-badge.pop {
+	animation: dsh-whale-badge-pop 0.25s ease;
+}
+@keyframes dsh-whale-badge-pop {
+	0% { transform: scale(1); }
+	45% { transform: scale(1.4); }
+	100% { transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+	#dsh-whale,
+	#dsh-whale.dsh-whale-wiggle,
+	#dsh-whale.dsh-whale-swimming,
+	#dsh-whale.dsh-whale-splash,
+	.dsh-whale-badge.pop,
+	.dsh-whale-bubble.show,
+	.dsh-whale-zzz {
+		animation: none;
+	}
+}
+@media (prefers-color-scheme: dark) {
+	#dsh-whale {
+		color: #8fb7ff;
+		filter: drop-shadow(0 6px 14px rgba(8, 22, 62, 0.6));
+	}
+	.dsh-whale-bubble {
+		--dsh-whale-bubble-bg: #232b3f;
+		--dsh-whale-bubble-fg: #e8eefc;
+		box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+	}
+}
+
+/* right-click menu + wardrobe/history/settings panels: dark translucent, the
+   same visual language as the status panel (the manual drawer reuses
+   .dsh-whale-history; .dsh-whale-help-row/-num/-text stay for its gesture
+   list — only the old standalone .dsh-whale-help panel class is gone) */
+.dsh-whale-menu,
+.dsh-whale-wardrobe,
+.dsh-whale-history,
+.dsh-whale-settings {
+	position: fixed;
+	z-index: 45;
+	min-width: 172px;
+	box-sizing: border-box;
+	/* never taller than the viewport: a whale parked near the screen edge
+	 * used to clip tall panels (settings/sound picker) — now they measure,
+	 * flip above the whale, and SCROLL internally instead of running
+	 * off-screen */
+	max-height: calc(100vh - 20px);
+	overflow-y: auto;
+	overflow-x: hidden;
+	padding: 6px;
+	border-radius: 10px;
+	background: rgba(15, 23, 42, 0.92);
+	color: #cfe0ff;
+	border: 1px solid rgba(99, 150, 255, 0.45);
+	box-shadow: 0 6px 20px rgba(10, 20, 50, 0.45);
+	font-size: 12px;
+	line-height: 20px;
+	font-family: var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
+	pointer-events: none;
+	opacity: 0;
+	transform: translateY(6px) scale(0.97);
+	transform-origin: top left;
+	transition: opacity 0.15s ease, transform 0.15s ease;
+	user-select: none;
+	-webkit-user-select: none;
+}
+.dsh-whale-menu.show,
+.dsh-whale-wardrobe.show,
+.dsh-whale-history.show,
+.dsh-whale-settings.show {
+	opacity: 1;
+	transform: translateY(0) scale(1);
+	pointer-events: auto;
+}
+.dsh-whale-menu-head {
+	padding: 4px 10px 6px;
+	font-size: 11px;
+	color: #9db8f0;
+	border-bottom: 1px solid rgba(99, 150, 255, 0.25);
+	margin-bottom: 4px;
+	white-space: nowrap;
+}
+.dsh-whale-menu-item {
+	padding: 6px 10px;
+	border-radius: 6px;
+	cursor: pointer;
+	white-space: nowrap;
+}
+.dsh-whale-menu-item:hover {
+	background: rgba(99, 150, 255, 0.22);
+}
+.dsh-whale-menu-item:active {
+	background: rgba(99, 150, 255, 0.32);
+}
+.dsh-whale-wardrobe-title {
+	padding: 4px 10px 6px;
+	font-weight: 600;
+	border-bottom: 1px solid rgba(99, 150, 255, 0.25);
+	margin-bottom: 4px;
+}
+.dsh-whale-wardrobe-row {
+	padding: 5px 10px;
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+	white-space: nowrap;
+}
+.dsh-whale-wardrobe-locked {
+	color: #8fa3c8;
+}
+.dsh-whale-wardrobe-aff {
+	border-top: 1px solid rgba(99, 150, 255, 0.22);
+	margin-top: 4px;
+	padding-top: 7px;
+}
+.dsh-whale-wardrobe-close {
+	padding: 5px 10px 3px;
+	text-align: right;
+	color: #9db8f0;
+	cursor: pointer;
+}
+.dsh-whale-wardrobe-close:hover {
+	color: #cfe0ff;
+}
+/* health check ⚠️ chip: hidden while everything works; appears near the
+   whale when a dependency degrades (click = detail panel) */
+.dsh-whale-health-chip {
+	position: absolute;
+	top: -12px;
+	right: -4px;
+	font-size: 15px;
+	line-height: 1;
+	cursor: pointer;
+	filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.45));
+	animation: dsh-whale-health-pulse 2s ease-in-out infinite;
+	user-select: none;
+	-webkit-user-select: none;
+}
+@keyframes dsh-whale-health-pulse {
+	0%, 100% { transform: scale(1); }
+	50% { transform: scale(1.2); }
+}
+
+/* help panel: one row per gesture, blue number badge + text, each row a
+   guaranteed single line (nowrap) — now used by the 使用说明 manual's
+   gesture list */
+.dsh-whale-help-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 5px 10px;
+	white-space: nowrap;
+}
+.dsh-whale-help-num {
+	flex: none;
+	width: 18px;
+	height: 18px;
+	border-radius: 5px;
+	background: #3b82f6;
+	color: #ffffff;
+	font-size: 11px;
+	font-weight: 600;
+	line-height: 18px;
+	text-align: center;
+}
+.dsh-whale-help-text {
+	font-size: 12px;
+}
+/* history drawer: fixed drawer height with a SCROLLABLE list inside — long
+   histories never grow past the viewport */
+.dsh-whale-history-list {
+	max-height: 372px;      /* drawer height minus title/close chrome */
+	overflow-y: auto;
+	overflow-x: hidden;
+	margin: 0 2px;
+	padding-right: 2px;
+}
+.dsh-whale-history-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 5px 10px;
+	border-radius: 6px;
+	cursor: pointer;
+	white-space: nowrap;
+}
+.dsh-whale-history-row:hover {
+	background: rgba(99, 150, 255, 0.22);
+}
+.dsh-whale-history-icon {
+	flex: none;
+	width: 16px;
+	height: 16px;
+	line-height: 16px;
+	border-radius: 50%;
+	text-align: center;
+	font-size: 11px;
+	font-weight: 700;
+	color: #ffffff;
+}
+.dsh-whale-history-icon-done {
+	background: #22a06b;
+}                        /* ✓ green: completed */
+.dsh-whale-history-icon-fail {
+	background: #e5484d;
+}                        /* ✗ red: failed */
+.dsh-whale-history-icon-cut {
+	background: #64748b;
+}                        /* ⏹ grey: truncated (max-tokens) */
+.dsh-whale-history-icon-killed {
+	background: #4c8dff;
+}                        /* ⏹ blue: user-stopped (distinct from truncation) */
+.dsh-whale-history-icon-approval {
+	background: #f0b429;
+	color: #4a3200;          /* dark text: white is unreadable on yellow */
+	font-weight: 900;
+}                        /* yellow ?: approval requested */
+.dsh-whale-history-icon-question {
+	background: #4c8dff;
+	font-weight: 900;
+}                        /* blue ?: question to answer (green ? read as done ✓) */
+.dsh-whale-history-text {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	font-size: 12px;
+}
+.dsh-whale-history-time {
+	flex: none;
+	font-size: 10px;
+	color: #8fa3c8;
+	font-variant-numeric: tabular-nums;
+}
+.dsh-whale-history-empty {
+	padding: 14px 10px;
+	text-align: center;
+	color: #8fa3c8;
+	font-size: 12px;
+}
+/* settings panel rows */
+.dsh-whale-settings-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 6px 10px;
+	border-radius: 6px;
+	cursor: pointer;
+	white-space: nowrap;
+}
+.dsh-whale-settings-row:hover {
+	background: rgba(99, 150, 255, 0.22);
+}
+.dsh-whale-settings-label {
+	font-size: 12px;
+}
+.dsh-whale-settings-value {
+	font-size: 12px;
+	color: #9db8f0;
+	font-variant-numeric: tabular-nums;
+}
+/* stuck-tool hint: red border on the status panel while a tool hangs */
+.dsh-whale-status-stuck {
+	border-color: #ef4444 !important;
+}
+.dsh-whale-status-stuck::before {
+	content: "⚠️";
+	display: inline-block;
+	margin-right: 4px;
+}
+/* busy pulse while a turn is running — opacity is scoped to .show so the
+ * bare busy flag can NEVER un-hide the panel (it must not surface stale
+ * token lines at task start; that was the "box pops up and never leaves" bug) */
+.dsh-whale-status.show.dsh-whale-status-busy {
+	opacity: 0.85;
+	animation: dsh-whale-busy-pulse 1.8s ease-in-out infinite;
+}
+.dsh-whale-status-busy:not(.show) {
+	opacity: 0;
+}
+@keyframes dsh-whale-busy-pulse {
+	0%, 100% { opacity: 0.85; }
+	50% { opacity: 0.55; }
+}
+/* pressure-tinted border (primary path when color-mix exists) */
+.dsh-whale-status {
+	border-color: color-mix(in srgb,
+		#ef4444 calc(var(--dsh-whale-pressure, 0) * 1%),
+		rgba(99, 150, 255, 0.45));
+	transition: border-color 0.3s ease;
+}
+/* happy bounce when petted (replaces the idle bob for a moment) */
+#dsh-whale.dsh-whale-pet {
+	animation: dsh-whale-pet 0.7s ease-in-out;
+}
+@keyframes dsh-whale-pet {
+	0%, 100% { transform: translateY(0) scale(1); }
+	30% { transform: translateY(-4px) scale(1.06) rotate(-2deg); }
+	60% { transform: translateY(2px) scale(0.98) rotate(2deg); }
+}
+/* hearts floating up when petted (motion is JS-driven) */
+.dsh-whale-heart {
+	position: absolute;
+	font-size: 12px;
+	line-height: 1;
+	pointer-events: none;
+	transform: translate(-50%, -50%);
+	color: #ff6b9d;
+	text-shadow: 0 0 6px rgba(255, 107, 157, 0.55);
+}
+
+/* history drawer: search input + clear row + report summary */
+.dsh-whale-history-search {
+	margin: 6px 10px 4px;
+	padding: 5px 8px;
+	border: 1px solid rgba(99, 150, 255, 0.35);
+	border-radius: 6px;
+	background: rgba(10, 14, 24, 0.8);
+	color: #dbe6ff;
+	font-size: 12px;
+	outline: none;
+	width: calc(100% - 20px);
+	box-sizing: border-box;
+}
+.dsh-whale-history-search:focus {
+	border-color: rgba(99, 150, 255, 0.7);
+}
+.dsh-whale-history-clear {
+	margin: 4px 10px 8px;
+	padding: 5px 8px;
+	border-radius: 6px;
+	text-align: center;
+	font-size: 11px;
+	color: #ff9d9d;
+	background: rgba(239, 68, 68, 0.12);
+	cursor: pointer;
+	user-select: none;
+}
+.dsh-whale-history-clear:hover {
+	background: rgba(239, 68, 68, 0.22);
+}
+.dsh-whale-report-summary {
+	margin: 2px 10px 6px;
+	padding: 6px 8px;
+	border-radius: 6px;
+	background: rgba(99, 150, 255, 0.14);
+	font-size: 12px;
+	color: #cfe0ff;
+}
+
+/* settings section headers (通知/声音/监控/数据/诊断) */
+.dsh-whale-settings-section {
+	/* 层级（用户反馈）：分组标题带上方分隔线 + 宽字距，行再内缩嵌套，
+	 * 组与组、组与行一眼可分 */
+	margin: 9px 8px 3px;
+	padding: 3px 6px;
+	font-size: 10px;
+	letter-spacing: 3px;
+	color: #8fa3c8;
+	border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
+.dsh-whale-settings-section:first-of-type {
+	margin-top: 2px;
+}
+
+/* 📖 使用说明 (manual drawer): a wide side drawer — term line + wrapping
+   dimmer description per item, section headers between groups */
+.dsh-whale-manual {
+	width: 380px;
+}
+.dsh-whale-manual-sec {
+	margin: 9px 10px 3px;
+	padding: 2px 4px;
+	font-size: 11px;
+	font-weight: 600;
+	color: #9db8f0;
+	border-bottom: 1px solid rgba(99, 150, 255, 0.18);
+}
+.dsh-whale-manual-item {
+	padding: 5px 10px 3px;
+}
+.dsh-whale-manual-t {
+	font-size: 12px;
+	color: #cfe0ff;
+	white-space: normal;
+	line-height: 17px;
+}
+.dsh-whale-manual-d {
+	font-size: 11px;
+	color: #8fa3c8;
+	white-space: normal;
+	line-height: 16px;
+	margin-top: 1px;
+}
+
+/* faint transient note above the whale (clear-all feedback #10) */
+.dsh-whale-note {
+	position: absolute;
+	bottom: calc(100% + 58px);
+	right: 0;
+	padding: 3px 9px;
+	border-radius: 8px;
+	background: rgba(255, 255, 255, 0.88);
+	color: #7c869c;
+	font-size: 11px;
+	line-height: 1.4;
+	white-space: nowrap;
+	box-shadow: 0 2px 8px rgba(30, 41, 59, 0.10);
+	opacity: 0.85;
+	transition: opacity 0.4s ease;
+	pointer-events: none;
+	z-index: 3;
+}
+.dsh-whale-note.out {
+	opacity: 0;
+}
+
+/* settings (?) explainer + click-toggled hint (#6). The row is flex
+ * space-between; auto left margin on the value keeps label LEFT / value
+ * RIGHT when the third (?) child joins, and the hint wraps full-width. */
+.dsh-whale-settings-row {
+	flex-wrap: wrap;
+	margin: 0 6px 0 14px; /* nested under the section header (#层级) */
+}
+.dsh-whale-settings-value {
+	margin-left: auto;
+}
+.dsh-whale-settings-q {
+	flex: none;
+	width: 14px;
+	height: 14px;
+	line-height: 14px;
+	border-radius: 50%;
+	background: rgba(100, 116, 139, 0.14);
+	color: #64748b;
+	font-size: 10px;
+	text-align: center;
+	cursor: pointer;
+	user-select: none;
+	-webkit-user-select: none;
+}
+.dsh-whale-settings-hint {
+	/* order 10: ALWAYS laid out last, so the (?) stays on the row's first
+	 * line and the expanded hint wraps BELOW it (user-reported: the (?)
+	 * used to drop under the hint text) */
+	order: 10;
+	display: none;
+	flex-basis: 100%;
+	margin-top: 2px;
+	padding: 4px 8px;
+	border-radius: 6px;
+	background: rgba(100, 116, 139, 0.08);
+	color: #6b7280;
+	font-size: 11px;
+	line-height: 1.5;
+	white-space: normal;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 8px;
+}
+.dsh-whale-settings-hint.show {
+	display: flex;
+}
+.dsh-whale-settings-hint-t {
+	flex: 1 1 auto;
+}
+.dsh-whale-settings-hint-x {
+	flex: none;
+	color: #3b82f6;
+	cursor: pointer;
+	font-size: 10px;
+	white-space: nowrap;
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+/* right-click menu group separator (#4) */
+.dsh-whale-menu-sep {
+	height: 1px;
+	margin: 4px 12px;
+	background: rgba(148, 163, 184, 0.35);
+}
+
+/* manual keyword search (#5) */
+.dsh-whale-manual-search {
+	margin: 6px 12px 2px;
+	width: calc(100% - 24px);
+	box-sizing: border-box;
+}
+.dsh-whale-manual-status {
+	flex: none;
+	padding: 2px 14px 4px;
+	color: #8fa3c8;
+	font-size: 11px;
+	min-height: 0;
+}
+.dsh-whale-hide {
+	display: none !important;
+}
+.dsh-whale-help-hit {
+	background: rgba(255, 199, 0, 0.12);
+	border-radius: 6px;
+}
+
+/* history search highlight (#7) */
+.dsh-whale-history-text mark,
+.dsh-whale-manual-item mark {
+	background: #ffe58f;
+	color: #1f2a44;
+	border-radius: 2px;
+	padding: 0 1px;
+}
+.dsh-whale-history-count {
+	flex: none;
+	padding: 0 14px 4px;
+	color: #8fa3c8;
+	font-size: 11px;
+}
+
+/* ranged clear options (#8) */
+.dsh-whale-history-clear-opts {
+	display: none;
+}
+.dsh-whale-history-clear-opts.show {
+	display: block;
+}
+.dsh-whale-history-clear-opt {
+	padding: 6px 14px;
+	font-size: 11px;
+	color: #7c2d2d;
+	cursor: pointer;
+	white-space: nowrap;
+}
+.dsh-whale-history-clear-opt:hover {
+	background: rgba(124, 45, 45, 0.08);
+}
+
+/* absolute-time reminder: three COMPACT steppers in ONE row (时/分/秒) */
+.dsh-whale-remind-row {
+	gap: 5px;
+}
+.dsh-whale-step {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 2px;
+	flex: 1 1 0;
+	min-width: 0;
+}
+.dsh-whale-step-btn {
+	flex: none;
+	width: 15px;
+	height: 20px;
+	line-height: 18px;
+	text-align: center;
+	border-radius: 4px;
+	background: rgba(148, 163, 184, 0.10);
+	color: #9fb3d1;
+	cursor: pointer;
+	font-size: 11px;
+	user-select: none;
+	-webkit-user-select: none;
+}
+.dsh-whale-step-btn:hover {
+	background: rgba(148, 163, 184, 0.2);
+}
+.dsh-whale-step-val {
+	flex: 1 1 26px;
+	width: 26px;
+	min-width: 0;
+	margin: 0;
+	padding: 3px 0;
+	font-size: 11px;
+	text-align: center;
+	background: rgba(148, 163, 184, 0.08);
+	color: inherit;
+	border: 1px solid rgba(148, 163, 184, 0.25);
+	border-radius: 5px;
+}
+.dsh-whale-remind-addrow {
+	justify-content: center;
+	color: #6ea8fe;
+	font-weight: 600;
+}
+
+/* per-kind sound dropdowns (音色): label LEFT, dropdown fills the REST of
+ * the SAME row — label and value must read as one setting, not two items */
+.dsh-whale-sound-panel {
+	min-width: 238px;
+}
+.dsh-whale-sound-sel {
+	flex: 1 1 auto;
+	min-width: 0;
+	width: auto;
+	margin-left: 10px;
+	padding: 3px 2px;
+	font-size: 11px;
+	background: rgba(148, 163, 184, 0.08);
+	color: inherit;
+	border: 1px solid rgba(148, 163, 184, 0.25);
+	border-radius: 6px;
+	cursor: pointer;
+	color-scheme: dark; /* native popup renders dark instead of blinding white */
+}
+/* native option lists: dark bg + light text, otherwise unreadable on the
+ * dark panel (user feedback: 白底浅字看不清) */
+.dsh-whale-sound-sel option,
+.dsh-whale-step-val option {
+	background: #16213a;
+	color: #e6ecf8;
+}
+.dsh-whale-step-val {
+	color-scheme: dark;
+}
+
+/* sub-panel footer: ← 返回 on the left, ✕ 关闭 on the right */
+.dsh-whale-panel-foot {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 8px;
+	margin-top: 8px;
+}
+.dsh-whale-panel-back {
+	margin-top: 0;
+	color: #3b82f6;
+}
+

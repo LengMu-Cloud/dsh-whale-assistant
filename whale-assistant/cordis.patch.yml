@@ -1,0 +1,5 @@
+# dsh-whale-assistant bundle patch: inserts the dual-face plugin row into the web
+# profile roster (same recipe as the task-board specimen).
+- insert:
+  - id: ui-whale-assistant
+    name: '@lengmu-cloud/dsh-whale-assistant'

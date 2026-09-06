@@ -1,0 +1,28 @@
+{
+  "name": "@lengmu-cloud/dsh-whale-assistant",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "description": "dsh-whale-assistant: the companion whale for DeepSeek Harness - server-side history storage (~/.dsh/whale-assistant.json) shared by every browser/window, plus hosting for the whale script itself",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.1.2-alpha.1"
+    },
+    "client": {
+      "inject": [],
+      "platform": "web"
+    }
+  },
+  "main": "lib/index.js",
+  "author": "LengMu-Cloud",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LengMu-Cloud/dsh-whale-assistant.git"
+  }
+}

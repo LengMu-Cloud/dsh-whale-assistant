@@ -1,0 +1,56 @@
+# 本机状态 / 审计产物
+.mimosa/
+_archive/
+_audit*.txt
+_shot-*.png
+probe-capture*.txt
+schema-snapshot.json
+*.log
+*.bak
+
+# 第三方版权物（严禁发布）
+index.html
+_dsh-alpha-specimen/
+_specimen-taskboard/
+bundle-probe/
+*.tgz
+
+# v1 历史与一次性工作文件
+_whale.orig.*
+_extracted-fetch.js
+_split.js
+_patch_tests.py
+index.template.html
+
+# 内部运维文档（含本机路径与会话名，本地保留）
+交接报告*.md
+交接摘要*.md
+后续方案*.md
+发布方案*.md
+测试方案*.md
+测试报告*.md
+设计总结汇报.md
+设计总结汇报.html
+设计总结汇报-2026-09-05.*
+设计总结汇报-2026-09-06.*
+小鲸鱼使用说明.*
+
+# 本机一次性工具脚本
+run-update.ps1
+apply-plugin-hook.ps1
+apply.ps1
+revert.ps1
+watch-*.py
+analyze-*.js
+render-*.js
+probe-*.js
+audit-job-notify.js
+build-index.js
+test-extracted-fetch.js
+
+# v1 时期设计预览（是否随 README 发布见拍板清单）
+_gear-preview.*
+_help-preview.*
+preview-*
+favicon-full.svg
+whale.svg

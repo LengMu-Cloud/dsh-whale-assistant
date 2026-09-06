@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>DeepSeek Harness</title>
+<style>
+  html, body {
+    margin: 0; height: 100%;
+    background: #0f1115;
+    color: #9aa3b2;
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .box { text-align: center; }
+  .whale { font-size: 56px; animation: bob 2.2s ease-in-out infinite; }
+  .text { margin-top: 18px; font-size: 15px; letter-spacing: 1px; }
+  .dots::after { content: ''; animation: dots 1.5s steps(4, end) infinite; }
+  @keyframes bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+  @keyframes dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; } }
+</style>
+</head>
+<body>
+  <div class="box">
+    <div class="whale">🐋</div>
+    <div class="text">正在启动 DeepSeek Harness<span class="dots"></span></div>
+  </div>
+</body>
+</html>

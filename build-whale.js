@@ -36,21 +36,30 @@ function build() {
 }
 
 /* === verification: line-sliced modules tile 1..N, order is contiguous;
- * inline modules are authored and bypass range checks === */
-const ORIG = fs.readFileSync(path.join(ROOT, '_whale.orig.js'), 'utf8');
-const N = ORIG.split('\n').length;
+ * inline modules are authored and bypass range checks. The pristine v1
+ * reference (_whale.orig.js) is a local dev artifact, NOT part of the
+ * repository — a release clone verifies manifest self-consistency only. */
+const ORIG_PATH = path.join(ROOT, '_whale.orig.js');
+const ORIG = fs.existsSync(ORIG_PATH) ? fs.readFileSync(ORIG_PATH, 'utf8') : null;
+const N = ORIG ? ORIG.split('\n').length : 0;
 const sliced = MANIFEST.filter((m) => !m.inline);
 {
-	const covered = new Array(N + 1).fill(false);
-	for (const mod of sliced) {
-		const { start, end } = mod;
-		if (start < 1 || end > N || start > end) throw new Error(`${mod.file}: bad range ${start}-${end}`);
-		for (let i = start; i <= end; i++) {
-			if (covered[i]) throw new Error(`overlap at line ${i} (${mod.file})`);
-			covered[i] = true;
+	if (ORIG) {
+		const covered = new Array(N + 1).fill(false);
+		for (const mod of sliced) {
+			const { start, end } = mod;
+			if (start < 1 || end > N || start > end) throw new Error(`${mod.file}: bad range ${start}-${end}`);
+			for (let i = start; i <= end; i++) {
+				if (covered[i]) throw new Error(`overlap at line ${i} (${mod.file})`);
+				covered[i] = true;
+			}
+		}
+		for (let i = 1; i <= N; i++) if (!covered[i]) throw new Error(`gap at line ${i}`);
+	} else {
+		for (const mod of sliced) {
+			if (mod.start > mod.end) throw new Error(`${mod.file}: bad range ${mod.start}-${mod.end}`);
 		}
 	}
-	for (let i = 1; i <= N; i++) if (!covered[i]) throw new Error(`gap at line ${i}`);
 	for (let i = 1; i < sliced.length; i++) {
 		if (sliced[i - 1].end + 1 !== sliced[i].start) {
 			throw new Error(`manifest order gap: ${sliced[i - 1].file} ends ${sliced[i - 1].end}, ${sliced[i].file} starts ${sliced[i].start}`);
@@ -109,10 +118,12 @@ function slicedOnlySource() {
  *   diverge); it is reported, not a hard failure — behaviour is verified by
  *   test-whale.js instead. */
 const slicedOnly = slicedOnlySource().replace(/^\/\* ---- module: .* ---- \*\/\n/gm, '');
-const identicalSliced = slicedOnly === ORIG;
+const identicalSliced = ORIG ? slicedOnly === ORIG : null;
 console.log('whale.js rebuilt: %d bytes from %d modules (%d line-sliced %d inline)',
 	out.length, MANIFEST.length, sliced.length, MANIFEST.length - sliced.length);
-if (identicalSliced) {
+if (identicalSliced === null) {
+	console.log('pristine reference (_whale.orig.js) not present (release clone): manifest checks only');
+} else if (identicalSliced) {
 	console.log('line-sliced parts byte-identical to original: true');
 } else {
 	const a = slicedOnly.split('\n');

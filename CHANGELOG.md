@@ -10,7 +10,7 @@ GitHub 开源发布准备（内部清理，无功能变更）。
 ### 变更
 - **插件包 scope 改名** `@deepseek-ai/dsh-whale-assistant` → `@lengmu-cloud/dsh-whale-assistant`：包 name、client 模块 id、cordis.patch.yml 注册行、ensure 脚本、README 示例同步更换；0.3.0 及更早条目保留旧名为历史记录。路由 `/api/whale-assistant/*`、数据文件与注册点 id `ui-whale-assistant` 不变
 - 包版本对齐 0.3.0，补 author / license / repository 元数据
-- 装机脚本可移植化：`ensure-whale-assistant.ps1` 参数默认值动态化；`apply-plugin-hook.ps1` 的 DSH 包定位改 `npm prefix -g` 动态解析；`lib/index.js` 移除本机路径兜底（包内副本即唯一来源）；`fix-shell.ps1` 移除本机安装位置与 asar 维护目录兜底
+- 装机脚本可移植化：`ensure-whale-assistant.ps1` 参数默认值动态化；`apply-plugin-hook.ps1` 的 DSH 包定位改 `npm prefix -g` 动态解析；`lib/index.js` 移除本机路径兜底（包内副本即唯一来源）；`fix-shell.ps1` 移除本机安装位置与 asar 维护目录兜底；`build-whale.js` 不再强依赖本地参考件 `_whale.orig.js`（release 克隆降级为清单自洽校验）
 
 ## [0.3.0] - 2026-09-05
 

@@ -37,15 +37,15 @@ if ($pkg -notmatch 'dsh-whale-assistant') {
 $patchPath = Join-Path $ProfileDir 'cordis.patch.yml'
 $patch = [System.IO.File]::ReadAllText($patchPath)
 if ($patch -notmatch 'ui-whale-assistant') {
-	$row = @'
+	$row = @"
 
 # dsh-whale-assistant: whale server-side storage (task history) -- data lands in
 # ~/.dsh/whale-assistant.json so the desktop shell and every browser share ONE
-# history. Plugin package: node_modules/dsh-whale-assistant.
+# history. Plugin package: node_modules/$DepName.
 - insert:
     - id: ui-whale-assistant
-      name: dsh-whale-assistant
-'@
+      name: '$($DepName)'
+"@
 	[System.IO.File]::WriteAllText($patchPath, $patch + $row)
 	Write-Host '    cordis.patch.yml: whale-assistant insert row added'
 } else {

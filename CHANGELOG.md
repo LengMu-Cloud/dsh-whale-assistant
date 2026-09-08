@@ -12,6 +12,16 @@ GitHub 开源发布准备（内部清理，无功能变更）。
 - 包版本对齐 0.3.0，补 author / license / repository 元数据
 - 装机脚本可移植化：`ensure-whale-assistant.ps1` 参数默认值动态化；`apply-plugin-hook.ps1` 的 DSH 包定位改 `npm prefix -g` 动态解析；`lib/index.js` 移除本机路径兜底（包内副本即唯一来源）；`fix-shell.ps1` 移除本机安装位置与 asar 维护目录兜底；`build-whale.js` 不再强依赖本地参考件 `_whale.orig.js`（release 克隆降级为清单自洽校验）
 
+## [未发布] - 2026-09-08
+
+文档与装机链路修正（无功能变更）。
+
+### 修复
+- **`ensure-whale-assistant.ps1` 注册行补 scope**：写入 `cordis.patch.yml` 的 `name:` 由无 scope 的 `dsh-whale-assistant` 改为带引号的 `'@lengmu-cloud/dsh-whale-assistant'`（alpha client 清单只聚合带 scope 的包，此前全新机器照脚本安装不会生效）；已用一次性临时 profile 实测首次写入与幂等重跑
+
+### 变更
+- **README 全面更新**：简介采纳 ①-⑩ 功能清单；新增环境要求 / 升级与卸载 / 工作原理 / 常见问题 / 开发与测试五节；安装节接入 ensure 脚本 + junction 建链完整三件套，注册行示例改为真实 FLAT 语法；能力矩阵补陪伴系统与历史跳转；测试断言数 570+ → 620+（与 FEATURES.md 同步）
+
 ## [0.3.0] - 2026-09-05
 
 体验优化 14 项（外部方案评审落地 13 项）+ 三轮用户反馈十项。

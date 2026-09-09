@@ -1,6 +1,6 @@
 // whale-patch: shell v1 (maintained by whale-patch/scripts/fix-shell.ps1)
 // DeepSeek Harness 瘦壳（引擎外置：dsh web 走 npm 全局包，更新 = npm install -g）
-const { app, BrowserWindow, Menu } = require('electron');
+const { app, BrowserWindow, Menu, session } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -192,45 +192,67 @@ function httpOk(url, cb) {
   } catch (_) { cb(false); }
 }
 
-/** 服务就绪后等待"真正可用"的认证 URL（最多 60s，每 1s 复查）：
- *  1. 日志最新 token URL 必须真实返回 200（token 随重启轮换，旧
- *     token / 插件未挂载完都会被这里挡住）；
- *  2. 前 15s 还要求 /api/whale-assistant/state 返回 200（cordis 插件层
- *     就绪的金丝雀；15s 后放行，避免插件缺失时永远等待）。 */
+/** 服务就绪后加载 UI。
+ *  1) 快路径：Electron 会话里已有 127.0.0.1:3080 的 cookie（token 换来的
+ *     约 30 天凭证）→ 直接 loadURL(plain)。Node http.get 看不到该 cookie，
+ *     若仍拿已消费的一次性 token 去探，会 401 并白等 60s（服务已在跑时的
+ *     主因）。
+ *  2) 慢路径（无 cookie，例如首次安装）：读日志最新 token URL，真实 HTTP
+ *     探测；连续 AUTH_FAIL_LIMIT 次失败则降级加载 plain URL（登录页），
+ *     不再死等 60s。前几秒仍要求 /api/whale-assistant/state 为 200，
+ *     避免插件未挂完就进页面黑屏。 */
+const AUTH_FAIL_LIMIT = 8;
+
+function hasDshSessionCookie(cb) {
+  try {
+    session.defaultSession.cookies.get({ url: DSH_URL })
+      .then((cookies) => cb(!!(cookies && cookies.length)))
+      .catch(() => cb(false));
+  } catch (_) { cb(false); }
+}
+
 function loadUiWithAuth() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  let tries = 0;
-  let done = false;
-  const timer = setInterval(() => {
-    if (done || !mainWindow || mainWindow.isDestroyed()) {
-      clearInterval(timer);
-      return;
-    }
-    tries++;
-    if (tries > 60) {
-      done = true;
-      clearInterval(timer);
-      log('no verified URL in 60s, loading plain URL as fallback');
+  hasDshSessionCookie((hasCookie) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (hasCookie) {
+      log('session cookie present, loading plain URL (fast path)');
       mainWindow.loadURL(DSH_URL);
       return;
     }
-    const tokenUrl = readTokenUrlFromLog();
-    const candidate = tokenUrl || DSH_URL;
-    httpOk(candidate, (pageOk) => {
-      if (done || !pageOk) return;
-      const finish = () => {
-        if (done) return;
+    let tries = 0;
+    let done = false;
+    const timer = setInterval(() => {
+      if (done || !mainWindow || mainWindow.isDestroyed()) {
+        clearInterval(timer);
+        return;
+      }
+      tries++;
+      if (tries > AUTH_FAIL_LIMIT) {
         done = true;
         clearInterval(timer);
-        log('loading UI with verified URL' + (tokenUrl ? ' (authenticated)' : ' (plain)'));
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.loadURL(candidate);
-      };
-      if (tries > 15) return finish();
-      httpOk(DSH_URL + '/api/whale-assistant/state', (pluginsOk) => {
-        if (pluginsOk) finish();
+        log('auth URL not verified in ' + AUTH_FAIL_LIMIT + 's, loading plain URL as fallback');
+        mainWindow.loadURL(DSH_URL);
+        return;
+      }
+      const tokenUrl = readTokenUrlFromLog();
+      const candidate = tokenUrl || DSH_URL;
+      httpOk(candidate, (pageOk) => {
+        if (done || !pageOk) return;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          clearInterval(timer);
+          log('loading UI with verified URL' + (tokenUrl ? ' (authenticated)' : ' (plain)'));
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.loadURL(candidate);
+        };
+        if (tries > 4) return finish();
+        httpOk(DSH_URL + '/api/whale-assistant/state', (pluginsOk) => {
+          if (pluginsOk) finish();
+        });
       });
-    });
-  }, 1000);
+    }, 1000);
+  });
 }
 
 // ---------- 主窗口 ----------

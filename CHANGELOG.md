@@ -112,3 +112,13 @@ v1 时代：37 项功能的初始版本（index.html 补丁形态）。
 ---
 
 *小鲸鱼永远待命，随时汇报 🐋✨*
+
+
+## [未发布] - 2026-09-09
+
+### 修复
+- **桌面壳启动慢（服务已在运行时约 60s）**：`shell/main.js` 的 `loadUiWithAuth` 改为 cookie 快路径优先（`session.defaultSession.cookies`）；无 cookie 时 token 探测死等 60s→8s（`AUTH_FAIL_LIMIT`），鲸鱼插件金丝雀窗口 15s→4s。根因：Node `http.get` 不带 Electron cookie，且日志中一次性 token 在服务已运行时已消费（恒 401）。
+
+### 变更
+- 仓库路径：`whale-patch` → `D:\vibe coding\dsh-whale-assistant`（绑定/Junction/更新脚本已改；GitHub remote 不变）
+- 报告文件名日期更新：`设计总结汇报-2026-09-09.md`、`交接报告-最终-2026-09-09.md`

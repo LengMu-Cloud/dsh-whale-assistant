@@ -9,6 +9,7 @@ DSH **0.1.5-rc.2** 升级适配（本机由 0.1.2-rc.1 一键/手动升级实测
 
 ### 修复
 - **0.1.5 会话累计用量文案适配**：官方统计条由「输入 X tok · 输出 Y tok」改为「`10.8M tok·缓存命中 6%`」。`feedSessionUsage` 在保留旧正则的同时识别新格式，避免全对话累计静默失效。**已知降级**：0.1.5 输入框旁「上下文已用 N%」已从 DOM 移除，前台上下文压力色可能不再更新（完成气泡旁本轮 token 面板仍正常，依赖 `assistant/message` usage 与「用量 X tok」芯片）
+- **0.1.5 累计条拆节点适配（真机回归修复）**：0.1.5 实际 DOM 把总量与缓存命中渲染成**两个独立文本节点**（`<span>10.9M tok<span>·</span>缓存命中 7%</span>`），节点级文本永远不同时包含两半——首版仅按节点文本匹配的正则真机不生效，全对话累计行静默消失（2026-09-11 真机验收抓到）。修复：节点含 `tok`/`缓存命中` 时对**父节点 textContent** 重试组合匹配（每轮芯片父节点无「缓存命中」，不会误报）；新增 `_feedSessionUsage` 测试缝与单测组 60（拆节点/合节点/芯片不误报三态锁死）
 
 ### 变更
 - **`run-update.ps1` 对齐 0.1.5 实装路径**：插件 junction 改为 `@lengmu-cloud/dsh-whale-assistant`（修复 0.3.0 改名后仍写 `@deepseek-ai` 的路径 bug）；钩子校验改为「已知候选 + 递归搜索」，找不到 conversation 插件时 **exit 1**（原先 WARN 后继续会假绿）；npm 安装改为绝对路径 `node`+`npm-cli.js` + `--ignore-scripts` + 手工编译 koffi（本机 0.1.5 实装：koffi 子进程 `cmd /c node` 找不到 node 导致裸 `npm i -g` 失败）；`dsh --version` 改为优先读 package.json

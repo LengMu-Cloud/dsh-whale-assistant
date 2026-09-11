@@ -8,10 +8,10 @@
  *
  * Live-verified DOM signals (2026-09-01/02 captures):
  *   - usage chip: "用量 X tok" per finished turn row (+ row timestamp)
- *   - question: [data-tool="ask_user_question"][data-state="running"] in a
- *     [data-chat-call-id] row → question/requested 🤔
+ *   - question: an ask_user_question tool row in state running, inside a
+ *     chat call row → question/requested 🤔
  *   - other running tools → tool/call 🔧 (+ a sweep retires them)
- *   - failure: a "本轮运行失败" row while the turn is live → turn/end error
+ *   - failure: a 本轮运行失败 row while the turn is live → turn/end error
  *   - compaction: the "已压缩 N 条历史记录" banner → one-off bubble notice
  *   - usage bar "输入 X tok · 输出 Y tok" → tokenUsage projection
  *   - context meter "上下文已用 N%" → contextPressure projection
@@ -24,6 +24,15 @@
  * only, not the whale's outer IIFE.
  */
 	(function initAlphaAdapter() {
+	/* test seam: drive the DOM usage sweep directly (0.1.5 split-node
+	 * cumulative label regression). Must sit BEFORE the early return below —
+	 * the vm test env has no MutationObserver, but the seam still has to
+	 * land for unit group 60 (function declarations hoist, so the reference
+	 * is valid here). */
+	try {
+		window.__dshWhale = window.__dshWhale || {};
+		window.__dshWhale._feedSessionUsage = feedSessionUsage;
+	} catch (e) {}
 	if (typeof MutationObserver === 'undefined' || typeof window === 'undefined') return;
 
 	/* The real conversation id lives in the app's localStorage keys
@@ -213,8 +222,20 @@
 							value: { uncachedInputTokens: parseTokNum(m[1]), outputTokens: parseTokNum(m[2]) }
 						});
 					} else {
-						/* 0.1.5: "10.8M tok·缓存命中 6%" — one combined total */
-						var m2 = /([\d.]+\s*[KM万]?)\s*tok\s*[·•]?\s*缓存命中/.exec(t);
+						/* 0.1.5: the stats label renders the total and the
+						 * cache-hit share as SEPARATE text nodes —
+						 * <span>10.9M tok<span aria-hidden>·</span>缓存命中 7%</span>
+						 * — so node-level text never holds both halves and the
+						 * combined match must retry on the parent's textContent
+						 * (live-DOM regression 2026-09-11: 全对话累计 silently
+						 * died after the 0.1.5 upgrade; the per-turn chip's
+						 * parent lacks 缓存命中 so it can never false-positive).
+						 * Prefilter keeps the whole-body walk cheap. */
+						var m2 = t.match(/([\d.]+\s*[KM万]?)\s*tok\s*[·•]?\s*缓存命中/);
+						if (!m2 && node.parentElement &&
+							(t.indexOf('tok') !== -1 || t.indexOf('缓存命中') !== -1)) {
+							m2 = (node.parentElement.textContent || '').match(/([\d.]+\s*[KM万]?)\s*tok\s*[·•]?\s*缓存命中/);
+						}
 						if (m2) {
 							usageDone = true;
 							var total = parseTokNum(m2[1]);

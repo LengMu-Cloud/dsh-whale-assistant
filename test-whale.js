@@ -2893,6 +2893,86 @@ async function main() {
 			'reminders back reopens the right-click menu (not settings)');
 	}
 
+	/* 60. 0.1.5 cumulative stats label: the total and the cache-hit share are
+	 * SEPARATE text nodes under one span — node-level text never holds both
+	 * halves, so feedSessionUsage must retry on the parent's textContent
+	 * (live-DOM regression 2026-09-11: 全对话累计 silently died after the
+	 * 0.1.5 upgrade; this DOM walk had zero unit coverage). The combined
+	 * single-node form and the per-turn chip (must NOT feed) are locked too. */
+	{
+		const envU = makeEnv();
+		envU.ready();
+		const U = envU.sandbox.__dshWhale;
+		const docU = envU.sandbox.document;
+		envU.setFetch(() => Promise.resolve({ ok: false, json: () => Promise.resolve({}) }));
+		U._setHoldMs(200);
+		/* minimal TreeWalker mock: text nodes in document order.
+		 * NodeFilter must exist as a sandbox global too — feedSessionUsage
+		 * references NodeFilter.SHOW_TEXT and its catch-all would otherwise
+		 * swallow the whole sweep as a silent no-op. */
+		envU.sandbox.NodeFilter = { SHOW_TEXT: 4 };
+		docU.createTreeWalker = (root) => {
+			const texts = [];
+			const walk = (n) => (n.children || []).forEach((c) => {
+				if (c.tag === '#text') texts.push(c);
+				else walk(c);
+			});
+			walk(root);
+			let i = 0;
+			return { nextNode: () => (i < texts.length ? texts[i++] : null) };
+		};
+		const statusU = () => envU.whale.children.find((c) => c.className === 'dsh-whale-status');
+		/* NOTE: reportQueue is exported as a GETTER FUNCTION (returns the live
+		 * array) — U.reportQueue.length would read the function's arity (0) */
+		const lastReport = () => {
+			const q = U.reportQueue();
+			return q[q.length - 1];
+		};
+		const dance = async (sid, title) => {
+			/* subagentTiming projection = the main-session turn-tracking
+			 * registration (same opener as group 28); without it turn/start
+			 * + turn/end fall through the subagentSessions gate unreported */
+			U.handleMuxPayload({ type: 'session/projection', sessionId: sid, key: 'subagentTiming', value: { settledMs: 0 } });
+			U.handleMuxPayload({ type: 'session/event', sessionId: sid, event: { type: 'turn/start', seq: 1, time: 0, data: {} } });
+			U.handleMuxPayload({ type: 'session/projection', sessionId: sid, key: 'title', value: title, seq: 2 });
+			await sleep(60);
+			U.handleMuxPayload({ type: 'session/event', sessionId: sid, event: { type: 'turn/end', seq: 3, time: 3, data: {} } });
+		};
+		/* case 1 (the bug): split nodes "10.9M tok" + "·" + "缓存命中 7%" */
+		const label1 = docU.createElement('span');
+		['10.9M tok', '·', '缓存命中 7%'].forEach((s) => {
+			const tn = docU.createTextNode(s);
+			tn.parentElement = label1;
+			label1.appendChild(tn);
+		});
+		docU.body.appendChild(label1);
+		U._feedSessionUsage('session-u1');
+		await dance('session-u1', '会话U1');
+		assert.strictEqual(lastReport().sessionTokens, 10900000, 'split-node label feeds the 10.9M total');
+		assert.ok(statusU() && statusU().textContent.includes('全对话累计消耗 10.9M tokens'),
+			`panel shows the cumulative line: ${statusU() && statusU().textContent}`);
+		/* case 2: the combined single-node form feeds directly (no parent needed) */
+		docU.body.removeChild(label1);
+		const label2 = docU.createElement('span');
+		const tn2 = docU.createTextNode('8.8M tok·缓存命中 5%');
+		tn2.parentElement = label2;
+		label2.appendChild(tn2);
+		docU.body.appendChild(label2);
+		U._feedSessionUsage('session-u2');
+		await dance('session-u2', '会话U2');
+		assert.strictEqual(lastReport().sessionTokens, 8800000, 'combined-node form still feeds directly');
+		/* case 3 (negative): a per-turn chip must NOT become a cumulative */
+		docU.body.removeChild(label2);
+		const label3 = docU.createElement('span');
+		const tn3 = docU.createTextNode('用量 71.9K tok');
+		tn3.parentElement = label3;
+		label3.appendChild(tn3);
+		docU.body.appendChild(label3);
+		U._feedSessionUsage('session-u3');
+		await dance('session-u3', '会话U3');
+		assert.strictEqual(lastReport().sessionTokens || 0, 0, 'per-turn chip never feeds the cumulative');
+	}
+
 	console.log(`ALL TESTS PASSED (${Math.round(performance.now() - t)}ms)`);
 	/* the whale keeps timers; exit explicitly so node doesn't hang */
 	process.exit(0);

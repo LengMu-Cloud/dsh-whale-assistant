@@ -1,6 +1,6 @@
 {
   "name": "@lengmu-cloud/dsh-whale-assistant",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "description": "dsh-whale-assistant: the companion whale for DeepSeek Harness - server-side history storage (~/.dsh/whale-assistant.json) shared by every browser/window, plus hosting for the whale script itself",

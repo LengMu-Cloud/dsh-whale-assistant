@@ -27,6 +27,7 @@ index.template.html
 交接摘要*.md
 后续方案*.md
 发布方案*.md
+升级方案*.md
 测试方案*.md
 测试报告*.md
 设计总结汇报.md
@@ -53,3 +54,8 @@ _help-preview.*
 preview-*
 favicon-full.svg
 whale.svg
+
+# 本机设计资产（宣传图迭代与官方参考图，2026-09-11 拍板不入库，本地保留）
+docs/promo-cover*.png
+docs/whale-official.*
+docs/whale-logo-official.png

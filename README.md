@@ -23,7 +23,7 @@
 
 | 组件 | 要求 |
 |---|---|
-| DeepSeek Harness | 实测版本 **0.1.2-rc.1**；插件只走 DSH 公开插件接口与公开 HTTP 路由 |
+| DeepSeek Harness | 实测版本 **0.1.5-rc.2**（2026-09-11，由 0.1.2-rc.1 升级）；兼容下限见 `whale-assistant/package.json` 的 `dsh.engines`；插件只走公开插件接口与 HTTP 路由。0.1.5 起「上下文已用 N%」已从 UI 移除，前台压力色可能降级 |
 | Node.js | 跟随 DSH 自身要求即可（开发机 v24 实测）；仅改源码/构建/跑测试时需要 |
 | 操作系统 | 插件本体为纯 JS，跨平台；自动化脚本为 PowerShell（Windows），macOS/Linux 按下文手动步骤 |
 | 运行载体 | 任意现代浏览器；Electron 桌面壳为可选增强 |

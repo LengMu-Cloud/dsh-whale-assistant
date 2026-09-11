@@ -40,7 +40,7 @@
 
 	/** Whale patch version (M5.1). Build-time override: build-whale.js reads
 	 * env PATCH_VERSION; the default here is the fallback single source. */
-	var PATCH_VERSION = '0.3.0';
+	var PATCH_VERSION = '0.3.1';
 
 	/** Session id prefix that marks a user conversation ("main task").
 	 * Spawned subagents use bare UUIDs and are treated as silent sub-tasks. */
@@ -832,16 +832,19 @@ if (typeof module !== 'undefined' && module.exports) {
 		synthOn(ensureRegistered(), eventType, data);
 	}
 
-	/* Session-wide usage + context pressure: the app renders cumulative
-	 * stats OUTSIDE the chat flow as "输入 X tok · 输出 Y tok" and the
-	 * context meter "上下文已用 N%". Feeding them through the tokenUsage /
-	 * contextPressure projections restores the 全对话累计消耗 line and the
-	 * pressure hue/warning (the ratio is all the whale consumes). */
+	/* Session-wide usage + context pressure.
+	 * 0.1.2-rc.1: "输入 X tok · 输出 Y tok" + "上下文已用 N%".
+	 * 0.1.5-rc.2 (live 2026-09-11): cumulative bar became
+	 * "10.8M tok·缓存命中 6%" and the 上下文已用 meter is gone from the
+	 * composer strip (per-turn chip "用量 X tok" still works). Keep the
+	 * old regexes and add the new total-token form so 全对话累计 does not
+	 * silently die after the 0.1.5 stats redesign. */
 	function feedSessionUsage(sid) {
 		try {
 			var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
 			var node;
 			var usageDone = false;
+			var pressureDone = false;
 			while ((node = walker.nextNode())) {
 				var t = node.textContent || '';
 				if (!usageDone) {
@@ -854,18 +857,36 @@ if (typeof module !== 'undefined' && module.exports) {
 							key: 'tokenUsage',
 							value: { uncachedInputTokens: parseTokNum(m[1]), outputTokens: parseTokNum(m[2]) }
 						});
+					} else {
+						/* 0.1.5: "10.8M tok·缓存命中 6%" — one combined total */
+						var m2 = /([\d.]+\s*[KM万]?)\s*tok\s*[·•]?\s*缓存命中/.exec(t);
+						if (m2) {
+							usageDone = true;
+							var total = parseTokNum(m2[1]);
+							/* display path only sums uncachedInput+output; put the
+							 * whole total on output so the panel shows a real number */
+							handleMuxPayload({
+								type: 'session/projection',
+								sessionId: sid,
+								key: 'tokenUsage',
+								value: { uncachedInputTokens: 0, outputTokens: total }
+							});
+						}
 					}
 				}
-				var p = /上下文已用\s*([\d.]+)\s*%/.exec(t);
-				if (p) {
-					handleMuxPayload({
-						type: 'session/projection',
-						sessionId: sid,
-						key: 'contextPressure',
-						value: { contextWindow: 100, pressureTokens: parseFloat(p[1]) }
-					});
-					if (usageDone) break;
+				if (!pressureDone) {
+					var p = /上下文已用\s*([\d.]+)\s*%/.exec(t);
+					if (p) {
+						pressureDone = true;
+						handleMuxPayload({
+							type: 'session/projection',
+							sessionId: sid,
+							key: 'contextPressure',
+							value: { contextWindow: 100, pressureTokens: parseFloat(p[1]) }
+						});
+					}
 				}
+				if (usageDone && pressureDone) break;
 			}
 		} catch (e) {}
 	}

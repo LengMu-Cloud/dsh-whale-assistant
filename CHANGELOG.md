@@ -3,14 +3,23 @@
 所有对外可感知的变更按版本记录。当前版本见 `src/utils/constants.js` 的 `PATCH_VERSION`
 （构建时可用 `PATCH_VERSION=0.4.0 node build-whale.js` 覆盖）。
 
-## [未发布] - 2026-09-06
+## [0.3.1] - 2026-09-11
 
-GitHub 开源发布准备（内部清理，无功能变更）。
+DSH **0.1.5-rc.2** 升级适配（本机由 0.1.2-rc.1 一键/手动升级实测）。
+
+### 修复
+- **0.1.5 会话累计用量文案适配**：官方统计条由「输入 X tok · 输出 Y tok」改为「`10.8M tok·缓存命中 6%`」。`feedSessionUsage` 在保留旧正则的同时识别新格式，避免全对话累计静默失效。**已知降级**：0.1.5 输入框旁「上下文已用 N%」已从 DOM 移除，前台上下文压力色可能不再更新（完成气泡旁本轮 token 面板仍正常，依赖 `assistant/message` usage 与「用量 X tok」芯片）
 
 ### 变更
-- **插件包 scope 改名** `@deepseek-ai/dsh-whale-assistant` → `@lengmu-cloud/dsh-whale-assistant`：包 name、client 模块 id、cordis.patch.yml 注册行、ensure 脚本、README 示例同步更换；0.3.0 及更早条目保留旧名为历史记录。路由 `/api/whale-assistant/*`、数据文件与注册点 id `ui-whale-assistant` 不变
-- 包版本对齐 0.3.0，补 author / license / repository 元数据
-- 装机脚本可移植化：`ensure-whale-assistant.ps1` 参数默认值动态化；`apply-plugin-hook.ps1` 的 DSH 包定位改 `npm prefix -g` 动态解析；`lib/index.js` 移除本机路径兜底（包内副本即唯一来源）；`fix-shell.ps1` 移除本机安装位置与 asar 维护目录兜底；`build-whale.js` 不再强依赖本地参考件 `_whale.orig.js`（release 克隆降级为清单自洽校验）
+- **`run-update.ps1` 对齐 0.1.5 实装路径**：插件 junction 改为 `@lengmu-cloud/dsh-whale-assistant`（修复 0.3.0 改名后仍写 `@deepseek-ai` 的路径 bug）；钩子校验改为「已知候选 + 递归搜索」，找不到 conversation 插件时 **exit 1**（原先 WARN 后继续会假绿）；npm 安装改为绝对路径 `node`+`npm-cli.js` + `--ignore-scripts` + 手工编译 koffi（本机 0.1.5 实装：koffi 子进程 `cmd /c node` 找不到 node 导致裸 `npm i -g` 失败）；`dsh --version` 改为优先读 package.json
+- **`apply-plugin-hook.ps1`**：`npm prefix -g` 探测改为 try/catch（npm.ps1 在 LASTEXITCODE 未设置时会抛错中断注入）；conversation 候选路径补充 `dsh-web` 嵌套
+
+### 实测（0.1.5-rc.2 真机）
+- 宿主 `session/event` 总线仍在：`turn/start` / `turn/end(completed)` / `agent/inbox/spliced` / `assistant/message` / `model/selection` 正常入环形缓冲
+- 完成气泡「[对话名]完成了 🎉」+ 历史 `kind=done` + `turnTokens`（与官方「用量 14.7K tok」一致）
+- 客户端 `__ModuleLoader__` / `#dsh-whale` / `serverHealth.failStreak=0`
+- 钩子锚点 `const sessions = ctx.sessions` 与 `loadOlder` 在 0.1.5 构建产物中仍存在并可注入
+- `test-whale.js` 全绿
 
 ## [未发布] - 2026-09-08
 
@@ -21,6 +30,15 @@ GitHub 开源发布准备（内部清理，无功能变更）。
 
 ### 变更
 - **README 全面更新**：简介采纳 ①-⑩ 功能清单；新增环境要求 / 升级与卸载 / 工作原理 / 常见问题 / 开发与测试五节；安装节接入 ensure 脚本 + junction 建链完整三件套，注册行示例改为真实 FLAT 语法；能力矩阵补陪伴系统与历史跳转；测试断言数 570+ → 620+（与 FEATURES.md 同步）
+
+## [未发布] - 2026-09-06
+
+GitHub 开源发布准备（内部清理，无功能变更）。
+
+### 变更
+- **插件包 scope 改名** `@deepseek-ai/dsh-whale-assistant` → `@lengmu-cloud/dsh-whale-assistant`：包 name、client 模块 id、cordis.patch.yml 注册行、ensure 脚本、README 示例同步更换；0.3.0 及更早条目保留旧名为历史记录。路由 `/api/whale-assistant/*`、数据文件与注册点 id `ui-whale-assistant` 不变
+- 包版本对齐 0.3.0，补 author / license / repository 元数据
+- 装机脚本可移植化：`ensure-whale-assistant.ps1` 参数默认值动态化；`apply-plugin-hook.ps1` 的 DSH 包定位改 `npm prefix -g` 动态解析；`lib/index.js` 移除本机路径兜底（包内副本即唯一来源）；`fix-shell.ps1` 移除本机安装位置与 asar 维护目录兜底；`build-whale.js` 不再强依赖本地参考件 `_whale.orig.js`（release 克隆降级为清单自洽校验）
 
 ## [0.3.0] - 2026-09-05
 

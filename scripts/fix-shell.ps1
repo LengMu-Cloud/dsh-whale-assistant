@@ -29,7 +29,15 @@ Write-Host '== whale-patch shell installer =='
 $candidates = @()
 if ($ShellRoot -ne '') { $candidates += $ShellRoot }
 $proc = Get-Process 'DeepSeek Harness' -ErrorAction SilentlyContinue | Where-Object { $_.Path } | Select-Object -First 1
-if ($proc) { $candidates += Split-Path (Split-Path $proc.Path) }
+if ($proc) {
+  # 本机布局 exe 在 <root>\DeepSeek Harness.exe、asar 在 <root>\resources\app.asar
+  # （只差一级）；从 exe 目录逐级向上找，兼容 exe 更深一层的其他布局。
+  $dir = Split-Path $proc.Path
+  for ($i = 0; $i -lt 4 -and $dir; $i++) {
+    $candidates += $dir
+    $dir = Split-Path $dir
+  }
+}
 
 $asarPath = $null
 foreach ($c in $candidates) {

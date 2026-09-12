@@ -3,7 +3,7 @@
 > 由 node build-whale.js 产出：每个模块的职责（取文件头注释首段）与顶层函数清单。
 > 改代码前先在这里定位模块，再进 src/ 对应文件；改完重新构建本表自动更新。
 
-共 31 个模块（构建产物为单文件 IIFE，全部模块共享同一作用域）。
+共 32 个模块（构建产物为单文件 IIFE，全部模块共享同一作用域）。
 
 ## **src/index.js**（行切片）
 
@@ -22,6 +22,8 @@
 > Versioned localStorage wrapper (inline module).  Every persisted key is stored as:     { v: 1, data: <payload> }  safeGet  : reads v1, or reads a legacy v0 shape and MIGRATES it to v1            immediately (best-effort write-back). Corruption / private mode            degrade silently to a default.
 
 **safeGet()** · **safeSet()** · **safeRemove()**
+
+## **src/utils/session-key.js**
 
 ## **src/core/config.js**
 
@@ -49,7 +51,7 @@
 
 > Alpha adapter (inline module, M5 alpha-compat): synthesizes mux-equivalent event frames from DOM observations. dsh 0.1.2-alpha removed the WebSocket event mux; the web UI is per-request streaming + DOM rendering.  The gate POLICY lives in core/chip-gate.js as a pure function (unit tested); this file
 
-**getCurrentSessionId()** · **ensureRegistered()** · **parseTokNum()** · **readTurnUsage()** · **applyPageTitleFallback()** · **seedActiveTitle()** · **synthOn()** · **synth()** · **feedSessionUsage()** · **chipAgeMinutes()** · **batchInFlow()** · **debugOn()** · **debugInject()** · **dumpComposer()** · **describeEl()** · **ensureToolSweep()** · **attach()**
+**ensureRegistered()** · **parseTokNum()** · **readTurnUsage()** · **applyPageTitleFallback()** · **seedActiveTitle()** · **synthOn()** · **synth()** · **feedSessionUsage()** · **chipAgeMinutes()** · **batchInFlow()** · **debugOn()** · **debugInject()** · **dumpComposer()** · **describeEl()** · **ensureToolSweep()** · **attach()**
 
 ## **src/core/dedup.js**
 
@@ -59,7 +61,7 @@
 
 > Server-events consumer (inline module): polls the whale-assistant host's /api/whale-assistant/events route (the host lives in the dsh server's cordis container and buffers session events for EVERY session) and feeds the frames the DOM adapter cannot see:    - turn/start of EVERY session (2026-09-02 
 
-**activeSessionId()** · **rememberSeq()** · **feedEventFrame()** · **registerBackground()** · **lookupTitlesFromHistory()** · **consume()** · **poll()**
+**rememberSeq()** · **feedEventFrame()** · **registerBackground()** · **lookupTitlesFromHistory()** · **consume()** · **poll()**
 
 ## **src/core/health.js**
 

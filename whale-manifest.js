@@ -15,6 +15,7 @@ const MANIFEST = [
 	{ inline: true, file: 'src/utils/constants.js' },           /* authored constants INSIDE the IIFE (after entry) */
 	{ inline: true, file: 'src/types.js' },                     /* JSDoc typedefs (comments only, no runtime effect) */
 	{ inline: true, file: 'src/utils/storage.js' },             /* versioned localStorage wrapper + migrator */
+	{ inline: true, file: 'src/utils/session-key.js' },         /* active-session id resolution (shared by alpha-adapter + server-events) */
 	{ inline: true, file: 'src/core/config.js' },               /* user config (CONFIG) + persistence */
 	{ inline: true, file: 'src/core/history.js' },              /* recent task history + persistence */
 	{ inline: true, file: 'src/core/stuck.js' },                /* tool-stuck watchdog (running-job aware) */

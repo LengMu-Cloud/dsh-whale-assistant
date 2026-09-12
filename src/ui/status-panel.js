@@ -218,8 +218,10 @@
 
 	/* context pressure + session-wide token usage PER MAIN SESSION
 	 * (projections are pushed live) */
+	// KNOWN-COUPLING: frames->status-panel — push projection writes (sessionUsage/sessionPressure are filled by frames on session/projection tokenUsage|contextPressure frames; reports.js reads them back for report snapshots)
 	var sessionUsage = new Map();
 	var sessionPressure = new Map();
+	// KNOWN-COUPLING: frames->status-panel — push projection write (lastMainSession: the frame router keeps the current main session here so the panel knows which session to display)
 	var lastMainSession = null;
 	var pressureWarned = false;
 	var PRESSURE_WARN_PCT = 70;
@@ -327,6 +329,7 @@
 	function timerRowText(sessionId, now) {
 		var startAt = runSlots.get(sessionId);
 		if (startAt == null) return null;
+		// KNOWN-COUPLING: status-panel->frames — read-back (countJobsCompleted/bookTitle query functions plus the sessionTitles projection read below; the only direction the panel pulls pipeline data)
 		var line = runTimerLine(now - startAt, countJobsCompleted(sessionId, startAt));
 		if (line === null) return null;
 		var name = sessionTitles.get(sessionId) || bookTitle(sessionId) || '未命名任务';

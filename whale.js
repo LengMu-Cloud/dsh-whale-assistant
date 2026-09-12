@@ -173,7 +173,40 @@
 		} catch (error) {
 			/* ignore */
 		}
-	}/* ---- module: src/core/config.js ---- */
+	}/* ---- module: src/utils/session-key.js ---- */
+/* Session-key resolution (inline module): ONE copy of the active-conversation
+ * id extraction, shared by BOTH event channels — core/alpha-adapter.js (DOM
+ * side) and core/server-events.js (poll side) previously carried byte-identical
+ * copies that could drift silently. Resolution order:
+ *   1. localStorage 'dsh.sessions.current' (JSON {sessionId}) — authoritative
+ *      across switches;
+ *   2. insertion-ordered 'dsh.conversation[.chat].session-*' localStorage keys
+ *      (a cache that goes STALE after a jump back to an older conversation —
+ *      fallback only);
+ *   3. FALLBACK_ID placeholder ('session-alpha-active') — the alpha adapter's
+ *      synthetic active session when nothing resolvable is present.
+ */
+var FALLBACK_ID = 'session-alpha-active';
+var SESSION_KEY_RE = /^dsh\.conversation\.(?:chat\.)?(session-[0-9a-f-]{10,})$/;
+
+function resolveCurrentSessionId() {
+	try {
+		var raw = localStorage.getItem('dsh.sessions.current');
+		if (raw) {
+			var v = JSON.parse(raw);
+			if (v && typeof v.sessionId === 'string' && v.sessionId.indexOf('session-') === 0) return v.sessionId;
+		}
+	} catch (e) {}
+	try {
+		var keys = Object.keys(localStorage);
+		for (var i = keys.length - 1; i >= 0; i--) {
+			var m = keys[i].match(SESSION_KEY_RE);
+			if (m) return m[1];
+		}
+	} catch (e) {}
+	return FALLBACK_ID;
+}
+/* ---- module: src/core/config.js ---- */
 /**
  * User configuration (inline module). Defaults live here; persisted overrides
  * live in 'dsh-whale:config' (v1 envelope) and are merged over the defaults
@@ -715,30 +748,8 @@ if (typeof module !== 'undefined' && module.exports) {
 	 * (dsh.conversation.chat.session-<uuid> / dsh.conversation.session-<uuid>).
 	 * Using it (instead of a placeholder) makes the jump-to-conversation
 	 * feature and history records point at the actual session. */
-	var FALLBACK_ID = 'session-alpha-active';
-	var SESSION_KEY_RE = /^dsh\.conversation\.(?:chat\.)?(session-[0-9a-f-]{10,})$/;
-
-	function getCurrentSessionId() {
-		try {
-			/* the app keeps the ACTIVE conversation id here (JSON
-			 * {"sessionId":"session-…"}) — authoritative across switches;
-			 * the dsh.conversation.* keys below are insertion-ordered caches
-			 * and go stale after a jump back to an older conversation */
-			var raw = localStorage.getItem('dsh.sessions.current');
-			if (raw) {
-				var v = JSON.parse(raw);
-				if (v && typeof v.sessionId === 'string' && v.sessionId.indexOf('session-') === 0) return v.sessionId;
-			}
-		} catch (e) {}
-		try {
-			var keys = Object.keys(localStorage);
-			for (var i = keys.length - 1; i >= 0; i--) {
-				var m = SESSION_KEY_RE.exec(keys[i]);
-				if (m) return m[1];
-			}
-		} catch (e) {}
-		return FALLBACK_ID;
-	}
+	/* active-session id resolution lives in utils/session-key.js
+	 * (resolveCurrentSessionId) — shared verbatim with server-events. */
 
 	/* reportTurn() only speaks for sessions registered in subagentSessions —
 	 * that map is filled by the subagentTiming PROJECTION frame, so register
@@ -746,7 +757,7 @@ if (typeof module !== 'undefined' && module.exports) {
 	 * frames.js fetch the conversation title (real name in notifications). */
 	var registeredId = null;
 	function ensureRegistered() {
-		var sid = getCurrentSessionId();
+		var sid = resolveCurrentSessionId();
 		if (sid === registeredId) return sid;
 		try {
 			handleMuxPayload({
@@ -839,7 +850,7 @@ if (typeof module !== 'undefined' && module.exports) {
 	 * IIFE-eval time. */
 	function seedActiveTitle(attempt) {
 		try {
-			var sid = getCurrentSessionId();
+			var sid = resolveCurrentSessionId();
 			var m = /^([\s\S]+?)\s+—\s+DeepSeek Harness$/.exec(document.title || '');
 			var have = sid && m && m[1] && m[1] !== 'DeepSeek Harness';
 			if (!have && (attempt || 0) < 6) {
@@ -1209,7 +1220,7 @@ if (typeof module !== 'undefined' && module.exports) {
 						lastFailureAt = now;
 						gate.streamingArmed = false;
 						gate.armStreak = 0;
-						seeEndFire(getCurrentSessionId(), 'fail');
+						seeEndFire(resolveCurrentSessionId(), 'fail');
 						synth('turn/end', { reason: { kind: 'error' } });
 						return true;
 					}
@@ -1270,7 +1281,7 @@ if (typeof module !== 'undefined' && module.exports) {
 		var sid = ensureRegistered();
 		feedSessionUsage(sid); /* cumulative burn for the status panel */
 		/* the stats node may render a beat after the chip: re-feed once */
-		setTimeout(function () { feedSessionUsage(getCurrentSessionId()); }, 800);
+		setTimeout(function () { feedSessionUsage(resolveCurrentSessionId()); }, 800);
 		/* mirror guard (09-06 B3): the polled frame may have announced this
 		 * same end first (active-session completed now passes the poll gate);
 		 * an ±8s match means one physical end — stay silent, keep the usage */
@@ -1292,7 +1303,7 @@ if (typeof module !== 'undefined' && module.exports) {
 		ensureRegistered(); /* register now so the title fetch races early */
 		/* initial usage + context-pressure read (the load render already
 		 * put the stats bar / context meter on screen) */
-		setTimeout(function () { feedSessionUsage(getCurrentSessionId()); }, 1200);
+		setTimeout(function () { feedSessionUsage(resolveCurrentSessionId()); }, 1200);
 	}
 	attach();
 	/* debug seam: live gate state for diagnosing switchRender stalls */
@@ -1463,26 +1474,8 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	(function initServerEvents() {
 	if (typeof fetch !== 'function' || typeof setInterval !== 'function') return;
 
-	var FALLBACK_ID = 'session-alpha-active';
-	var SESSION_KEY_RE = /^dsh\.conversation\.(?:chat\.)?(session-[0-9a-f-]{10,})$/;
-
-	function activeSessionId() {
-		try {
-			var raw = localStorage.getItem('dsh.sessions.current');
-			if (raw) {
-				var v = JSON.parse(raw);
-				if (v && typeof v.sessionId === 'string' && v.sessionId.indexOf('session-') === 0) return v.sessionId;
-			}
-		} catch (e) {}
-		try {
-			var keys = Object.keys(localStorage);
-			for (var i = keys.length - 1; i >= 0; i--) {
-				var m = SESSION_KEY_RE.exec(keys[i]);
-				if (m) return m[1];
-			}
-		} catch (e) {}
-		return FALLBACK_ID;
-	}
+	/* active-session id resolution lives in utils/session-key.js
+	 * (resolveCurrentSessionId) — shared verbatim with alpha-adapter. */
 
 	/* 3s poll (was 8s): the route is a cheap in-memory slice, and the user
 	 * reported the background latency as too high. NOTE this only helps
@@ -1523,7 +1516,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	function feedEventFrame(frame) {
 		var sid = frame.sessionId;
 		var event = frame.event || {};
-		var active = activeSessionId();
+		var active = resolveCurrentSessionId();
 		var isActive = sid === active;
 		var type = event.type;
 		if (type === 'turn/end') {
@@ -1775,7 +1768,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			if (fTime && Date.now() - fTime > 60000 && bootAt - fTime > 60000) continue;
 			if (f.type === 'session/projection') {
 				if (f.key === 'title') {
-					if (f.sessionId !== activeSessionId()) {
+					if (f.sessionId !== resolveCurrentSessionId()) {
 						var v = f.value;
 						var title = typeof v === 'string' ? v : (v && typeof v.title === 'string' ? v.title : null);
 						if (title) {
@@ -1795,7 +1788,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				 * reader only sees the one visible conversation). The ACTIVE
 				 * session is skipped — its DOM feed already covers it and must
 				 * not race the server values for lastMainSession. */
-				if ((f.key === 'tokenUsage' || f.key === 'contextPressure') && f.sessionId !== activeSessionId()) {
+				if ((f.key === 'tokenUsage' || f.key === 'contextPressure') && f.sessionId !== resolveCurrentSessionId()) {
 					try {
 						handleMuxPayload({ type: 'session/projection', sessionId: f.sessionId, key: f.key, value: f.value });
 					} catch (e) {}
@@ -2132,6 +2125,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		uiSay(item.text, showMs, item.sessionId);
 		/* the report's token/pressure re-appear in the status panel */
 		var rep = statusReport(item.turnTokens, item.sessionTokens, item.pressure);
+		// KNOWN-COUPLING: reports->status-panel — push render (the 1:1 panel pairing: a report with data opens the panel, one without closes it)
 		if (rep) showStatusPanel(rep, DURATION_END);
 		else hideStatusPanel(); /* a report without data must not leave the panel up */
 		clearTimeout(readTimer);
@@ -2569,8 +2563,10 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 
 	/* context pressure + session-wide token usage PER MAIN SESSION
 	 * (projections are pushed live) */
+	// KNOWN-COUPLING: frames->status-panel — push projection writes (sessionUsage/sessionPressure are filled by frames on session/projection tokenUsage|contextPressure frames; reports.js reads them back for report snapshots)
 	var sessionUsage = new Map();
 	var sessionPressure = new Map();
+	// KNOWN-COUPLING: frames->status-panel — push projection write (lastMainSession: the frame router keeps the current main session here so the panel knows which session to display)
 	var lastMainSession = null;
 	var pressureWarned = false;
 	var PRESSURE_WARN_PCT = 70;
@@ -2678,6 +2674,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	function timerRowText(sessionId, now) {
 		var startAt = runSlots.get(sessionId);
 		if (startAt == null) return null;
+		// KNOWN-COUPLING: status-panel->frames — read-back (countJobsCompleted/bookTitle query functions plus the sessionTitles projection read below; the only direction the panel pulls pipeline data)
 		var line = runTimerLine(now - startAt, countJobsCompleted(sessionId, startAt));
 		if (line === null) return null;
 		var name = sessionTitles.get(sessionId) || bookTitle(sessionId) || '未命名任务';
@@ -3364,6 +3361,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					say(endMsg, DURATION_END, frame.sessionId);
 					playDing('done');
 					var rep = statusReport(turnTokenUsage, sessionTotalTokens(frame.sessionId), sessionPressure.get(frame.sessionId));
+					// KNOWN-COUPLING: frames->status-panel — push render (completion report opens the panel; the failure twin is the repFail call above)
 					if (rep) showStatusPanel(rep, DURATION_END);
 				}
 				pushReport(endMsg, DURATION_END, frame.sessionId, undefined, atMs);

@@ -22,26 +22,8 @@
 	(function initServerEvents() {
 	if (typeof fetch !== 'function' || typeof setInterval !== 'function') return;
 
-	var FALLBACK_ID = 'session-alpha-active';
-	var SESSION_KEY_RE = /^dsh\.conversation\.(?:chat\.)?(session-[0-9a-f-]{10,})$/;
-
-	function activeSessionId() {
-		try {
-			var raw = localStorage.getItem('dsh.sessions.current');
-			if (raw) {
-				var v = JSON.parse(raw);
-				if (v && typeof v.sessionId === 'string' && v.sessionId.indexOf('session-') === 0) return v.sessionId;
-			}
-		} catch (e) {}
-		try {
-			var keys = Object.keys(localStorage);
-			for (var i = keys.length - 1; i >= 0; i--) {
-				var m = SESSION_KEY_RE.exec(keys[i]);
-				if (m) return m[1];
-			}
-		} catch (e) {}
-		return FALLBACK_ID;
-	}
+	/* active-session id resolution lives in utils/session-key.js
+	 * (resolveCurrentSessionId) — shared verbatim with alpha-adapter. */
 
 	/* 3s poll (was 8s): the route is a cheap in-memory slice, and the user
 	 * reported the background latency as too high. NOTE this only helps
@@ -82,7 +64,7 @@
 	function feedEventFrame(frame) {
 		var sid = frame.sessionId;
 		var event = frame.event || {};
-		var active = activeSessionId();
+		var active = resolveCurrentSessionId();
 		var isActive = sid === active;
 		var type = event.type;
 		if (type === 'turn/end') {
@@ -334,7 +316,7 @@
 			if (fTime && Date.now() - fTime > 60000 && bootAt - fTime > 60000) continue;
 			if (f.type === 'session/projection') {
 				if (f.key === 'title') {
-					if (f.sessionId !== activeSessionId()) {
+					if (f.sessionId !== resolveCurrentSessionId()) {
 						var v = f.value;
 						var title = typeof v === 'string' ? v : (v && typeof v.title === 'string' ? v.title : null);
 						if (title) {
@@ -354,7 +336,7 @@
 				 * reader only sees the one visible conversation). The ACTIVE
 				 * session is skipped — its DOM feed already covers it and must
 				 * not race the server values for lastMainSession. */
-				if ((f.key === 'tokenUsage' || f.key === 'contextPressure') && f.sessionId !== activeSessionId()) {
+				if ((f.key === 'tokenUsage' || f.key === 'contextPressure') && f.sessionId !== resolveCurrentSessionId()) {
 					try {
 						handleMuxPayload({ type: 'session/projection', sessionId: f.sessionId, key: f.key, value: f.value });
 					} catch (e) {}

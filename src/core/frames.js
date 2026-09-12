@@ -392,6 +392,7 @@
 					say(endMsg, DURATION_END, frame.sessionId);
 					playDing('done');
 					var rep = statusReport(turnTokenUsage, sessionTotalTokens(frame.sessionId), sessionPressure.get(frame.sessionId));
+					// KNOWN-COUPLING: frames->status-panel — push render (completion report opens the panel; the failure twin is the repFail call above)
 					if (rep) showStatusPanel(rep, DURATION_END);
 				}
 				pushReport(endMsg, DURATION_END, frame.sessionId, undefined, atMs);

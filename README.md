@@ -148,19 +148,25 @@ localStorage 可留可删）：
 
 ```text
 node build-whale.js      # 重建 whale.js + whale-map.md，并同步发布副本到 whale-assistant/lib/
+                         # 构建时强制：顶层声明重复断言 / menu 热点 guard / KNOWN-COUPLING 登记表
 node test-whale.js       # vm 沙箱单元测试，640+ 断言
 node test-chip-gate.js   # 芯片闸门纯函数测试，19 断言
+node scripts/audit-deps.js        # 静态架构审计（作用域/依赖边/缝清单/时序契约 lint，自检前置）
+node check-dsh-compat.js --static "<DSH安装目录>"   # DSH 升级前：对新版包扫耦合点特征
+node check-dsh-compat.js --live [--cdp]             # DSH 升级后：对运行实例探活（接口/调试口）
 node scripts/run-e2e.js  # CDP 端到端四场景（桌面壳调试口 9222 不可达时自动跳过）
 ```
 
 调试与测试用的导出缝清单见 [docs/seams.md](docs/seams.md)。
+分层、准入规则与债务登记见 [docs/architecture.md](docs/architecture.md)。
 
 ## 目录导航
 
 | 路径 | 内容 |
 |---|---|
-| `src/` + `build-whale.js` | 插件源码（31 模块）与构建脚本 |
+| `src/` + `build-whale.js` | 插件源码（32 模块）与构建脚本 |
 | `whale-map.md` | **构建时自动生成**的模块/函数导航（Agent 与人类共用） |
+| `docs/architecture.md` | 架构与分层：作用域三层、三档准入规则、债务登记与触发线 |
 | `whale-assistant/` | 插件包（宿主半区 lib/index.js + 页面半区 client.js + 注册样本） |
 | `ensure-whale-assistant.ps1` | 插件注册脚本（写 profile 依赖 + 注册行，幂等） |
 | `parts/style.css` | 鲸鱼全部样式 |

@@ -39,30 +39,8 @@
 	 * (dsh.conversation.chat.session-<uuid> / dsh.conversation.session-<uuid>).
 	 * Using it (instead of a placeholder) makes the jump-to-conversation
 	 * feature and history records point at the actual session. */
-	var FALLBACK_ID = 'session-alpha-active';
-	var SESSION_KEY_RE = /^dsh\.conversation\.(?:chat\.)?(session-[0-9a-f-]{10,})$/;
-
-	function getCurrentSessionId() {
-		try {
-			/* the app keeps the ACTIVE conversation id here (JSON
-			 * {"sessionId":"session-…"}) — authoritative across switches;
-			 * the dsh.conversation.* keys below are insertion-ordered caches
-			 * and go stale after a jump back to an older conversation */
-			var raw = localStorage.getItem('dsh.sessions.current');
-			if (raw) {
-				var v = JSON.parse(raw);
-				if (v && typeof v.sessionId === 'string' && v.sessionId.indexOf('session-') === 0) return v.sessionId;
-			}
-		} catch (e) {}
-		try {
-			var keys = Object.keys(localStorage);
-			for (var i = keys.length - 1; i >= 0; i--) {
-				var m = SESSION_KEY_RE.exec(keys[i]);
-				if (m) return m[1];
-			}
-		} catch (e) {}
-		return FALLBACK_ID;
-	}
+	/* active-session id resolution lives in utils/session-key.js
+	 * (resolveCurrentSessionId) — shared verbatim with server-events. */
 
 	/* reportTurn() only speaks for sessions registered in subagentSessions —
 	 * that map is filled by the subagentTiming PROJECTION frame, so register
@@ -70,7 +48,7 @@
 	 * frames.js fetch the conversation title (real name in notifications). */
 	var registeredId = null;
 	function ensureRegistered() {
-		var sid = getCurrentSessionId();
+		var sid = resolveCurrentSessionId();
 		if (sid === registeredId) return sid;
 		try {
 			handleMuxPayload({
@@ -163,7 +141,7 @@
 	 * IIFE-eval time. */
 	function seedActiveTitle(attempt) {
 		try {
-			var sid = getCurrentSessionId();
+			var sid = resolveCurrentSessionId();
 			var m = /^([\s\S]+?)\s+—\s+DeepSeek Harness$/.exec(document.title || '');
 			var have = sid && m && m[1] && m[1] !== 'DeepSeek Harness';
 			if (!have && (attempt || 0) < 6) {
@@ -533,7 +511,7 @@
 						lastFailureAt = now;
 						gate.streamingArmed = false;
 						gate.armStreak = 0;
-						seeEndFire(getCurrentSessionId(), 'fail');
+						seeEndFire(resolveCurrentSessionId(), 'fail');
 						synth('turn/end', { reason: { kind: 'error' } });
 						return true;
 					}
@@ -594,7 +572,7 @@
 		var sid = ensureRegistered();
 		feedSessionUsage(sid); /* cumulative burn for the status panel */
 		/* the stats node may render a beat after the chip: re-feed once */
-		setTimeout(function () { feedSessionUsage(getCurrentSessionId()); }, 800);
+		setTimeout(function () { feedSessionUsage(resolveCurrentSessionId()); }, 800);
 		/* mirror guard (09-06 B3): the polled frame may have announced this
 		 * same end first (active-session completed now passes the poll gate);
 		 * an ±8s match means one physical end — stay silent, keep the usage */
@@ -616,7 +594,7 @@
 		ensureRegistered(); /* register now so the title fetch races early */
 		/* initial usage + context-pressure read (the load render already
 		 * put the stats bar / context meter on screen) */
-		setTimeout(function () { feedSessionUsage(getCurrentSessionId()); }, 1200);
+		setTimeout(function () { feedSessionUsage(resolveCurrentSessionId()); }, 1200);
 	}
 	attach();
 	/* debug seam: live gate state for diagnosing switchRender stalls */

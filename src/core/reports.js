@@ -103,6 +103,7 @@
 		uiSay(item.text, showMs, item.sessionId);
 		/* the report's token/pressure re-appear in the status panel */
 		var rep = statusReport(item.turnTokens, item.sessionTokens, item.pressure);
+		// KNOWN-COUPLING: reports->status-panel — push render (the 1:1 panel pairing: a report with data opens the panel, one without closes it)
 		if (rep) showStatusPanel(rep, DURATION_END);
 		else hideStatusPanel(); /* a report without data must not leave the panel up */
 		clearTimeout(readTimer);

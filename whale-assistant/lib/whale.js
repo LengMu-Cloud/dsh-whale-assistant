@@ -40,7 +40,7 @@
 
 	/** Whale patch version (M5.1). Build-time override: build-whale.js reads
 	 * env PATCH_VERSION; the default here is the fallback single source. */
-	var PATCH_VERSION = '0.3.1';
+	var PATCH_VERSION = '0.3.2';
 
 	/** Session id prefix that marks a user conversation ("main task").
 	 * Spawned subagents use bare UUIDs and are treated as silent sub-tasks. */
@@ -488,32 +488,50 @@
 		if (dirty) refreshStuck();
 	}
 
-	/** Periodic sweep (also called directly by tests). */
+	/** Periodic sweep (also called directly by tests). EVERY session with a
+	 * pending tool past the threshold gets its own row, worst first —
+	 * 09-12 用户拍板: 多会话逐行并列、每行都带会话名（和 ⏳ 计时一样可归属）。
+	 * Entries older than 10× the threshold are ZOMBIES (their tool/result
+	 * or turn/end cleanup signal was missed, e.g. frames dropped around a
+	 * reload) and self-delete — a hang warning nobody can act on after
+	 * minutes is noise, 用户报告 09-12. */
 	function scanStuckTools() {
 		var now = Date.now();
-		var worst = null; /* { sessionId, seconds, key } */
+		var zombieMs = Math.max((CONFIG.toolStuckMs || 30000) * 10, 300000);
+		var worstBySession = {}; /* sessionId -> { elapsed, seconds } (one row per session even if several calls hang) */
 		toolSlot.forEach(function (slot, key) {
 			var elapsed = now - slot.at;
+			if (elapsed >= zombieMs) { toolSlot.delete(key); return; }
 			if (elapsed < CONFIG.toolStuckMs) return;
 			if (sessionHasRunningJob(slot.sessionId)) return; /* live job: not stuck */
-			if (!worst || elapsed > worst.elapsed) {
-				worst = { sessionId: slot.sessionId, seconds: Math.round(elapsed / 1000), key: key, elapsed: elapsed };
+			var cur = worstBySession[slot.sessionId];
+			if (!cur || elapsed > cur.elapsed) {
+				worstBySession[slot.sessionId] = { elapsed: elapsed, seconds: Math.round(elapsed / 1000) };
 			}
 		});
-		if (worst) {
-			showStuckHint(worst.sessionId, worst.seconds);
-		} else {
+		var sids = Object.keys(worstBySession);
+		if (sids.length === 0) {
 			hideStuckHint();
+			return;
 		}
+		sids.sort(function (a, b) { return worstBySession[b].elapsed - worstBySession[a].elapsed; });
+		var rows = sids.map(function (sid) {
+			var name = sessionTitles.get(sid) || bookTitle(sid) || '未命名任务';
+			return '⚠️ [' + capNameWidth(name, 110) + '] 工具已运行 ' + worstBySession[sid].seconds + 's';
+		});
+		showStuckHint(rows);
 	}
 
-	/** Show/refresh the stuck hint in the status panel. */
-	function showStuckHint(sessionId, seconds) {
+	/** Show/refresh the stuck hint in the status panel. rows are per-session
+	 * lines; _stacked forces one-per-line (并列显示, user request 09-12). */
+	function showStuckHint(rows) {
 		if (!stuckActive) {
 			stuckActive = true;
 			ensureStatusEl().classList.add('dsh-whale-status-stuck');
 		}
-		showStatusPanel(multiRunTag(sessionId) + '⚠️ 工具运行中（' + seconds + 's）', 3000);
+		/* _stuck: self-identify so the displaced-report guard in
+		 * status-panel.js never routes the hint itself into reportEl */
+		showStatusPanel({ prefix: '', lines: rows, _stacked: true, _stuck: true }, 3000);
 	}
 
 	/** Hide the stuck hint when nothing is pending anymore. */
@@ -537,7 +555,20 @@
 	/* the periodic sweep is armed once at startup */
 	{
 		setInterval(scanStuckTools, STUCK_SCAN_MS);
-	}/* ---- module: src/core/chip-gate.js ---- */
+	}
+
+	/* seams for server-events: background sessions' tool frames are not
+	 * forwarded (they would flicker the 🔧 panel for work the user isn't
+	 * watching) but their tools must still be tracked for the stuck
+	 * watchdog — 09-12 多会话并列的前提是每个会话的工具都在册。
+	 * _stuckPending: the report box asks whether the ⚠️ hint currently owns
+	 * the main panel (displacement routing, status-panel.js). */
+	try {
+		window.__dshWhale = window.__dshWhale || {};
+		window.__dshWhale._trackTool = trackToolCall;
+		window.__dshWhale._clearTool = clearTool;
+		window.__dshWhale._stuckPending = function () { return stuckActive; };
+	} catch (e) {}/* ---- module: src/core/chip-gate.js ---- */
 /**
  * Pure chip-gate policy for the alpha adapter — NO DOM, NO timers of its
  * own: every input is a fact gathered by the MutationObserver callback and
@@ -1120,7 +1151,17 @@ if (typeof module !== 'undefined' && module.exports) {
 			var callId = (callRow && callRow.getAttribute('data-chat-call-id')) || (tool + ':' + (trow.textContent || '').slice(0, 60));
 			var sharedAttSeen = null;
 			try { sharedAttSeen = window.__dshWhale && window.__dshWhale.attSeen; } catch (e) {}
-			if (seenCallIds[callId] || switchRender || (sharedAttSeen && sharedAttSeen[callId])) continue;
+			if (seenCallIds[callId]) continue;
+			/* 09-12 修复：TOOL 行不再吃 switchRender 拦截——seenCallIds 已按
+			 * callId 去重（切换重渲染同 id 不会双响，历史行重渲染非 running），
+			 * 而旧拦截会让"首次渲染恰好落在切换/冷却窗口"的新工具调用被永久
+			 * 错过（真机 09-12：新会话的 pwsh 行再无后续突变，一漏到底）。
+			 * 🤔 提问保留全量拦截：双响 bug（09-02）的主角是它。 */
+			if (tool === 'ask_user_question') {
+				if (switchRender || (sharedAttSeen && sharedAttSeen[callId])) continue;
+			} else if (sharedAttSeen && sharedAttSeen[callId]) {
+				continue;
+			}
 			seenCallIds[callId] = 1;
 			capObj(seenCallIds, 200); /* memory audit: one entry per question row ever rendered */
 			var idKeys = Object.keys(seenCallIds);
@@ -1254,6 +1295,11 @@ if (typeof module !== 'undefined' && module.exports) {
 		setTimeout(function () { feedSessionUsage(getCurrentSessionId()); }, 1200);
 	}
 	attach();
+	/* debug seam: live gate state for diagnosing switchRender stalls */
+	try {
+		window.__dshWhale = window.__dshWhale || {};
+		window.__dshWhale._gate = gate;
+	} catch (e) {}
 	})();
 /* ---- module: src/core/dedup.js ---- */
 /**
@@ -1561,7 +1607,30 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					try { registerBackground(sid); } catch (e) {}
 					handleMuxPayload({ type: 'question/requested', sessionId: sid, time: frame.time || Date.now() });
 				}
+				return;
 			}
+			/* other background tools: tracked for the stuck watchdog ONLY —
+			 * the 🔧 line stays active-session-only (forwarding it would
+			 * flicker the panel for work the user isn't watching). 09-12
+			 * 多会话卡住提示需要每个会话的工具都在册。 */
+			try {
+				if (window.__dshWhale && window.__dshWhale._trackTool) {
+					window.__dshWhale._trackTool(
+						(event.data && event.data.callId) || ('bg:' + (frame.time || '')),
+						sid
+					);
+				}
+			} catch (e) {}
+			return;
+		}
+		if (type === 'tool/result' && !isActive) {
+			/* the tracking twin of the branch above: a background tool result
+			 * retires its watchdog entry (turn/end is the coarse fallback) */
+			try {
+				if (window.__dshWhale && window.__dshWhale._clearTool && event.data) {
+					window.__dshWhale._clearTool(event.data.callId);
+				}
+			} catch (e) {}
 			return;
 		}
 		if (type === 'turn/start') {
@@ -2300,10 +2369,12 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	}
 
 	/** Pick the panel side from the whale's current position: BELOW when
-	 * there is room under it, otherwise LEFT of it. The panel's width is
-	 * capped by the space available on that side minus a margin from the
-	 * viewport edge, so it NEVER touches the screen edge and the open text
-	 * re-flows (wraps) live while the whale moves. */
+	 * there is room under it, ABOVE the whale when the whale hugs the screen
+	 * bottom edge (below would clip off-screen, 用户报告 09-12), otherwise
+	 * LEFT of it (flip to its RIGHT when there is no room on the left). The
+	 * panel's width is capped by the space available on that side minus a
+	 * margin from the viewport edge, so it NEVER touches the screen edge and
+	 * the open text re-flows (wraps) live while the whale moves. */
 	function updateStatusPos() {
 		var el = statusEl;
 		if (!el || !whale) return;
@@ -2311,10 +2382,15 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		var wl = whale.offsetLeft;
 		var w = whale.offsetWidth;
 		var maxW;
-		el.classList.toggle('dsh-whale-status-below', below >= 80);
-		if (below >= 80) {
-			/* under the whale, left-aligned, expanding right — keep a 16px
-			 * margin from the viewport's right edge */
+		/* below needs (12px gap + content height) of real estate; a taller
+		 * panel than the viewport can take flips ABOVE the whale instead */
+		var estH = (statusCache ? statusCache.lines.length : 1) * 16 + 14;
+		var above = below >= 80 && whale.offsetTop + whale.offsetHeight + 12 + estH > window.innerHeight;
+		el.classList.toggle('dsh-whale-status-above', above);
+		el.classList.toggle('dsh-whale-status-below', below >= 80 && !above);
+		if (above || below >= 80) {
+			/* under/over the whale, left-aligned, expanding right — keep a
+			 * 16px margin from the viewport's right edge */
 			el.classList.remove('dsh-whale-status-leftflip');
 			maxW = Math.max(60, Math.min(280, window.innerWidth - wl - 4 - 16));
 		} else {
@@ -2345,16 +2421,62 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	}
 
 	/** Fit the cached content: one compact line when it fits, otherwise
-	 * one line per item (narrow space wraps into more lines). */
-	function applyStatusText() {
-		var el = statusEl;
-		if (!el || !statusCache) return;
-		var maxW = parseFloat(el.style.maxWidth) || 280;
-		var compact = statusCache.prefix + statusCache.lines.join(' · ');
-		el.textContent = estWidth(compact) <= maxW ? compact : statusCache.prefix + statusCache.lines.join('\n');
+	 * one line per item (narrow space wraps into more lines). A `_stacked`
+	 * cache (multi-session stuck hint) ALWAYS renders one line per row —
+	 * 用户拍板 09-12: 多会话并列显示不合并。 */
+	function applyStatusText(el, cache) {
+		var box = el || statusEl;
+		var data = cache || statusCache;
+		if (!box || !data) return;
+		var maxW = parseFloat(box.style.maxWidth) || 280;
+		if (data._stacked) {
+			box.textContent = data.prefix + data.lines.join('\n');
+			return;
+		}
+		var compact = data.prefix + data.lines.join(' · ');
+		box.textContent = estWidth(compact) <= maxW ? compact : data.prefix + data.lines.join('\n');
+	}
+
+	/** The report's OWN box (用户方案 09-12): while the stuck hint is
+	 * pending it owns the main box — a completion report must NOT trample
+	 * it, so the report slides in LEFT of the main box instead (fallbacks:
+	 * above it when the left edge is reached, then its right). When nothing
+	 * is pending the report renders in the main box as before. */
+	var reportEl = null;
+	var reportCache = null;
+
+	function ensureReportEl() {
+		if (reportEl && reportEl.parentNode) return reportEl;
+		if (!whale) return null;
+		reportEl = document.createElement('div');
+		reportEl.className = 'dsh-whale-status dsh-whale-status-report';
+		whale.appendChild(reportEl);
+		return reportEl;
+	}
+
+	function hideReportBox() {
+		if (!reportEl) return;
+		reportEl.classList.remove('show');
+	}
+
+	function stuckPendingNow() {
+		try {
+			return !!(window.__dshWhale && window.__dshWhale._stuckPending && window.__dshWhale._stuckPending());
+		} catch (e) { return false; }
 	}
 
 	function showStatusPanel(data, ms) {
+		if (stuckPendingNow() && !data._stuck && !data._timer) {
+			/* the ⚠️ hint owns the main box right now: slide THIS content in
+			 * beside it instead of trampling it (用户方案 09-12) */
+			renderDisplaced(data, ms);
+			return;
+		}
+		/* only a real content TAKEOVER clears the side box: when the hint or
+		 * the timer rows retake the main box (every 2s sweep / 1s tick) a
+		 * displaced report must keep living its own lifetime — the sweep
+		 * used to murder it on the very next tick (真机 09-12) */
+		if (!data._stuck && !data._timer) hideReportBox();
 		var el = ensureStatusEl();
 		if (!el) return;
 		statusCache = typeof data === 'string'
@@ -2370,9 +2492,52 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		}, ms || 4000);
 	}
 
+	function renderDisplaced(data, ms) {
+		var main = statusEl || ensureStatusEl();
+		if (!main) return;
+		var el = ensureReportEl();
+		if (!el) return;
+		reportCache = typeof data === 'string'
+			? { prefix: '', lines: [data] }
+			: data;
+		el.classList.toggle('dsh-whale-status-below', main.classList.contains('dsh-whale-status-below'));
+		el.classList.toggle('dsh-whale-status-above', main.classList.contains('dsh-whale-status-above'));
+		el.classList.toggle('dsh-whale-status-leftflip', main.classList.contains('dsh-whale-status-leftflip'));
+		var maxW = parseFloat(main.style.maxWidth) || 280;
+		el.style.maxWidth = maxW + 'px';
+		applyStatusText(el, reportCache);
+		el.classList.add('show');
+		/* LEFT of the main box first; above it when the left edge is hit;
+		 * its right side as the last resort */
+		var left = main.offsetLeft - el.offsetWidth - 8;
+		var top = main.offsetTop;
+		if (left < 4) {
+			left = main.offsetLeft;
+			top = main.offsetTop - el.offsetHeight - 8;
+		}
+		if (top < 0) {
+			left = main.offsetLeft + main.offsetWidth + 8;
+			top = main.offsetTop;
+		}
+		el.style.left = left + 'px';
+		el.style.top = top + 'px';
+		el.style.right = 'auto';
+		el.style.bottom = 'auto';
+		clearTimeout(renderDisplaced.timer);
+		renderDisplaced.timer = setTimeout(hideReportBox, ms || 4000);
+	}
+
 	/** Hide the panel immediately (a report with NO data must not leave a
-	 * stale panel on screen). */
+	 * stale panel on screen). The ONLY callers are the bubble's 1:1
+	 * lifecycle hooks (bubble.js) and the click-replay guard — none of them
+	 * may touch anything while the ⚠️ hint owns the main box: the hint
+	 * must not blink off until its sweep refreshes, and a displaced report
+	 * in its own box dies on its OWN renderDisplaced timer, not on some
+	 * unrelated bubble's (真机 09-12: a say landing inside the displaced
+	 * report's 6s window cut it to ~1s). */
 	function hideStatusPanel() {
+		if (stuckPendingNow()) return;
+		hideReportBox();
 		var el = statusEl;
 		if (!el) return;
 		el.classList.remove('show');
@@ -2538,18 +2703,70 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		return '[' + capNameWidth(name, 110) + ']';
 	}
 
+	/** The timer's OWN box (用户拍板 2026-09-12): while the main box is
+	 * occupied by a report / stuck hint / tool line, the tick renders the
+	 * ⏳ rows here — below the main box — so a >30s tool hint and a >2min
+	 * run timer are readable AT THE SAME TIME instead of trampling each
+	 * other. When the main box is free the rows render there (as before)
+	 * and this one hides. Position hugs the main box (JS copies its side
+	 * classes + top/left every tick), flipping above it when the space
+	 * below would leave the viewport. */
+	var timerEl = null;
+
+	function ensureTimerEl() {
+		if (timerEl && timerEl.parentNode) return timerEl;
+		if (!whale) return null;
+		timerEl = document.createElement('div');
+		timerEl.className = 'dsh-whale-status dsh-whale-status-timer';
+		whale.appendChild(timerEl);
+		return timerEl;
+	}
+
+	function hideTimerBox() {
+		if (!timerEl) return;
+		timerEl.classList.remove('show');
+	}
+
 	function runTimerTick() {
-		if (runSlots.size === 0) return;
-		/* never trample a live NON-timer panel (token report, tool hint):
-		 * the tick yields and resumes once that panel expires */
-		if (statusEl && statusEl.classList.contains('show') && !(statusCache && statusCache._timer)) return;
+		if (runSlots.size === 0) { hideTimerBox(); return; }
 		var now = Date.now();
 		var rows = [];
 		runSlots.forEach(function (startAt, sid) {
 			var r = timerRowText(sid, now);
 			if (r) rows.push(r);
 		});
-		if (rows.length === 0) return;
+		if (rows.length === 0) { hideTimerBox(); return; }
+		/* a live NON-timer panel (token report, stuck hint, tool line) owns
+		 * the main box → the rows drop into the timer's own box below it;
+		 * a free main box renders them as before and the extra box hides */
+		var busyMain = statusEl && statusEl.classList.contains('show') && !(statusCache && statusCache._timer);
+		if (busyMain) {
+			var main = statusEl;
+			var tel = ensureTimerEl();
+			if (!tel) return;
+			tel.classList.toggle('dsh-whale-status-below', main.classList.contains('dsh-whale-status-below'));
+			tel.classList.toggle('dsh-whale-status-leftflip', main.classList.contains('dsh-whale-status-leftflip'));
+			var maxW = parseFloat(main.style.maxWidth) || 280;
+			tel.style.maxWidth = maxW + 'px';
+			var compact = rows.join(' · ');
+			tel.textContent = estWidth(compact) <= maxW ? compact : rows.join('\n');
+			tel.classList.add('show');
+			/* hug the main box: below it, or above when that would leave
+			 * the viewport (whale near the screen bottom edge) */
+			var top = main.offsetTop + main.offsetHeight + 8;
+			if (whale.offsetTop + top + tel.offsetHeight > window.innerHeight &&
+				main.offsetTop - tel.offsetHeight - 8 > 0) {
+				top = main.offsetTop - tel.offsetHeight - 8;
+			}
+			tel.style.top = top + 'px';
+			tel.style.left = main.offsetLeft + 'px';
+			tel.style.right = 'auto';
+			tel.style.bottom = 'auto';
+			clearTimeout(runTimerTick.boxTimer);
+			runTimerTick.boxTimer = setTimeout(hideTimerBox, 1100);
+			return;
+		}
+		hideTimerBox();
 		/* prefix stays empty: applyStatusText joins rows with ' · ' while
 		 * they fit the panel and stacks them one per line once they don't */
 		showStatusPanel({ prefix: '', lines: rows, _timer: true }, 1100);
@@ -4617,7 +4834,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			item('🌙 免打扰', '时段内完成/失败不弹泡不响铃，只记红标；需要你动手的选择/审核照常提醒，急事不瞒你。');
 			item('🔊 音量', '提示音音量，5 档循环。');
 			item('🎵 音色（按通知设置）', '完成/失败/提问、定时提醒四类通知各选各的音效：单声叮 / 叮叮两连击 / 清脆上行 / 低沉下行 / 静音，下拉选中即生效并现场试听。');
-			item('⏱ 工具超时', '某个工具跑超过该时长时提示一次"可能卡住了"（只是提醒，不会打断任务）。');
+			item('⏱️ 工具超时', '某个工具跑超过该时长时提示一次"可能卡住了"（只是提醒，不会打断任务）。');
 			item('🚨 压力提醒', '上下文占用达到该百分比时提醒 /compact；回降到 50% 以下后重新武装。');
 			item('📊 任务周报', '近 7 天按日统计任务数（完成/失败/中止/提问）与 token 消耗。');
 			item('📤 导出历史', 'Markdown：复制全部历史到剪贴板；CSV：下载表格文件。');
@@ -5312,7 +5529,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				openSoundPicker();
 			}, true, '完成/失败/提问、定时提醒四类通知各配各的音效。');
 			mkSection('监控');
-			mkRow('⏱ 工具超时', Math.round(CONFIG.toolStuckMs / 1000) + 's', function () {
+			mkRow('⏱️ 工具超时', Math.round(CONFIG.toolStuckMs / 1000) + 's', function () {
 				var i = TOOL_PRESETS.indexOf(CONFIG.toolStuckMs);
 				if (applyConfig({ toolStuckMs: TOOL_PRESETS[(i + 1) % TOOL_PRESETS.length] })) saveConfig();
 			}, false, '单个工具跑超过这个时长就提醒一次"可能卡住了"，不会打断任务。');

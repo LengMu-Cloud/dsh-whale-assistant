@@ -238,6 +238,19 @@
 .dsh-whale-status.dsh-whale-status-below.show {
 	transform: translateY(0);
 }
+/* whale near the viewport bottom (or a panel taller than the room below):
+ * flip ABOVE the whale instead — the below variant would clip off-screen
+ * (用户报告 09-12: 鲸鱼贴底面板显示不全) */
+.dsh-whale-status.dsh-whale-status-above {
+	right: auto;
+	left: 4px;
+	top: auto;
+	bottom: calc(100% + 12px);
+	transform: translateY(6px);
+}
+.dsh-whale-status.dsh-whale-status-above.show {
+	transform: translateY(0);
+}
 /* no room on the left at all: flip to the whale's right side */
 .dsh-whale-status.dsh-whale-status-leftflip {
 	left: calc(100% + 12px);
@@ -513,14 +526,11 @@
 	color: #9db8f0;
 	font-variant-numeric: tabular-nums;
 }
-/* stuck-tool hint: red border on the status panel while a tool hangs */
+/* stuck-tool hint: red border on the status panel while a tool hangs.
+ * (No ::before ⚠️ decoration — the hint text already carries its own ⚠️;
+ * the two used to stack into "⚠️⚠️" and nobody had ever seen it fire.) */
 .dsh-whale-status-stuck {
 	border-color: #ef4444 !important;
-}
-.dsh-whale-status-stuck::before {
-	content: "⚠️";
-	display: inline-block;
-	margin-right: 4px;
 }
 /* busy pulse while a turn is running — opacity is scoped to .show so the
  * bare busy flag can NEVER un-hide the panel (it must not surface stale

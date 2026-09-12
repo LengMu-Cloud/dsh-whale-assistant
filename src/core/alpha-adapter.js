@@ -475,7 +475,17 @@
 			var callId = (callRow && callRow.getAttribute('data-chat-call-id')) || (tool + ':' + (trow.textContent || '').slice(0, 60));
 			var sharedAttSeen = null;
 			try { sharedAttSeen = window.__dshWhale && window.__dshWhale.attSeen; } catch (e) {}
-			if (seenCallIds[callId] || switchRender || (sharedAttSeen && sharedAttSeen[callId])) continue;
+			if (seenCallIds[callId]) continue;
+			/* 09-12 修复：TOOL 行不再吃 switchRender 拦截——seenCallIds 已按
+			 * callId 去重（切换重渲染同 id 不会双响，历史行重渲染非 running），
+			 * 而旧拦截会让"首次渲染恰好落在切换/冷却窗口"的新工具调用被永久
+			 * 错过（真机 09-12：新会话的 pwsh 行再无后续突变，一漏到底）。
+			 * 🤔 提问保留全量拦截：双响 bug（09-02）的主角是它。 */
+			if (tool === 'ask_user_question') {
+				if (switchRender || (sharedAttSeen && sharedAttSeen[callId])) continue;
+			} else if (sharedAttSeen && sharedAttSeen[callId]) {
+				continue;
+			}
 			seenCallIds[callId] = 1;
 			capObj(seenCallIds, 200); /* memory audit: one entry per question row ever rendered */
 			var idKeys = Object.keys(seenCallIds);
@@ -609,4 +619,9 @@
 		setTimeout(function () { feedSessionUsage(getCurrentSessionId()); }, 1200);
 	}
 	attach();
+	/* debug seam: live gate state for diagnosing switchRender stalls */
+	try {
+		window.__dshWhale = window.__dshWhale || {};
+		window.__dshWhale._gate = gate;
+	} catch (e) {}
 	})();

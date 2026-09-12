@@ -87,7 +87,7 @@
 
 > Status panel: an independent surface placed LEFT or BELOW the whale (whichever side has room), so live tool status and the per-task token/pressure report NEVER collide with the speech bubble (notifications) or the click summary.
 
-**ensureStatusEl()** · **updateStatusPos()** · **estWidth()** · **applyStatusText()** · **showStatusPanel()** · **hideStatusPanel()** · **markStatusBusy()** · **showStatus()** · **fmtTokens()** · **pressurePct()** · **maybeWarnPressure()** · **pressureColor()** · **applyPressureHue()** · **runTimerLine()** · **capNameWidth()** · **timerRowText()** · **runningSessionCount()** · **multiRunTag()** · **runTimerTick()** · **startRunTimer()** · **stopRunTimer()**
+**ensureStatusEl()** · **updateStatusPos()** · **estWidth()** · **applyStatusText()** · **ensureReportEl()** · **hideReportBox()** · **stuckPendingNow()** · **showStatusPanel()** · **renderDisplaced()** · **hideStatusPanel()** · **markStatusBusy()** · **showStatus()** · **fmtTokens()** · **pressurePct()** · **maybeWarnPressure()** · **pressureColor()** · **applyPressureHue()** · **runTimerLine()** · **capNameWidth()** · **timerRowText()** · **runningSessionCount()** · **multiRunTag()** · **ensureTimerEl()** · **hideTimerBox()** · **runTimerTick()** · **startRunTimer()** · **stopRunTimer()**
 
 ## **src/core/sleep.js**（行切片）
 

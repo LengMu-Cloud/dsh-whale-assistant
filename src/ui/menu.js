@@ -473,7 +473,7 @@
 			item('🌙 免打扰', '时段内完成/失败不弹泡不响铃，只记红标；需要你动手的选择/审核照常提醒，急事不瞒你。');
 			item('🔊 音量', '提示音音量，5 档循环。');
 			item('🎵 音色（按通知设置）', '完成/失败/提问、定时提醒四类通知各选各的音效：单声叮 / 叮叮两连击 / 清脆上行 / 低沉下行 / 静音，下拉选中即生效并现场试听。');
-			item('⏱ 工具超时', '某个工具跑超过该时长时提示一次"可能卡住了"（只是提醒，不会打断任务）。');
+			item('⏱️ 工具超时', '某个工具跑超过该时长时提示一次"可能卡住了"（只是提醒，不会打断任务）。');
 			item('🚨 压力提醒', '上下文占用达到该百分比时提醒 /compact；回降到 50% 以下后重新武装。');
 			item('📊 任务周报', '近 7 天按日统计任务数（完成/失败/中止/提问）与 token 消耗。');
 			item('📤 导出历史', 'Markdown：复制全部历史到剪贴板；CSV：下载表格文件。');
@@ -1168,7 +1168,7 @@
 				openSoundPicker();
 			}, true, '完成/失败/提问、定时提醒四类通知各配各的音效。');
 			mkSection('监控');
-			mkRow('⏱ 工具超时', Math.round(CONFIG.toolStuckMs / 1000) + 's', function () {
+			mkRow('⏱️ 工具超时', Math.round(CONFIG.toolStuckMs / 1000) + 's', function () {
 				var i = TOOL_PRESETS.indexOf(CONFIG.toolStuckMs);
 				if (applyConfig({ toolStuckMs: TOOL_PRESETS[(i + 1) % TOOL_PRESETS.length] })) saveConfig();
 			}, false, '单个工具跑超过这个时长就提醒一次"可能卡住了"，不会打断任务。');

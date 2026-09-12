@@ -166,7 +166,30 @@
 					try { registerBackground(sid); } catch (e) {}
 					handleMuxPayload({ type: 'question/requested', sessionId: sid, time: frame.time || Date.now() });
 				}
+				return;
 			}
+			/* other background tools: tracked for the stuck watchdog ONLY —
+			 * the 🔧 line stays active-session-only (forwarding it would
+			 * flicker the panel for work the user isn't watching). 09-12
+			 * 多会话卡住提示需要每个会话的工具都在册。 */
+			try {
+				if (window.__dshWhale && window.__dshWhale._trackTool) {
+					window.__dshWhale._trackTool(
+						(event.data && event.data.callId) || ('bg:' + (frame.time || '')),
+						sid
+					);
+				}
+			} catch (e) {}
+			return;
+		}
+		if (type === 'tool/result' && !isActive) {
+			/* the tracking twin of the branch above: a background tool result
+			 * retires its watchdog entry (turn/end is the coarse fallback) */
+			try {
+				if (window.__dshWhale && window.__dshWhale._clearTool && event.data) {
+					window.__dshWhale._clearTool(event.data.callId);
+				}
+			} catch (e) {}
 			return;
 		}
 		if (type === 'turn/start') {

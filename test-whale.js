@@ -98,10 +98,12 @@ function makeEnv(initStore) {
 			appendChild(child) {
 				el.children.push(child);
 				child.parent = el;
+				child.parentNode = el; /* production code checks parentNode (ensureReportEl/ensureTimerEl reuse) */
 			},
 			removeChild(child) {
 				const at = el.children.indexOf(child);
 				if (at >= 0) el.children.splice(at, 1);
+				child.parentNode = null;
 			},
 			contains(node) {
 				if (node === el) return true;
@@ -981,6 +983,12 @@ async function main() {
 	assert.ok(mtPanel().includes('此次任务消耗'), `mt1 report on screen: ${mtPanel()}`);
 	await sleep(1150); /* ≥1 tick of mt2's mature slot */
 	assert.ok(mtPanel().includes('此次任务消耗'), `tick must NOT trample a live report: ${mtPanel()}`);
+	/* split mode (user request 09-12): while the report occupies the main
+	 * box, the mature timer rows render in their OWN box — both readable
+	 * at once instead of the old yield-and-hide */
+	const mtTimerBox = envMt.whale.children.find((c) => String(c.className).indexOf('dsh-whale-status-timer') >= 0);
+	assert.ok(mtTimerBox && mtTimerBox.classList.contains('show') && mtTimerBox.textContent.indexOf('⏳ [') === 0,
+		`timer rows live in their own box while a report shows: ${mtTimerBox && mtTimerBox.textContent}`);
 	/* the timer rows resume once the report expires (6s lifetime) — poll
 	 * with slack: under load both the report's expiry timer and the 1s
 	 * tick can fire late, a fixed sleep races them (was flaky) */
@@ -2140,7 +2148,9 @@ async function main() {
 	SK.scanStuckTools();
 	const st1el = statusStk();
 	assert.ok(st1el && st1el.classList.contains("dsh-whale-status-stuck"), "pending tool with no job flags stuck");
-	assert.ok(st1el.textContent.includes("工具运行中"), "stuck text: " + st1el.textContent);
+	/* 09-12 用户拍板: the hint names its session and reads 工具已运行 Ns
+	 * (same attribution pattern as the ⏳ run-timer rows) */
+	assert.ok(st1el.textContent.includes("⚠️ [卡顿检测] 工具已运行 30s"), "stuck text names the session: " + st1el.textContent);
 	/* tool/result clears it */
 	muxpStk({ type: "session/event", sessionId: "session-st1", event: { type: "tool/result", seq: 2, time: 2, data: { callId: "c1" } } });
 	SK.scanStuckTools();
@@ -2157,6 +2167,126 @@ async function main() {
 	muxpStk({ type: "session/event", sessionId: "session-st1", event: { type: "turn/end", seq: 5, time: 5, data: {} } });
 	SK.scanStuckTools();
 	assert.ok(!statusStk() || !statusStk().classList.contains("dsh-whale-status-stuck"), "turn/end clears stuck");
+
+	/* 40b. 09-12 multi-session stuck rows (用户拍板): every stuck session
+	 * gets its own NAMED line, stacked one per line, worst first — and the
+	 * BACKGROUND-gate path (polled frames, not handleMuxPayload) feeds the
+	 * watchdog via the _trackTool/_clearTool seams */
+	const envStk2 = makeEnv();
+	envStk2.ready();
+	const SK2 = envStk2.sandbox.__dshWhale;
+	envStk2.setFetch(() => Promise.resolve({ ok: false, json: () => Promise.resolve({}) }));
+	SK2.handleMuxPayload({ type: "session/projection", sessionId: "session-stA", key: "title", value: "卡顿A", seq: 1 });
+	SK2.handleMuxPayload({ type: "session/projection", sessionId: "session-stB", key: "title", value: "这是一个相当相当相当相当长的后台会话名", seq: 2 });
+	/* background sessions via the polled gate: tool/call tracked silently */
+	SK2._feedEventFrame({ sessionId: "session-stA", seq: 3, time: Date.now(), event: { type: "tool/call", data: { callId: "bg-a", name: "pwsh" } } });
+	SK2._feedEventFrame({ sessionId: "session-stB", seq: 4, time: Date.now(), event: { type: "tool/call", data: { callId: "bg-b", name: "bash" } } });
+	assert.ok(SK2.toolSlot.get("bg-a") && SK2.toolSlot.get("bg-b"), "background tools tracked via the gate seam");
+	SK2.toolSlot.get("bg-a").at = Date.now() - 30000;
+	SK2.toolSlot.get("bg-b").at = Date.now() - 45000;
+	SK2.scanStuckTools();
+	const st2el = () => envStk2.whale.children.find((c) => c.className === "dsh-whale-status");
+	assert.ok(st2el() && st2el().classList.contains("dsh-whale-status-stuck"), "two stuck sessions flag the panel");
+	const st2text = st2el().textContent;
+	assert.ok(st2text.includes("⚠️ [卡顿A] 工具已运行 30s"), `row A named: ${st2text}`);
+	assert.ok(st2text.includes("⚠️ [这是一个相当相当相…") && st2text.includes("工具已运行 45s"), `row B named + pixel-capped: ${st2text}`);
+	assert.ok(st2text.indexOf("\n") !== -1 && st2text.indexOf("45s") < st2text.indexOf("30s"), "rows stacked one per line, worst first");
+	/* a background tool/result retires only its own session's row */
+	SK2._feedEventFrame({ sessionId: "session-stB", seq: 5, time: Date.now(), event: { type: "tool/result", data: { callId: "bg-b" } } });
+	SK2.scanStuckTools();
+	assert.ok(st2el().textContent.includes("[卡顿A]") && !st2el().textContent.includes("卡顿B"),
+		"background result clears only that session's row: " + st2el().textContent);
+
+	/* 40c. 09-12 用户四连之二：① displaced report — a completion report
+	 * arriving while the ⚠️ hint owns the main box slides into its OWN box
+	 * beside it instead of trampling the hint (user watched the hint get
+	 * covered); ② zombie sweep — a slot whose tool/result or turn/end
+	 * cleanup signal was lost self-deletes after 10× the threshold
+	 * (user screenshot: 610s/339s ghosts). Still on envStk2: bg-a is
+	 * pending, so the main box is owned by the hint. */
+	SK2._setHoldMs(50);
+	const repBox = () => envStk2.whale.children.find((c) => String(c.className).indexOf("dsh-whale-status-report") >= 0);
+	SK2.handleMuxPayload({ type: "session/projection", sessionId: "session-stC", key: "title", value: "旁路报告", seq: 6 });
+	SK2.handleMuxPayload({ type: "session/event", sessionId: "session-stC", event: { type: "assistant/message", data: { usage: { inputTokens: 800, outputTokens: 200, cacheReadTokens: 0 } } } });
+	SK2._feedEventFrame({ sessionId: "session-stC", seq: 7, time: Date.now(), event: { type: "turn/end", data: { reason: { kind: "completed" } } } });
+	let repShown = false;
+	for (let i = 0; i < 20 && !repShown; i++) {
+		await sleep(50);
+		repShown = !!(repBox() && repBox().classList.contains("show"));
+	}
+	assert.ok(repShown, "report slides into its own box while the hint owns the main box");
+	assert.ok(repBox().textContent.includes("此次任务消耗"), "displaced box carries the report: " + repBox().textContent);
+	assert.ok(st2el().classList.contains("dsh-whale-status-stuck") && st2el().textContent.includes("⚠️ [卡顿A]"),
+		"main box still carries the hint, report did NOT trample it: " + st2el().textContent);
+	/* the displaced report retires on the same schedule as a main-box one */
+	let repGone = false;
+	for (let i = 0; i < 60 && !repGone; i++) {
+		await sleep(150);
+		const b = repBox();
+		repGone = !b || !b.classList.contains("show");
+	}
+	assert.ok(repGone, "displaced report retires on schedule (no second 6s ghost)");
+	/* zombie: a slot back-dated past 10× the threshold self-deletes on the
+	 * next sweep; its live neighbour survives */
+	SK2._feedEventFrame({ sessionId: "session-stA", seq: 8, time: Date.now(), event: { type: "tool/call", data: { callId: "bg-z", name: "pwsh" } } });
+	SK2.toolSlot.get("bg-z").at = Date.now() - 310000;
+	SK2.scanStuckTools();
+	assert.ok(!SK2.toolSlot.has("bg-z"), "zombie slot (cleanup signal lost) self-deletes");
+	assert.ok(SK2.toolSlot.has("bg-a"), "the live stuck slot survives the zombie sweep");
+	/* hint gone → the next report uses the MAIN box again (no stuck, no
+	 * reportEl showing) */
+	SK2._feedEventFrame({ sessionId: "session-stA", seq: 9, time: Date.now(), event: { type: "tool/result", data: { callId: "bg-a" } } });
+	SK2.scanStuckTools();
+	assert.ok(!st2el().classList.contains("dsh-whale-status-stuck"), "hint retired once every slot cleared");
+	SK2.handleMuxPayload({ type: "session/event", sessionId: "session-stA", event: { type: "assistant/message", data: { usage: { inputTokens: 100, outputTokens: 50, cacheReadTokens: 0 } } } });
+	SK2._feedEventFrame({ sessionId: "session-stA", seq: 10, time: Date.now(), event: { type: "turn/end", data: { reason: { kind: "completed" } } } });
+	let mainReport = false;
+	for (let i = 0; i < 20 && !mainReport; i++) {
+		await sleep(50);
+		const b = repBox();
+		mainReport = st2el().textContent.includes("此次任务消耗") && !(b && b.classList.contains("show"));
+	}
+	assert.ok(mainReport, "with nothing pending the report returns to the main box");
+	/* 40c-5. the bubble's 1:1 lifecycle hides (uiSay show-time +
+	 * armBubbleHide expiry — hideStatusPanel's only callers) must neither
+	 * blink the hint off the main box nor cut a displaced report's 6s:
+	 * 真机 09-12 reproduced a say landing AFTER the end report had
+	 * displaced, and the paired hide killed it within ~1s. */
+	/* the fake stuck slot rides session-stA (NOT the reporting session):
+	 * a session's own turn/end would clear its tools and retire the hint
+	 * mid-scenario */
+	SK2._trackTool("zz-pair", "session-stA");
+	SK2.toolSlot.get("zz-pair").at = Date.now() - 35000;
+	SK2.scanStuckTools();
+	assert.ok(st2el().classList.contains("dsh-whale-status-stuck") && st2el().classList.contains("show"),
+		"hint owns the main box again");
+	/* stC's end fired earlier in this env — a second completed end inside
+	 * the ±8s dedup window would be swallowed, so the fresh reporter is
+	 * session-stE (title first: unknown sessions are dropped silently) */
+	SK2.handleMuxPayload({ type: "session/projection", sessionId: "session-stE", key: "title", value: "再来一份报告", seq: 11 });
+	SK2.handleMuxPayload({ type: "session/event", sessionId: "session-stE", event: { type: "assistant/message", data: { usage: { inputTokens: 200, outputTokens: 100, cacheReadTokens: 0 } } } });
+	SK2._feedEventFrame({ sessionId: "session-stE", seq: 12, time: Date.now(), event: { type: "turn/end", data: { reason: { kind: "completed" } } } });
+	await sleep(120);
+	assert.ok(repBox() && repBox().classList.contains("show") && repBox().textContent.includes("此次任务消耗"),
+		"end report displaced again: " + (repBox() && repBox().textContent));
+	/* the 2s sweep re-shows the hint meanwhile — its retake of the main box
+	 * must NOT kill the displaced report (真机 09-12: murdered on the very
+	 * next sweep tick) */
+	await sleep(2300);
+	assert.ok(repBox() && repBox().classList.contains("show"),
+		"displaced report survives the hint's sweep refresh: " + (repBox() && repBox().textContent));
+	/* a LATE start announce (registered session-stF, notifyOnStart) is the
+	 * killer shape: say() with NO paired panel re-show — its 1:1 hide lands
+	 * INSIDE the displaced report's 6s window (真机 09-12) */
+	SK2.handleMuxPayload({ type: "session/projection", sessionId: "session-stF", key: "subagentTiming", value: { settledMs: 0 } });
+	SK2._feedEventFrame({ sessionId: "session-stF", seq: 13, time: Date.now(), event: { type: "turn/start", data: {} } });
+	await sleep(120);
+	assert.ok(repBox() && repBox().classList.contains("show"),
+		"late say's paired hide must NOT kill the displaced report: " + (repBox() && repBox().textContent));
+	assert.ok(st2el().classList.contains("dsh-whale-status-stuck") && st2el().classList.contains("show"),
+		"late say's paired hide must NOT blink the hint off the main box");
+	SK2.toolSlot.delete("zz-pair");
+	SK2.scanStuckTools();
 
 	/* 41. settings: default values locked; toggling notify-on-start silences
 	 * only the start report (end still reports); threshold/volume cycles

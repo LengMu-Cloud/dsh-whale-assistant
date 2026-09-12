@@ -202,6 +202,7 @@ function httpOk(url, cb) {
  *     不再死等 60s。前几秒仍要求 /api/whale-assistant/state 为 200，
  *     避免插件未挂完就进页面黑屏。 */
 const AUTH_FAIL_LIMIT = 8;
+const PLUGIN_READY_LIMIT = 20; // 冷开机插件挂载窗口上限（约 20s，超过即降级加载）
 
 function hasDshSessionCookie(cb) {
   try {
@@ -216,8 +217,33 @@ function loadUiWithAuth() {
   hasDshSessionCookie((hasCookie) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     if (hasCookie) {
-      log('session cookie present, loading plain URL (fast path)');
-      mainWindow.loadURL(DSH_URL);
+      log('session cookie present (fast path)');
+      /* 冷开机竞态（用户报告 09-12）：TCP 通了 ≠ cordis 插件挂载完成。
+       * 快路径原来直接 loadURL，正好打进"端口已开、插件未挂完"的窗口
+       * → 黑屏，手动 F5 才恢复；且登录过一次的机器 cookie 永远在
+       * （落盘持久化），慢路径的就绪检查形同虚设。修法：快路径也先探
+       * 插件就绪（/api/whale-assistant/state 要求 200）——温启动时毫秒级
+       * 通过、体感不变；冷开机在挂载窗口内每秒重试；超过上限降级加载
+       * （登录页兜底，与服务未就绪的处理一致，不让鲸鱼插件故障卡死壳）。 */
+      let fastTries = 0;
+      let fastDone = false;
+      const loadPlain = (why) => {
+        if (fastDone) return;
+        fastDone = true;
+        log('loading plain URL (fast path' + (why ? ', ' + why : '') + ')');
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.loadURL(DSH_URL);
+      };
+      const fastRetry = () => {
+        if (fastDone) return;
+        fastTries++;
+        if (fastTries > PLUGIN_READY_LIMIT) return loadPlain('plugins not ready in ' + PLUGIN_READY_LIMIT + 's, loading anyway');
+        httpOk(DSH_URL + '/api/whale-assistant/state', (pluginsOk) => {
+          if (fastDone) return;
+          if (pluginsOk) return loadPlain('plugins ready');
+          setTimeout(fastRetry, 1000);
+        });
+      };
+      fastRetry();
       return;
     }
     let tries = 0;

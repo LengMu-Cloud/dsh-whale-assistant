@@ -7,6 +7,8 @@
 
 插件完全自包含：跳转功能收编进插件（补丁退役）+ 后台通知实时（SSE 推送）。
 
+> 体检补记：包 `version` 同步至 0.4.0（0.3.3/0.4.0 两版欠账）。
+
 ### 新增
 - **跳转功能 in-house（客户端补丁退役）**：历史条目单击/通知双击的"跳转到对话现场"从 `apply-plugin-hook.ps1` 注入官方 client.js 的 `__dshOpenSession`，整体搬迁为**官方插件形态**——鲸鱼 client 模块 `apply(ctx)` 运行时 `ctx.inject(['sessions'])` 拿到客户端 sessions 服务（0.1.5 源码实证：客户端 cordis 支持 inject waiting，`dsh.client` 清单字段由官方解析器兑现），钩子 v5 逻辑 1:1 搬入 `src/ui/session-jump.js`（翻页 400 次/45s 上限、五格式戳解析、class/walk 双模式、重入式三段定位），**首次进入 vm 沙箱可单测**。降级链：桥（全功能）→ 侧栏同名行点击（无定位）——侧栏兜底同时覆盖通知双击（原先没有）。`apply-plugin-hook.ps1` 退役：DSH 升级不再需要重跑补丁
 - **SSE 推送通道（后台通知实时进插件）**：宿主新增 `/api/whale-assistant/events/stream`——帧产生的瞬间推送（含 hello 携带 bootId / 20s 心跳 ping）；页面半区 EventSource 接入现有 consume 通道（seq/bootId 契约复用），**轮询降级为断线兜底**。浏览器只节流定时器、从不节流网络推送——网页版（不用壳）后台标签页通知从"切回补达"变**实时到达+响铃**

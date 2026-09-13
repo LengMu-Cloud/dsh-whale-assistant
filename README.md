@@ -159,7 +159,7 @@ localStorage 可留可删）：
 ```text
 node build-whale.js      # 重建 whale.js + whale-map.md，并同步发布副本到 whale-assistant/lib/
                          # 构建时强制：顶层声明重复断言 / menu 热点 guard / KNOWN-COUPLING 登记表
-node test-whale.js       # vm 沙箱单元测试，640+ 断言
+node test-whale.js       # vm 沙箱单元测试，670+ 断言
 node test-chip-gate.js   # 芯片闸门纯函数测试，19 断言
 node scripts/audit-deps.js        # 静态架构审计（作用域/依赖边/缝清单/时序契约 lint，自检前置）
 node check-dsh-compat.js --static "<DSH安装目录>"   # DSH 升级前：对新版包扫耦合点特征
@@ -180,7 +180,7 @@ node scripts/run-e2e.js  # CDP 端到端四场景（桌面壳调试口 9222 不�
 | `whale-assistant/` | 插件包（宿主半区 lib/index.js + 页面半区 client.js + 注册样本） |
 | `ensure-whale-assistant.ps1` | 插件注册脚本（写 profile 依赖 + 注册行，幂等） |
 | `parts/style.css` | 鲸鱼全部样式 |
-| `test-whale.js` / `test-chip-gate.js` | 单元测试（vm 沙箱 640+ 断言 / 闸门纯函数 19 断言） |
+| `test-whale.js` / `test-chip-gate.js` | 单元测试（vm 沙箱 670+ 断言 / 闸门纯函数 19 断言） |
 | `FEATURES.md` / `CHANGELOG.md` / `docs/seams.md` | 用户功能手册 / 版本变更记录 / 调试与测试导出缝清单 |
 | `shell/` + `scripts/fix-shell.ps1` | 桌面瘦壳源码与安装脚本（可选增强） |
 | `docs/shell-setup.md` | 桌面壳手动安装指南 |

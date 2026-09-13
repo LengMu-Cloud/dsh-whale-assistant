@@ -224,7 +224,7 @@
 
 ```
 node build-whale.js     # 重建 whale.js + whale-map.md，并同步发布副本到 whale-assistant/lib/
-node test-whale.js      # 单元测试（vm 沙箱 640+ 断言）
+node test-whale.js      # 单元测试（vm 沙箱 670+ 断言）
 node scripts/run-e2e.js # 端到端回归
 ```
 

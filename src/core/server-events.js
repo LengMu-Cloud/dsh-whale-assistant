@@ -333,10 +333,19 @@
 				/* usage + pressure projections: the host sees EVERY session, so
 				 * feeding them here keeps 全对话累计/上下文压力 real for
 				 * sessions this window never opened (after a reload the DOM
-				 * reader only sees the one visible conversation). The ACTIVE
-				 * session is skipped — its DOM feed already covers it and must
-				 * not race the server values for lastMainSession. */
-				if ((f.key === 'tokenUsage' || f.key === 'contextPressure') && f.sessionId !== resolveCurrentSessionId()) {
+				 * reader only sees the one visible conversation).
+				 * tokenUsage stays active-session-skipped: the DOM 累计条 feed
+				 * covers it and must not race the server values.
+				 * contextPressure is NOT skipped (09-13 压力复活): DSH 0.1.5
+				 * removed the「上下文已用 N%」DOM text, so the DOM feed has
+				 * nothing to contribute — the server projection (token-meter,
+				 * dsh-base roster) is the ONLY source for the active session,
+				 * and the report pressure line / border color / 70% warning
+				 * all read it. Both shapes (legacy DOM
+				 * {contextWindow:100,pressureTokens:percent} and server
+				 * real-token counts) yield a correct percentage through the
+				 * same pressurePercentOf formula. */
+				if ((f.key === 'tokenUsage' && f.sessionId !== resolveCurrentSessionId()) || f.key === 'contextPressure') {
 					try {
 						handleMuxPayload({ type: 'session/projection', sessionId: f.sessionId, key: f.key, value: f.value });
 					} catch (e) {}
@@ -388,5 +397,9 @@
 	try {
 		window.__dshWhale = window.__dshWhale || {};
 		window.__dshWhale._feedEventFrame = feedEventFrame;
+		/* drive the FULL poll consume loop (projection gate + batch folds),
+		 * not just the event branch — the projection active-session gate
+		 * lives in consume() and must be testable end to end */
+		window.__dshWhale._pollConsume = consume;
 	} catch (e) {}
 	})();

@@ -234,10 +234,23 @@
 		return String(n);
 	}
 
-	function pressurePct() {
-		var p = lastMainSession ? sessionPressure.get(lastMainSession) : null;
+	/** Pure: percent for a contextPressure projection value. Official口径
+	 * (the DSH ContextMeter's computeContextOccupancy): projectedTokens
+	 * (usage sample + surface drift since) first, pressureTokens fallback,
+	 * clamped at 100. A window WITHOUT any token sample returns null — no
+	 * sample, no fabricated 0% (the report skips the line, the warning
+	 * no-ops). The legacy DOM feed's {contextWindow:100,
+	 * pressureTokens:percent} shape works unchanged. Exported for tests;
+	 * reports.js reads it too (existing edge, one formula). */
+	function pressurePercentOf(p) {
 		if (!p || !p.contextWindow) return null;
-		return Math.round((p.pressureTokens || 0) / p.contextWindow * 100);
+		var used = p.projectedTokens != null ? p.projectedTokens : (p.pressureTokens != null ? p.pressureTokens : null);
+		if (used === null) return null;
+		return Math.min(100, Math.round(used / p.contextWindow * 100));
+	}
+
+	function pressurePct() {
+		return pressurePercentOf(lastMainSession ? sessionPressure.get(lastMainSession) : null);
 	}
 
 	/** One-shot warning when the context fills up; re-arms after relief. */

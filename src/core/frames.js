@@ -114,6 +114,19 @@
 		var entry = titleBook[sessionId];
 		return entry && entry.t ? entry.t : null;
 	}
+
+	/** Wipe the contact book AND the in-memory names (09-13 用户拍板: the
+	 * missing "forget a conversation" entry). History records still carry
+	 * name snapshots that re-seed on the next load — truly forgetting one
+	 * conversation is two steps (清历史 first, then this), documented in
+	 * the manual row. Returns the number of book entries wiped. */
+	function clearTitleBook() {
+		var n = Object.keys(titleBook).length;
+		titleBook = {};
+		try { localStorage.removeItem('dsh-whale:titles'); } catch (e) {}
+		sessionTitles.clear();
+		return n;
+	}
 	(function seedTitlesFromBook() {
 		for (var sid in titleBook) {
 			if (titleBook[sid] && titleBook[sid].t && !sessionTitles.get(sid)) {

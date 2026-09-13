@@ -21,13 +21,16 @@ KNOWN-COUPLING 登记表打印。
 | **三个闭包**（depth ≥2） | ① `core/alpha-adapter` 整模块自包 IIFE（带环境 early-return）② `core/server-events` 的 `initServerEvents` IIFE ③ `uiInit` 巨闭包 = bootstrap→menu→drag 跨文件连续切片（menu 全部 34 个函数、9 个抽屉都是 uiInit 局部） | 闭包内符号**只**对同 span 文件可见；对外只经 `window.__dshWhale` 缝 |
 | **window 缝** | `window.__dshWhale`（index.js 初始化） | 跨闭包委托 / 诊断 / 测试唯一通道；80 条显式命名导出 + 16 处防御式读，10 种动态访问模式全零（audit-deps E 节） |
 
-## 3. 依赖图（141 条模块级边，audit-deps B/C 节）
+## 3. 依赖图（142 条模块级边，audit-deps B/C 节）
 
 - **core→ui/input 共 12 条**：5 条组合根（`exports.js` 装配，职责使然）+
   7 条 push 管线（frames→status-panel/messages、reports→status-panel/bubble、
   stuck/server-events→status-panel、mood→messages）。
 - **真互指 3 组**：frames↔status-panel、reports↔status-panel、mood↔messages。
   前两组的回读点以 `// KNOWN-COUPLING:` 标记在代码里（构建时打印，见 §7）。
+- **ui→core 控制面（0.3.3 +1，总边 141→142）**：menu→frames（`clearTitleBook`
+  清空通讯录）——与既有 bookTitle/countJobsCompleted 查询同向，属于既定
+  「ui 只走控制面/查询函数」准入。
 - **push vs 订阅（评估后保留 push）**：回读内容是面板自有状态的投影写入
   （frames 把 sessionUsage/sessionPressure 写进面板槽位、面板回调查询函数）。
   订阅化需引入事件分发层、改造 6 个 push 调用点、触发全量真机回归；收益仅是

@@ -26,7 +26,7 @@
 
 | 组件 | 要求 |
 |---|---|
-| DeepSeek Harness | 实测版本 **0.1.5-rc.2**（2026-09-11，由 0.1.2-rc.1 升级）；兼容下限见 `whale-assistant/package.json` 的 `dsh.engines`；插件只走公开插件接口与 HTTP 路由。0.1.5 起「上下文已用 N%」已从 UI 移除，前台压力色可能降级 |
+| DeepSeek Harness | 实测版本 **0.1.5-rc.2**（2026-09-11，由 0.1.2-rc.1 升级）；兼容下限见 `whale-assistant/package.json` 的 `dsh.engines`；插件只走公开插件接口与 HTTP 路由。0.1.5 起「上下文已用 N%」由内联文字改为发送按钮旁的环形件；插件压力数据 0.3.3 起改由 DSH 的 token-meter 服务端投影供给，报告压力行/压力色/提醒不受官方 UI 改版影响 |
 | Node.js | 跟随 DSH 自身要求即可（开发机 v24 实测）；仅改源码/构建/跑测试时需要 |
 | 操作系统 | 插件本体为纯 JS，跨平台；自动化脚本为 PowerShell（Windows），macOS/Linux 按下文手动步骤 |
 | 运行载体 | 任意现代浏览器；Electron 桌面壳为可选增强 |
@@ -126,6 +126,13 @@ node build-whale.js    # 仅当改了 src/ 源码才需要（构建产物 whale.
 
 - 只动页面半区（`src/`、`whale.js`）：浏览器 **F5** 即生效
 - 动了宿主半区（`whale-assistant/lib/index.js`）：**重启 DSH 服务**（关壳重开，或重启 dsh web 进程）
+
+**换机迁移**（数据不跨机器同步，搬家前手动备份两处）：
+
+- 历史：`~/.dsh/whale-assistant.json`（服务端镜像文件，拷到新机同路径即可）
+- 设置/通讯录/提醒/好感度：浏览器 localStorage 里 `dsh-whale:` 开头的全部键
+  （DevTools → Application → Local Storage 逐条导出再导入；`dsh-whale:evseq`/
+  `clearAt` 拷过去也无害——bootId 不匹配会自动全量重同步）
 
 **卸载**（删干净三处即完全移除；历史数据 `~/.dsh/whale-assistant.json` 与浏览器
 localStorage 可留可删）：

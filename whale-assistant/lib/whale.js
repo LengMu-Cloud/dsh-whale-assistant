@@ -40,7 +40,7 @@
 
 	/** Whale patch version (M5.1). Build-time override: build-whale.js reads
 	 * env PATCH_VERSION; the default here is the fallback single source. */
-	var PATCH_VERSION = '0.3.2';
+	var PATCH_VERSION = '0.3.3';
 
 	/** Session id prefix that marks a user conversation ("main task").
 	 * Spawned subagents use bare UUIDs and are treated as silent sub-tasks. */
@@ -1785,10 +1785,19 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				/* usage + pressure projections: the host sees EVERY session, so
 				 * feeding them here keeps 全对话累计/上下文压力 real for
 				 * sessions this window never opened (after a reload the DOM
-				 * reader only sees the one visible conversation). The ACTIVE
-				 * session is skipped — its DOM feed already covers it and must
-				 * not race the server values for lastMainSession. */
-				if ((f.key === 'tokenUsage' || f.key === 'contextPressure') && f.sessionId !== resolveCurrentSessionId()) {
+				 * reader only sees the one visible conversation).
+				 * tokenUsage stays active-session-skipped: the DOM 累计条 feed
+				 * covers it and must not race the server values.
+				 * contextPressure is NOT skipped (09-13 压力复活): DSH 0.1.5
+				 * removed the「上下文已用 N%」DOM text, so the DOM feed has
+				 * nothing to contribute — the server projection (token-meter,
+				 * dsh-base roster) is the ONLY source for the active session,
+				 * and the report pressure line / border color / 70% warning
+				 * all read it. Both shapes (legacy DOM
+				 * {contextWindow:100,pressureTokens:percent} and server
+				 * real-token counts) yield a correct percentage through the
+				 * same pressurePercentOf formula. */
+				if ((f.key === 'tokenUsage' && f.sessionId !== resolveCurrentSessionId()) || f.key === 'contextPressure') {
 					try {
 						handleMuxPayload({ type: 'session/projection', sessionId: f.sessionId, key: f.key, value: f.value });
 					} catch (e) {}
@@ -1840,6 +1849,10 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	try {
 		window.__dshWhale = window.__dshWhale || {};
 		window.__dshWhale._feedEventFrame = feedEventFrame;
+		/* drive the FULL poll consume loop (projection gate + batch folds),
+		 * not just the event branch — the projection active-session gate
+		 * lives in consume() and must be testable end to end */
+		window.__dshWhale._pollConsume = consume;
 	} catch (e) {}
 	})();
 /* ---- module: src/core/health.js ---- */
@@ -2073,9 +2086,11 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		if (typeof sessionTokens === 'number' && sessionTokens > 0) {
 			lines.push('全对话累计消耗 ' + fmtTokens(sessionTokens) + ' tokens');
 		}
-		if (pressure && pressure.contextWindow) {
-			var pct = Math.round((pressure.pressureTokens || 0) / pressure.contextWindow * 100);
-			lines.push('上下文已用 ' + pct + '%');
+		if (pressure) {
+			var pct = pressurePercentOf(pressure); /* null = no honest reading: skip the line */
+			if (pct !== null) {
+				lines.push('上下文已用 ' + pct + '%');
+			}
 		}
 		return lines.length > 0 ? { prefix: '📊 ', lines: lines } : null;
 	}
@@ -2579,10 +2594,23 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		return String(n);
 	}
 
-	function pressurePct() {
-		var p = lastMainSession ? sessionPressure.get(lastMainSession) : null;
+	/** Pure: percent for a contextPressure projection value. Official口径
+	 * (the DSH ContextMeter's computeContextOccupancy): projectedTokens
+	 * (usage sample + surface drift since) first, pressureTokens fallback,
+	 * clamped at 100. A window WITHOUT any token sample returns null — no
+	 * sample, no fabricated 0% (the report skips the line, the warning
+	 * no-ops). The legacy DOM feed's {contextWindow:100,
+	 * pressureTokens:percent} shape works unchanged. Exported for tests;
+	 * reports.js reads it too (existing edge, one formula). */
+	function pressurePercentOf(p) {
 		if (!p || !p.contextWindow) return null;
-		return Math.round((p.pressureTokens || 0) / p.contextWindow * 100);
+		var used = p.projectedTokens != null ? p.projectedTokens : (p.pressureTokens != null ? p.pressureTokens : null);
+		if (used === null) return null;
+		return Math.min(100, Math.round(used / p.contextWindow * 100));
+	}
+
+	function pressurePct() {
+		return pressurePercentOf(lastMainSession ? sessionPressure.get(lastMainSession) : null);
 	}
 
 	/** One-shot warning when the context fills up; re-arms after relief. */
@@ -3082,6 +3110,19 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	function bookTitle(sessionId) {
 		var entry = titleBook[sessionId];
 		return entry && entry.t ? entry.t : null;
+	}
+
+	/** Wipe the contact book AND the in-memory names (09-13 用户拍板: the
+	 * missing "forget a conversation" entry). History records still carry
+	 * name snapshots that re-seed on the next load — truly forgetting one
+	 * conversation is two steps (清历史 first, then this), documented in
+	 * the manual row. Returns the number of book entries wiped. */
+	function clearTitleBook() {
+		var n = Object.keys(titleBook).length;
+		titleBook = {};
+		try { localStorage.removeItem('dsh-whale:titles'); } catch (e) {}
+		sessionTitles.clear();
+		return n;
 	}
 	(function seedTitlesFromBook() {
 		for (var sid in titleBook) {
@@ -4840,7 +4881,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			item('🩺 调试模式', '排障用：开启后往控制台输出调试信息，并把取证数据写进 ~/.dsh/whale-assistant.json 的 _debug 键，平时保持关闭。');
 			sec('📜 历史与红标');
 			item('红标数字 = 未读通知数', '左键单击读一条（读过的消失），双击一键清空。完成/失败/提问/审核计入，开工/提醒不计入。');
-			item('📜 历史任务（右键菜单）', '保留最近 50 条：本地 + 服务器双存储，桌面壳和别的浏览器窗口看到同一份；支持搜索、清空、导出。');
+			item('📜 历史任务（右键菜单）', '保留最近 50 条：本地 + 服务器双存储，桌面壳和别的浏览器窗口看到同一份；支持搜索、清空、导出。想彻底遗忘某个对话：先清历史、再「清空通讯录」（历史里存的名字快照会在下次加载时回流，两步都做才真正遗忘）。');
 			item('跳回对话', '双击通知气泡，或点历史抽屉里的任意一条记录。');
 			sec('❤️ 陪伴小彩蛋');
 			item('摸摸头', '右键双击我：好感 +1，还有小心心飘出。');
@@ -5416,6 +5457,27 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			});
 			panel.appendChild(clearRow);
 			panel.appendChild(clearOpts);
+			/* 09-13 用户拍板: the missing "forget a conversation" entry.
+			 * Truly forgetting one conversation is TWO steps — 清历史 first
+			 * (drops the record snapshots), then this row (wipes the book +
+			 * the in-memory names); history snapshots re-seed names on the
+			 * next load otherwise. Semantics live in the manual row. */
+			var bookClearRow = document.createElement('div');
+			bookClearRow.className = 'dsh-whale-history-clear';
+			bookClearRow.textContent = '📇 清空通讯录';
+			bookClearRow.addEventListener('click', function (event) {
+				event.stopPropagation();
+				if (bookClearRow.dataset.armed !== '1') {
+					bookClearRow.dataset.armed = '1';
+					bookClearRow.textContent = '⚠️ 再点一次确认清空';
+					return;
+				}
+				bookClearRow.dataset.armed = '0';
+				bookClearRow.textContent = '📇 清空通讯录';
+				var wiped = clearTitleBook();
+				uiSay(wiped > 0 ? '通讯录已清空（' + wiped + ' 条），名字会重新学习 🧹' : '通讯录本来就是空的 🧹', 2400);
+			});
+			panel.appendChild(bookClearRow);
 			mkPanelFoot(panel, closeCtxHistory, true); /* ← 返回菜单 / ✕ 关闭 — 与其他子面板统一 */
 			if (!ctxHistory) document.body.appendChild(panel);
 			ctxHistory = panel;
@@ -6109,6 +6171,8 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	window.__dshWhale.toolSlot = toolSlot;
 	window.__dshWhale.pressureColor = pressureColor;
 	window.__dshWhale.applyPressureHue = applyPressureHue;
+	window.__dshWhale.pressurePercentOf = pressurePercentOf;
+	window.__dshWhale._clearTitleBook = clearTitleBook;
 	window.__dshWhale.affection = function () {
 		return affection;
 	};

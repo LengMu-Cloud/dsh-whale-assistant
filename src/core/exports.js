@@ -52,6 +52,8 @@
 	window.__dshWhale.toolSlot = toolSlot;
 	window.__dshWhale.pressureColor = pressureColor;
 	window.__dshWhale.applyPressureHue = applyPressureHue;
+	window.__dshWhale.pressurePercentOf = pressurePercentOf;
+	window.__dshWhale._clearTitleBook = clearTitleBook;
 	window.__dshWhale.affection = function () {
 		return affection;
 	};

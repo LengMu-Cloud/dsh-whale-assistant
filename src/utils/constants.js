@@ -3,7 +3,7 @@
 
 	/** Whale patch version (M5.1). Build-time override: build-whale.js reads
 	 * env PATCH_VERSION; the default here is the fallback single source. */
-	var PATCH_VERSION = '0.3.2';
+	var PATCH_VERSION = '0.3.3';
 
 	/** Session id prefix that marks a user conversation ("main task").
 	 * Spawned subagents use bare UUIDs and are treated as silent sub-tasks. */

@@ -481,7 +481,7 @@
 			item('🩺 调试模式', '排障用：开启后往控制台输出调试信息，并把取证数据写进 ~/.dsh/whale-assistant.json 的 _debug 键，平时保持关闭。');
 			sec('📜 历史与红标');
 			item('红标数字 = 未读通知数', '左键单击读一条（读过的消失），双击一键清空。完成/失败/提问/审核计入，开工/提醒不计入。');
-			item('📜 历史任务（右键菜单）', '保留最近 50 条：本地 + 服务器双存储，桌面壳和别的浏览器窗口看到同一份；支持搜索、清空、导出。');
+			item('📜 历史任务（右键菜单）', '保留最近 50 条：本地 + 服务器双存储，桌面壳和别的浏览器窗口看到同一份；支持搜索、清空、导出。想彻底遗忘某个对话：先清历史、再「清空通讯录」（历史里存的名字快照会在下次加载时回流，两步都做才真正遗忘）。');
 			item('跳回对话', '双击通知气泡，或点历史抽屉里的任意一条记录。');
 			sec('❤️ 陪伴小彩蛋');
 			item('摸摸头', '右键双击我：好感 +1，还有小心心飘出。');
@@ -1057,6 +1057,27 @@
 			});
 			panel.appendChild(clearRow);
 			panel.appendChild(clearOpts);
+			/* 09-13 用户拍板: the missing "forget a conversation" entry.
+			 * Truly forgetting one conversation is TWO steps — 清历史 first
+			 * (drops the record snapshots), then this row (wipes the book +
+			 * the in-memory names); history snapshots re-seed names on the
+			 * next load otherwise. Semantics live in the manual row. */
+			var bookClearRow = document.createElement('div');
+			bookClearRow.className = 'dsh-whale-history-clear';
+			bookClearRow.textContent = '📇 清空通讯录';
+			bookClearRow.addEventListener('click', function (event) {
+				event.stopPropagation();
+				if (bookClearRow.dataset.armed !== '1') {
+					bookClearRow.dataset.armed = '1';
+					bookClearRow.textContent = '⚠️ 再点一次确认清空';
+					return;
+				}
+				bookClearRow.dataset.armed = '0';
+				bookClearRow.textContent = '📇 清空通讯录';
+				var wiped = clearTitleBook();
+				uiSay(wiped > 0 ? '通讯录已清空（' + wiped + ' 条），名字会重新学习 🧹' : '通讯录本来就是空的 🧹', 2400);
+			});
+			panel.appendChild(bookClearRow);
 			mkPanelFoot(panel, closeCtxHistory, true); /* ← 返回菜单 / ✕ 关闭 — 与其他子面板统一 */
 			if (!ctxHistory) document.body.appendChild(panel);
 			ctxHistory = panel;

@@ -885,6 +885,28 @@ async function main() {
 	assert.ok(tbCount <= 500, `book LRU-capped at 500 (got ${tbCount})`);
 	assert.ok(tbRaw()['session-wave399'], 'newest entries kept');
 
+	/* 18g. 清空通讯录 (09-13 用户拍板): the row wipes the book AND the
+	 * in-memory names — names re-learn afterwards. Truly forgetting one
+	 * conversation is two steps (清历史 first, then the book) since history
+	 * record snapshots re-seed names on the next load. */
+	const envCb = makeEnv();
+	envCb.ready();
+	const CB = envCb.sandbox.__dshWhale;
+	const cbRaw = () => JSON.parse(envCb.sandbox.localStorage.getItem('dsh-whale:titles') || '{}');
+	CB.handleMuxPayload({ type: 'session/projection', sessionId: 'session-cb1', key: 'title', value: '待遗忘会话', seq: 1 });
+	await sleep(30);
+	assert.ok(cbRaw()['session-cb1'], 'name lands in the book before the clear');
+	const wiped = CB._clearTitleBook();
+	assert.ok(wiped >= 1, `clear reports the wiped count: ${wiped}`);
+	assert.deepStrictEqual(cbRaw(), {}, 'book emptied');
+	assert.strictEqual(envCb.sandbox.localStorage.getItem('dsh-whale:titles'), null, 'localStorage key removed, not just emptied');
+	CB.handleMuxPayload({ type: 'question/requested', sessionId: 'session-cb1', questions: [{ id: 'qc', question: '问题' }], time: Date.now() });
+	await sleep(30);
+	assert.ok(envCb.bubble().textContent.includes('未命名任务'), `name forgotten after the clear: ${envCb.bubble().textContent}`);
+	CB.handleMuxPayload({ type: 'session/projection', sessionId: 'session-cb1', key: 'title', value: '重新学会', seq: 2 });
+	await sleep(30);
+	assert.ok(cbRaw()['session-cb1'] && cbRaw()['session-cb1'].t === '重新学会', 'book re-learns after the clear');
+
 	/* 18f. manual stop on the ACTIVE session (09-06 用户报告: 手动停止后
 	 * ⏳ 计时仍在走): a killed turn renders no usage chip, so the polled
 	 * 'aborted' end is the ONLY stop signal — it must pass the active-
@@ -1302,6 +1324,40 @@ async function main() {
 	assert.strictEqual(TK.unreadCount(), 0, 'queue drained after one read');
 	assert.ok(!envTok.bubble().textContent.includes('开工了'), 'no start replay (starts stay out of the queue)');
 	TK._setHoldMs(null);
+
+	/* 28p. POLLED-path pressure for the ACTIVE session (09-13 压力复活):
+	 * DSH 0.1.5 removed the「上下文已用 N%」DOM text, so the server
+	 * contextPressure projection (token-meter) is the only source left —
+	 * the consume gate must NOT drop it for the active session anymore
+	 * (tokenUsage stays skipped: the DOM 累计条 still covers that one).
+	 * Driven through _pollConsume (the REAL poll consume loop), not the
+	 * handleMuxPayload shortcut the older pressure tests use — that
+	 * shortcut bypasses the gate and is why this hole stayed invisible. */
+	const envPp = makeEnv();
+	envPp.ready();
+	const PP = envPp.sandbox.__dshWhale;
+	const statusPp = () => envPp.whale.children.find((c) => c.className === 'dsh-whale-status');
+	PP._setHoldMs(200);
+	envPp.setFetch(() => Promise.resolve({ ok: false, json: () => Promise.resolve({}) }));
+	envPp.sandbox.localStorage.setItem('dsh.sessions.current', JSON.stringify({ sessionId: 'session-px1' }));
+	PP.handleMuxPayload({ type: 'session/projection', sessionId: 'session-px1', key: 'title', value: '压力实测', seq: 1 });
+	await sleep(30);
+	PP._pollConsume([
+		{ type: 'session/projection', sessionId: 'session-px1', key: 'contextPressure', value: { pressureTokens: 800000, projectedTokens: 800000, contextWindow: 1000000 }, seq: 2 }
+	], 'boot-px');
+	await sleep(30);
+	assert.ok(envPp.bubble().textContent.includes('compact'), `active-session pressure via the poll path warns: ${envPp.bubble().textContent}`);
+	/* the official口径 (computeContextOccupancy): projectedTokens wins over
+	 * pressureTokens when both exist; both the server shape and the legacy
+	 * DOM percent shape compute through the same formula */
+	assert.strictEqual(PP.pressurePercentOf({ pressureTokens: 500000, projectedTokens: 750000, contextWindow: 1000000 }), 75, 'projectedTokens preferred');
+	assert.strictEqual(PP.pressurePercentOf({ pressureTokens: 450000, contextWindow: 1000000 }), 45, 'pressureTokens fallback');
+	assert.strictEqual(PP.pressurePercentOf({ pressureTokens: 45, contextWindow: 100 }), 45, 'legacy DOM percent shape');
+	assert.strictEqual(PP.pressurePercentOf(null), null, 'no data -> no percent');
+	assert.strictEqual(PP.pressurePercentOf({}), null, 'shapeless value -> no percent');
+	assert.strictEqual(PP.pressurePercentOf({ contextWindow: 1000000 }), null, 'window without any sample -> no fabricated 0%');
+	assert.strictEqual(PP.pressurePercentOf({ pressureTokens: 1200000, contextWindow: 1000000 }), 100, 'clamped at 100 like the official meter');
+	assert.strictEqual(PP.pressurePercentOf({ pressureTokens: 0, contextWindow: 100 }), 0, 'a real zero sample is honest');
 
 	/* 28b. name-hold ORDER: when the session title never arrives (fetch
 	 * hangs), the turn/end hold (3s) expires BEFORE the turn/start hold

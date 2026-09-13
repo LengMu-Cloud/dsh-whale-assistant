@@ -89,7 +89,7 @@
 
 > Status panel: an independent surface placed LEFT or BELOW the whale (whichever side has room), so live tool status and the per-task token/pressure report NEVER collide with the speech bubble (notifications) or the click summary.
 
-**ensureStatusEl()** · **updateStatusPos()** · **estWidth()** · **applyStatusText()** · **ensureReportEl()** · **hideReportBox()** · **stuckPendingNow()** · **showStatusPanel()** · **renderDisplaced()** · **hideStatusPanel()** · **markStatusBusy()** · **showStatus()** · **fmtTokens()** · **pressurePct()** · **maybeWarnPressure()** · **pressureColor()** · **applyPressureHue()** · **runTimerLine()** · **capNameWidth()** · **timerRowText()** · **runningSessionCount()** · **multiRunTag()** · **ensureTimerEl()** · **hideTimerBox()** · **runTimerTick()** · **startRunTimer()** · **stopRunTimer()**
+**ensureStatusEl()** · **updateStatusPos()** · **estWidth()** · **applyStatusText()** · **ensureReportEl()** · **hideReportBox()** · **stuckPendingNow()** · **showStatusPanel()** · **renderDisplaced()** · **hideStatusPanel()** · **markStatusBusy()** · **showStatus()** · **fmtTokens()** · **pressurePercentOf()** · **pressurePct()** · **maybeWarnPressure()** · **pressureColor()** · **applyPressureHue()** · **runTimerLine()** · **capNameWidth()** · **timerRowText()** · **runningSessionCount()** · **multiRunTag()** · **ensureTimerEl()** · **hideTimerBox()** · **runTimerTick()** · **startRunTimer()** · **stopRunTimer()**
 
 ## **src/core/sleep.js**（行切片）
 
@@ -113,7 +113,7 @@
 
 > Completed subtasks for one session since a moment — the run timer's "已完成 N 个子任务" count (see ui/status-panel.js).
 
-**isMainSession()** · **isFailedJob()** · **handleJobsFrame()** · **countJobsCompleted()** · **handleSubscribedFrame()** · **rememberTitle()** · **bookTitle()** · **correctReports()** · **fetchSubagentLabel()** · **flushHeld()** · **handleProjectionFrame()** · **reportTurn()** · **handleEventFrame()** · **reportAttention()** · **handleAttentionFrame()** · **handleMuxPayload()**
+**isMainSession()** · **isFailedJob()** · **handleJobsFrame()** · **countJobsCompleted()** · **handleSubscribedFrame()** · **rememberTitle()** · **bookTitle()** · **clearTitleBook()** · **correctReports()** · **fetchSubagentLabel()** · **flushHeld()** · **handleProjectionFrame()** · **reportTurn()** · **handleEventFrame()** · **reportAttention()** · **handleAttentionFrame()** · **handleMuxPayload()**
 
 ## **src/utils/fmt-title.js**（行切片）
 

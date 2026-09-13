@@ -3,6 +3,20 @@
 所有对外可感知的变更按版本记录。当前版本见 `src/utils/constants.js` 的 `PATCH_VERSION`
 （构建时可用 `PATCH_VERSION=0.4.0 node build-whale.js` 覆盖）。
 
+## [0.3.3] - 2026-09-13
+
+上下文压力复活包（0.1.5 适配债清偿）+ 通讯录「彻底遗忘」入口。
+
+### 修复
+- **上下文压力三处同源复活（报告压力行 / 压力描边色 / ≥70% 提醒）**：0.1.5 移除「上下文已用 N%」DOM 文本后三处一起失供——根因是 `server-events` 沿用 0.1.2 时代的「活跃会话投影帧丢弃」守卫（当年 DOM 喂给覆盖得上），0.1.5 下 DOM 无料可喂，活跃会话（提醒唯一读取对象）被自己的守卫掐死。现在 `contextPressure` 投影帧不再跳过活跃会话（`tokenUsage` 维持跳过，累计条 DOM 优先不变），数据改走 **dsh-token-meter 服务端投影**（dsh-base roster 常驻插件，`request/context` + `assistant/message` usage 权威计算）——官方 UI 再怎么改版都不影响供数
+- **百分比口径对齐官方 ContextMeter**：新增 `pressurePercentOf` 纯函数（status-panel 与 reports 同一公式）：`projectedTokens`（采样 + 表面漂移）优先、`pressureTokens` 兜底、`Math.min(100)` 截断、**窗口无采样返回 null 不造假 0%**；旧版 DOM 百分比形状经同一公式不变
+
+### 新增
+- **📇 清空通讯录**（历史抽屉，两段式确认）：补上「彻底遗忘某个对话」的缺失入口。真正遗忘 = 两步：先清历史（删掉记录里的名字快照），再清空通讯录（抹掉名字簿 + 内存名，localStorage 键直接移除）——顺序反了历史快照会在下次加载时回流。清空后名字回退「未命名任务」自纠路径，可重新学习；手册行同步两步语义
+
+### 测试
+- 压力复活集成例：服务端轮询路径投喂**活跃会话** contextPressure → ≥70% 触发提醒；`pressurePercentOf` 八态（projectedTokens 优先 / pressureTokens 兜底 / 旧形状兼容 / 无数据 / 无形状 / 无采样不造假 / 100 截断 / 真实 0 样本）；`_clearTitleBook` 生命周期（入簿 → 清空 → localStorage 键移除 → 名字遗忘 → 重新学习）
+
 ## [0.3.2] - 2026-09-12
 
 状态面板「互不覆盖」专项：⚠️ 工具卡住提示、⏳ 长任务计时、📊 完成报告在小鲸鱼旁各占其位，同时可见、互不顶掉。

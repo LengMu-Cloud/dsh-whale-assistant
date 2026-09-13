@@ -51,9 +51,11 @@
 		if (typeof sessionTokens === 'number' && sessionTokens > 0) {
 			lines.push('全对话累计消耗 ' + fmtTokens(sessionTokens) + ' tokens');
 		}
-		if (pressure && pressure.contextWindow) {
-			var pct = Math.round((pressure.pressureTokens || 0) / pressure.contextWindow * 100);
-			lines.push('上下文已用 ' + pct + '%');
+		if (pressure) {
+			var pct = pressurePercentOf(pressure); /* null = no honest reading: skip the line */
+			if (pct !== null) {
+				lines.push('上下文已用 ' + pct + '%');
+			}
 		}
 		return lines.length > 0 ? { prefix: '📊 ', lines: lines } : null;
 	}

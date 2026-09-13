@@ -582,37 +582,13 @@
 				row.appendChild(text);
 				row.appendChild(time);
 				row.addEventListener('click', (function (sessionId, endTime, title) {
-					/* the app's own sidebar navigation: the guaranteed fallback
-					 * when the conversation-plugin hook is missing (stale page) */
-					function openViaSidebar() {
-						var divs = document.getElementsByTagName('div');
-						for (var i = 0; i < divs.length; i++) {
-							var cls = divs[i].className;
-							var clsStr = typeof cls === 'string' ? cls : (cls && cls.baseVal) || '';
-							if (clsStr.indexOf('sessionRow') < 0) continue;
-							var t = (divs[i].textContent || '').trim();
-							if (t && title && t.indexOf(title) === 0) {
-								divs[i].click();
-								return true;
-							}
-						}
-						return false;
-					}
+					/* 0.4.0: in-house jump (client-module bridge, with moment
+					 * positioning) — the sidebar row click stays as the fallback
+					 * chain tail; the conversation-client hook is retired */
 					return function (event) {
 						event.stopPropagation();
 						closeCtxHistory();
-						var opener = window.__dshOpenSession;
-						if (typeof opener === 'function') {
-							try {
-								/* endTime (fallback: the record's `at`) lets the host
-								 * page back until the log covers the moment this
-								 * record happened */
-								opener(sessionId, endTime);
-								uiSay('正在跳转到该对话… 🐳', 1500, sessionId);
-								return;
-							} catch (error) { /* fall through to the sidebar */ }
-						}
-						if (openViaSidebar()) {
+						if (openSessionAt(sessionId, endTime) || openViaSidebarByTitle(title)) {
 							uiSay('正在跳转到该对话… 🐳', 1500, sessionId);
 							return;
 						}

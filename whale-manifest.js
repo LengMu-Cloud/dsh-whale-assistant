@@ -42,6 +42,7 @@ const MANIFEST = [
 	{ file: 'src/ui/menu.js',           start: 1725, end: 2107 }, /* right-click menu / pet / wardrobe / help */
 	{ file: 'src/input/swim.js',        start: 2108, end: 2216 }, /* swim-back animation + catch */
 	{ file: 'src/input/drag.js',        start: 2217, end: 2394 }, /* drag / click-summary / sleep timer / uiInit close */
+	{ inline: true, file: 'src/ui/session-jump.js' },           /* session jump: bridge-driven open+page+scroll (AFTER the uiInit closure — depth 1 for exports) */
 	{ file: 'src/core/exports.js',      start: 2395, end: 2476 }, /* DOMContentLoaded + diagnostic seams + IIFE close */
 ];
 

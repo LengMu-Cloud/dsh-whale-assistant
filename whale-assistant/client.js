@@ -1,6 +1,9 @@
 /* dsh-whale-assistant browser half: loads the WHALE (script + style + svg) from
  * the host routes — the whale no longer relies on the dist index.html
  * injection, so DSH upgrades/reinstalls can never wipe it.
+ * 0.4.0: apply also bridges the client-side sessions service into the whale
+ * (the jump feature moved in-house) via runtime ctx.inject — the
+ * conversation-client patch (apply-plugin-hook.ps1) is retired.
  *
  * CONTRACT (learned the hard way — a bad return breaks ALL plugin loading):
  * the factory must return a function OR an object with an `apply` method;
@@ -33,6 +36,25 @@ window.__ModuleLoader__.load({
 			(0, eval)(code);
 			console.log('[dsh-whale-assistant] whale loaded from plugin routes');
 		}).catch((e) => console.error('[dsh-whale-assistant] whale load failed', e));
-		return { apply() {} };
+		return {
+			apply(ctx) {
+				/* 0.4.0: bridge the client-side sessions service into the whale —
+				 * the jump feature moved in-house (the client.js patch is retired).
+				 * Runtime inject, NOT manifest inject: the whale must never wait
+				 * on an internal service just to load. Both bind orders handled —
+				 * whale already eval'd → bind directly; bridge ran first → stash
+				 * for the whale's boot pickup (window.__dshWhaleSessions). */
+				try {
+					ctx.inject(['sessions'], (sCtx) => {
+						const sessions = sCtx && sCtx.sessions;
+						if (window.__dshWhale && typeof window.__dshWhale.bindJumpSessions === 'function') {
+							window.__dshWhale.bindJumpSessions(sessions);
+						} else {
+							window.__dshWhaleSessions = sessions;
+						}
+					});
+				} catch (e) { /* sessions service unavailable on this client build */ }
+			}
+		};
 	},
 });

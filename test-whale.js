@@ -209,6 +209,9 @@ function makeEnv(initStore) {
 			walk(body);
 			return out;
 		},
+		querySelectorAll(sel) {
+			return []; /* jump probe (stampEls/hasMoreNode): no chat-flow in the vm DOM */
+		},
 		querySelector(sel) {
 			if (sel === '.dsh-whale-bubble') {
 				return whale.children.find((c) => c.className === 'dsh-whale-bubble') || null;
@@ -1359,6 +1362,34 @@ async function main() {
 	assert.strictEqual(PP.pressurePercentOf({ pressureTokens: 1200000, contextWindow: 1000000 }), 100, 'clamped at 100 like the official meter');
 	assert.strictEqual(PP.pressurePercentOf({ pressureTokens: 0, contextWindow: 100 }), 0, 'a real zero sample is honest');
 
+	/* 0.4.0 session jump: the retired client.js patch now runs in-house —
+	 * bridge bind, open via the bridge, fallback tail when unbound */
+	const envJ = makeEnv();
+	envJ.ready();
+	const J = envJ.sandbox.__dshWhale;
+	assert.strictEqual(J.jumpReady(), false, 'no bridge yet -> jump not ready');
+	assert.strictEqual(J.openSessionAt('session-j1'), false, 'no bridge -> caller falls back to the sidebar');
+	const openedJp = [];
+	J.bindJumpSessions({ open: (sid) => openedJp.push(sid), scope: () => { throw new Error('no scope'); } });
+	assert.strictEqual(J.jumpReady(), true, 'bridge bound -> jump ready');
+	assert.strictEqual(J.openSessionAt('session-j1'), true, 'open initiated via the bridge');
+	assert.deepStrictEqual(openedJp, ['session-j1'], 'sessions.open called with the session id');
+	assert.strictEqual(J.openSessionAt(''), false, 'empty session id refuses');
+	assert.strictEqual(J._parseStamp('2026-09-13 10:30'), new Date(2026, 8, 13, 10, 30).getTime(), 'ISO-ish stamp parses');
+	assert.strictEqual(J._parseStamp('9月13日 10:30'), new Date(new Date().getFullYear(), 8, 13, 10, 30).getTime(), 'CJK stamp parses');
+	assert.strictEqual(J._parseStamp('hello'), null, 'non-stamp text -> null');
+
+	/* 0.4.0 SSE frame routing: pings count toward server liveness (an IDLE
+	 * server must not read as dead — R3); hello boot-swap must not throw */
+	const envSj = makeEnv();
+	envSj.ready();
+	const SJ = envSj.sandbox.__dshWhale;
+	SJ._sseFrame('not-json'); /* must not throw */
+	SJ._sseFrame('{"type":"ping"}');
+	const shS = envSj.sandbox.window.__dshWhale.__serverHealth;
+	assert.ok(shS && shS.lastOkAt > 0 && shS.failStreak === 0, 'a ping counts as a successful server contact');
+	SJ._sseFrame('{"type":"hello","bootId":"gen-sse-2"}'); /* boot swap path must not throw */
+
 	/* 28b. name-hold ORDER: when the session title never arrives (fetch
 	 * hangs), the turn/end hold (3s) expires BEFORE the turn/start hold
 	 * (8s) — the held reports must still surface in EVENT order (开工
@@ -1850,7 +1881,7 @@ async function main() {
 	const JP = envJump.sandbox.__dshWhale;
 	const muxpJp = (payload) => JP.handleMuxPayload(payload);
 	const opened = [];
-	envJump.sandbox.__dshOpenSession = (id) => { opened.push(id); };
+	JP.bindJumpSessions({ open: (id) => { opened.push(id); }, scope: () => ({ get: () => ({ loadOlder: () => {} }) }) });
 	envJump.setFetch(() => Promise.resolve({ ok: false, json: () => Promise.resolve({}) }));
 	JP._setHoldMs(10);
 	/* a main-session completion report lands in the bubble */
@@ -1898,7 +1929,7 @@ async function main() {
 	envFailJump.ready();
 	const FL2 = envFailJump.sandbox.__dshWhale;
 	const muxpF2 = (payload) => FL2.handleMuxPayload(payload);
-	envFailJump.sandbox.__dshOpenSession = () => { throw new Error('unknown session'); };
+	FL2.bindJumpSessions({ open: () => { throw new Error('unknown session'); } });
 	envFailJump.setFetch(() => Promise.resolve({ ok: false, json: () => Promise.resolve({}) }));
 	FL2._setHoldMs(10);
 	muxpF2({ type: 'session/projection', sessionId: 'session-f2', key: 'subagentTiming', value: { settledMs: 0 } });
@@ -2005,7 +2036,7 @@ async function main() {
 	const HS = envHist.sandbox.__dshWhale;
 	const muxpHs = (payload) => HS.handleMuxPayload(payload);
 	const histOpened = [];
-	envHist.sandbox.__dshOpenSession = (id, atMs) => { histOpened.push([id, atMs]); };
+	HS.bindJumpSessions({ open: (id, atMs) => { histOpened.push([id, atMs]); }, scope: () => ({ get: () => ({ loadOlder: () => {} }) }) });
 	envHist.setFetch(() => Promise.resolve({ ok: false, json: () => Promise.resolve({}) }));
 	HS._setHoldMs(10);
 	muxpHs({ type: 'session/projection', sessionId: 'session-h1', key: 'subagentTiming', value: { settledMs: 0 } });
@@ -2113,7 +2144,7 @@ async function main() {
 	envHistAt.ready();
 	const AH = envHistAt.sandbox.__dshWhale;
 	const openedAt = [];
-	envHistAt.sandbox.__dshOpenSession = (id, atMs) => { openedAt.push([id, atMs]); };
+	AH.bindJumpSessions({ open: (id, atMs) => { openedAt.push([id, atMs]); }, scope: () => ({ get: () => ({ loadOlder: () => {} }) }) });
 	AH.pushHistory({ title: '旧记录', sessionId: 's-old2', kind: 'done', at: 777777 });
 	AH.openHistory();
 	const hp4 = envHistAt.sandbox.document.body.children.find((c) => c.className === 'dsh-whale-history');

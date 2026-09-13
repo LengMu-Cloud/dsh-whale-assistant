@@ -8,7 +8,7 @@
 ## 1. 构建形态
 
 31 个切片文件 + authored inline 模块按 `whale-manifest.js` 序拼回 `whale.js`
-单文件 IIFE（当前 32 模块 = 20 行切片 + 12 authored）。**src/ 即维护面**；
+单文件 IIFE（当前 33 模块 = 20 行切片 + 13 authored）。**src/ 即维护面**；
 `whale.js`/`whale-assistant/lib/` 是构建产物（`node build-whale.js` 重建并逐字节同步发布副本）。
 构建时强制三项检查（详见 §7）：246 个顶层符号的重复声明断言、menu 热点双 guard、
 KNOWN-COUPLING 登记表打印。
@@ -19,9 +19,9 @@ KNOWN-COUPLING 登记表打印。
 |---|---|---|
 | **IIFE 全局域**（depth 1） | `utils/` 全部、`core/` 全部、`ui/status-panel`、`ui/bubble`、`ui/messages`、`ui/swim-effects` | 全局域符号互相可见（函数声明提升） |
 | **三个闭包**（depth ≥2） | ① `core/alpha-adapter` 整模块自包 IIFE（带环境 early-return）② `core/server-events` 的 `initServerEvents` IIFE ③ `uiInit` 巨闭包 = bootstrap→menu→drag 跨文件连续切片（menu 全部 34 个函数、9 个抽屉都是 uiInit 局部） | 闭包内符号**只**对同 span 文件可见；对外只经 `window.__dshWhale` 缝 |
-| **window 缝** | `window.__dshWhale`（index.js 初始化） | 跨闭包委托 / 诊断 / 测试唯一通道；80 条显式命名导出 + 16 处防御式读，10 种动态访问模式全零（audit-deps E 节） |
+| **window 缝** | `window.__dshWhale`（index.js 初始化） | 跨闭包委托 / 诊断 / 测试唯一通道；85 条显式命名导出 + 16 处防御式读，10 种动态访问模式全零（audit-deps E 节） |
 
-## 3. 依赖图（142 条模块级边，audit-deps B/C 节）
+## 3. 依赖图（147 条模块级边，audit-deps B/C 节）
 
 - **core→ui/input 共 12 条**：5 条组合根（`exports.js` 装配，职责使然）+
   7 条 push 管线（frames→status-panel/messages、reports→status-panel/bubble、
@@ -52,8 +52,8 @@ KNOWN-COUPLING 登记表打印。
 
 ## 5. 动态缝清单
 
-- 出口：`exports.js` 48 条（诊断/测试缝，`_` 前缀=测试专用，`docs/seams.md` 有逐条表）
-  + `drag.js` 23（UI 缝）+ 其余模块 9 = **80 条显式命名导出**。
+- 出口：`exports.js` 52 条（诊断/测试缝，`_` 前缀=测试专用，`docs/seams.md` 有逐条表；0.4.0 +4 跳转缝）
+  + `drag.js` 23（UI 缝）+ 其余模块 14 = **85 条显式命名导出**。
 - 读侧：**16 处防御式读**（`window.__dshWhale && ...` 带 guard），构成静态图之外的
   4 条真实跨闭包边（server-events→stuck 的 _trackTool/_clearTool、status-panel→stuck、
   mood→exports/menu、menu→exports）。

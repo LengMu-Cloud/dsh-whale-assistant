@@ -40,7 +40,7 @@
 
 	/** Whale patch version (M5.1). Build-time override: build-whale.js reads
 	 * env PATCH_VERSION; the default here is the fallback single source. */
-	var PATCH_VERSION = '0.3.3';
+	var PATCH_VERSION = '0.4.0';
 
 	/** Session id prefix that marks a user conversation ("main task").
 	 * Spawned subagents use bare UUIDs and are treated as silent sub-tasks. */
@@ -1821,6 +1821,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	}
 
 	function poll() {
+		if (sseUp) return; /* the stream is live: it delivers frames + pings */
 		fetch('/api/whale-assistant/events').then(function (r) {
 			return r.ok ? r.json() : null;
 		}).then(function (data) {
@@ -1837,11 +1838,43 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		});
 	}
 
+	/* 0.4.0 SSE client: frames + hello + pings pushed the instant they exist.
+	 * EventSource reconnects on its own (server sent retry: 3000); while the
+	 * stream is up the 3s poll skips itself — network callbacks are NOT
+	 * throttled in hidden tabs, which is the whole point. Pings count toward
+	 * server liveness so an IDLE server no longer reads as dead (R3). */
+	var sse = null;
+	var sseUp = false;
+	var sseBootId = null;
+	function handleSseData(raw) {
+		var f = null;
+		try { f = JSON.parse(raw); } catch (e) { return; }
+		if (!f || typeof f !== 'object') return;
+		if (f.type === 'ping') { markServerPoll(true); return; }
+		if (f.type === 'hello') {
+			if (f.bootId && f.bootId !== knownBootId) { sseBootId = f.bootId; consume([], f.bootId); }
+			else if (f.bootId) { sseBootId = f.bootId; }
+			return;
+		}
+		consume([f], sseBootId || undefined);
+	}
+	function connectSSE() {
+		if (typeof EventSource !== 'function') return; /* vm sandbox / ancient browsers */
+		try { sse = new EventSource('/api/whale-assistant/events/stream'); } catch (e) { return; }
+		sse.onopen = function () { sseUp = true; };
+		sse.onerror = function () { sseUp = false; }; /* EventSource auto-reconnects */
+		sse.onmessage = function (ev) { handleSseData(ev.data); };
+	}
+	/* test seam: this whole module is a closure, so exports.js can't see it —
+	 * mirror the _pollConsume pattern and hang the handler on the window seam */
+	if (typeof window !== 'undefined' && window.__dshWhale) window.__dshWhale._sseFrame = handleSseData;
+
 	/* start as soon as the boot render settles (1.5s); the first polls still
 	 * skip frames that predate the page via the bootAt guards above */
 	setTimeout(function () {
 		setInterval(poll, POLL_MS);
 		poll();
+		connectSSE();
 	}, 1500);
 
 	/* test seam: drive the polled-frame gate directly (active-session skip +
@@ -1928,7 +1961,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			rep = {
 				server: (sh && (sh.failStreak >= 3 || visibleStale)) ? 'fail' : 'ok',
 				dom: (uh && uh.missStreak >= 3) ? 'fail' : 'ok',
-				jump: (typeof window !== 'undefined' && typeof window.__dshOpenSession === 'function') ? 'ok' : 'warn'
+				jump: jumpReady() ? 'ok' : 'warn' /* 0.4.0: the in-house client-module bridge replaces the injected hook */
 			};
 		}
 		var degraded = rep.server === 'fail' || rep.dom === 'fail';
@@ -4262,31 +4295,39 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				uiSay('这条消息没有对应的对话哦 🐳', 2000);
 				return;
 			}
-			var opener = window.__dshOpenSession;
-			if (typeof opener !== 'function') {
-				uiSay('跳转功能需要刷新页面（插件未加载）', 2500);
-				return;
-			}
 			/* the report's endTime (the moment THIS report is about) lets the
-			 * host page back to that message — on a SAME-session jump (the
+			 * jump page back to that message — on a SAME-session jump (the
 			 * alpha adapter only tracks the current conversation) open() alone
 			 * would be a no-op with zero visible feedback */
 			var rep = reading || lastShownReport;
 			var atMs = rep && typeof rep.endTime === 'number' ? rep.endTime : undefined;
-			try {
-				opener(sessionId, atMs);
-				/* jumping to the conversation counts as reading the report:
-				 * the badge drops by one and the notification leaves the
-				 * queue (it must NOT still pop up from the red badge later) */
-				markBubbleRead();
-				/* keep the session attached to the bubble — the feedback
-				 * must not clear currentSaySession or the NEXT double-click
-				 * would lose the conversation */
-				uiSay('正在跳转到该对话… 🐳', 1500, sessionId);
-			} catch (error) {
-				/* the jump failed: the report stays unread */
-				uiSay('找不到对应的对话 🥲', 2000, sessionId);
+			/* 0.4.0: in-house jump (client-module bridge) with the sidebar as
+			 * fallback tail — the bridge carries no title, so the sidebar
+			 * tail looks the name up in the address book */
+			var jumped = false;
+			if (jumpReady()) {
+				jumped = openSessionAt(sessionId, atMs);
+				if (!jumped) {
+					/* the bridge jumped but the session is gone: the report
+					 * stays unread (same contract as the old hook) */
+					uiSay('找不到对应的对话 🥲', 2000, sessionId);
+					return;
+				}
+			} else if (openViaSidebarByTitle(sessionTitles.get(sessionId) || bookTitle(sessionId) || '')) {
+				jumped = true;
 			}
+			if (!jumped) {
+				uiSay('跳转功能需要刷新页面（插件未加载）', 2500);
+				return;
+			}
+			/* jumping to the conversation counts as reading the report:
+			 * the badge drops by one and the notification leaves the
+			 * queue (it must NOT still pop up from the red badge later) */
+			markBubbleRead();
+			/* keep the session attached to the bubble — the feedback
+			 * must not clear currentSaySession or the NEXT double-click
+			 * would lose the conversation */
+			uiSay('正在跳转到该对话… 🐳', 1500, sessionId);
 		}
 
 		/** Is viewport (x, y) inside the bubble's rendered rectangle?
@@ -4982,37 +5023,13 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				row.appendChild(text);
 				row.appendChild(time);
 				row.addEventListener('click', (function (sessionId, endTime, title) {
-					/* the app's own sidebar navigation: the guaranteed fallback
-					 * when the conversation-plugin hook is missing (stale page) */
-					function openViaSidebar() {
-						var divs = document.getElementsByTagName('div');
-						for (var i = 0; i < divs.length; i++) {
-							var cls = divs[i].className;
-							var clsStr = typeof cls === 'string' ? cls : (cls && cls.baseVal) || '';
-							if (clsStr.indexOf('sessionRow') < 0) continue;
-							var t = (divs[i].textContent || '').trim();
-							if (t && title && t.indexOf(title) === 0) {
-								divs[i].click();
-								return true;
-							}
-						}
-						return false;
-					}
+					/* 0.4.0: in-house jump (client-module bridge, with moment
+					 * positioning) — the sidebar row click stays as the fallback
+					 * chain tail; the conversation-client hook is retired */
 					return function (event) {
 						event.stopPropagation();
 						closeCtxHistory();
-						var opener = window.__dshOpenSession;
-						if (typeof opener === 'function') {
-							try {
-								/* endTime (fallback: the record's `at`) lets the host
-								 * page back until the log covers the moment this
-								 * record happened */
-								opener(sessionId, endTime);
-								uiSay('正在跳转到该对话… 🐳', 1500, sessionId);
-								return;
-							} catch (error) { /* fall through to the sidebar */ }
-						}
-						if (openViaSidebar()) {
+						if (openSessionAt(sessionId, endTime) || openViaSidebarByTitle(title)) {
 							uiSay('正在跳转到该对话… 🐳', 1500, sessionId);
 							return;
 						}
@@ -6116,6 +6133,210 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		pendingSay = [];
 		renderUnread();
 	}
+/* ---- module: src/ui/session-jump.js ---- */
+/** Session jump (inline module): open a conversation in the DSH UI and,
+ * when a target moment (atMs) is given, page the conversation log backwards
+ * until the rendered message stamps cover that moment (or the whole log is
+ * in memory), then scroll the closest older stamp into view.
+ *
+ * 0.4.0 provenance: this logic used to be INJECTED into the official
+ * conversation client by apply-plugin-hook.ps1 (globalThis.__dshOpenSession).
+ * It now runs in the plugin: the client-module bridge (whale-assistant/
+ * client.js apply → ctx.inject(['sessions'])) hands us the very same
+ * sessions service through official channels, so no DSH file is ever
+ * modified and DSH upgrades can never wipe it. Fallback when the bridge is
+ * missing (old host / exotic builds): sidebar row click — opens the
+ * conversation without moment positioning (openViaSidebarByTitle). */
+
+var jumpSessions = null; /* client-side sessions service (via the bridge) */
+var jumpRunSeq = 0; /* supersede counter: a newer jump cancels the paging loop */
+
+/** Wire the sessions service in (called by the client-module bridge, or at
+ * boot when the bridge stashed it before whale eval). Idempotent. */
+function bindJumpSessions(sessions) {
+	if (sessions && typeof sessions.open === 'function') jumpSessions = sessions;
+}
+
+/** True once the sessions service is bridged (health jump item + callers). */
+function jumpReady() {
+	return !!jumpSessions;
+}
+
+/** Parse a rendered message stamp into ms epoch; null when not a stamp.
+ * Layouts: M月D日 HH:MM · M/D HH:MM · YYYY-M-D HH:MM · HH:MM · Mon D, HH:MM.
+ * Pure — exported for tests. */
+function parseStamp(text) {
+	var m = text.match(/(\d{1,2})\u6708(\d{1,2})\u65e5\s*(\d{1,2}):(\d{2})/);
+	if (!m) m = text.match(/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})/);
+	if (m) {
+		var now = new Date();
+		var d = new Date(now.getFullYear(), +m[1] - 1, +m[2], +m[3], +m[4]);
+		if (d.getTime() > Date.now() + 864e5) d = new Date(now.getFullYear() - 1, +m[1] - 1, +m[2], +m[3], +m[4]);
+		return d.getTime();
+	}
+	m = text.match(/(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})/);
+	if (m) return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime();
+	m = text.match(/^(\d{1,2}):(\d{2})$/);
+	if (m) { var n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate(), +m[1], +m[2]).getTime(); }
+	m = text.match(/([A-Za-z]{3,9})\s+(\d{1,2})[,\s]+(\d{1,2}):(\d{2})/);
+	if (m) {
+		var names = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+		var mo = names[m[1].slice(0, 3).toLowerCase()];
+		if (mo !== void 0) {
+			var n2 = new Date();
+			var d2 = new Date(n2.getFullYear(), mo, +m[2], +m[3], +m[4]);
+			if (d2.getTime() > Date.now() + 864e5) d2 = new Date(n2.getFullYear() - 1, mo, +m[2], +m[3], +m[4]);
+			return d2.getTime();
+		}
+	}
+	return null;
+}
+
+/** Open the session and (with atMs) page back to it. Returns true when the
+ * jump was initiated via the bridge; false lets callers fall back to the
+ * sidebar. A newer call supersedes a still-running paging loop. */
+function openSessionAt(sessionId, atMs) {
+	if (!jumpSessions || !sessionId) return false;
+	try {
+		/* atMs forwarded on the call surface (same 2-arg shape as the old
+		 * hook) for observability; the REAL anchor consumer is the paging
+		 * loop below — the official open() ignores the extra arg */
+		jumpSessions.open(sessionId, atMs);
+	} catch (e) {
+		return false; /* open failed: callers fall back to the sidebar */
+	}
+	if (!atMs) return true;
+	var run = (jumpRunSeq = jumpRunSeq + 1);
+	var pages = 0, paged = false, done = false, stampMode = "";
+	var inFlight = 0;
+	var t0 = Date.now();
+	function stampEls() {
+		var root = document.querySelector("[data-chat-flow]");
+		if (!root) return [];
+		if (stampMode === "") {
+			var quick = root.querySelectorAll('[class*="timeStart"]');
+			if (quick.length) { stampMode = "class"; return quick; }
+			stampMode = "walk";
+		}
+		if (stampMode === "class") return root.querySelectorAll('[class*="timeStart"]');
+		/* fallback: leaf elements whose whole text parses as a stamp */
+		var all = root.querySelectorAll("*"), out = [];
+		for (var i = 0; i < all.length; i++) {
+			if (all[i].children.length) continue;
+			var t = (all[i].textContent || "").trim();
+			if (!t || t.length > 16) continue;
+			if (parseStamp(t) !== null) out.push(all[i]);
+		}
+		return out;
+	}
+	function stampMs(el) { return parseStamp((el.textContent || "").trim()); }
+	/* the pager node EXISTS while older history remains — its label flips to
+	 * a loading text mid-flight, so match the node, not the text */
+	function hasMoreNode() {
+		var root = document.querySelector("[data-chat-flow]");
+		if (root && root.querySelector('[class*="older"] button')) return true;
+		var btns = document.querySelectorAll("button");
+		for (var i = 0; i < btns.length; i++) {
+			var t = (btns[i].textContent || "").trim();
+			if (t.indexOf("\u52a0\u8f7d") === 0 || /^load/i.test(t)) return true;
+		}
+		return false;
+	}
+	function finish() {
+		if (done) return;
+		done = true;
+		/* Re-entrant placement: a CROSS-SESSION jump re-renders the whole
+		 * flow after open() settles — React mounts the list and resets
+		 * scroll to the tail, wiping a single early placement. Re-find the
+		 * target (re-query keeps it connected) and re-assert while the view
+		 * settles. */
+		function place() {
+			var best = null, top = null;
+			var list = stampEls();
+			for (var i = 0; i < list.length; i++) {
+				var ms = stampMs(list[i]);
+				if (ms === null) continue;
+				if (top === null || ms < top.ms) top = { el: list[i], ms: ms };
+				if (ms <= atMs && (best === null || ms > best.ms)) best = { el: list[i], ms: ms };
+			}
+			var target = best || top;
+			if (!target) return;
+			/* the chat column's own scroll element has overflow:visible — the
+			 * REAL scroller is the nearest ancestor with a scrollable
+			 * overflowY, so scroll that one directly (rect-delta math) */
+			var n = document.querySelector("[data-chat-flow]");
+			var sc = null;
+			while (n && n !== document.body) {
+				var oy = window.getComputedStyle(n).overflowY;
+				if (oy === "auto" || oy === "scroll") { sc = n; break; }
+				n = n.parentElement;
+			}
+			if (!sc) sc = document.scrollingElement || document.documentElement;
+			var delta = target.el.getBoundingClientRect().top - sc.getBoundingClientRect().top;
+			sc.scrollTop = sc.scrollTop + delta - 24;
+		}
+		place();
+		setTimeout(place, 350);
+		setTimeout(place, 900);
+	}
+	var timer = setInterval(function () {
+		if (jumpRunSeq !== run) { clearInterval(timer); return; }
+		if (pages >= 400 || Date.now() - t0 > 45000) { clearInterval(timer); finish(); return; }
+		if (done) { clearInterval(timer); return; }
+		var conv = null;
+		try {
+			var scoped = jumpSessions.scope(sessionId);
+			conv = scoped && scoped.get("conversation");
+		} catch (e) { conv = null; }
+		if (!conv || typeof conv.loadOlder !== "function") return; /* open still settling */
+		if (paged) {
+			var oldest = Infinity, seen = false;
+			var list = stampEls();
+			for (var i = 0; i < list.length; i++) {
+				var ms = stampMs(list[i]);
+				if (ms === null) continue;
+				seen = true;
+				if (ms < oldest) oldest = ms;
+			}
+			if (seen && oldest <= atMs) { clearInterval(timer); finish(); return; }
+			if (!hasMoreNode()) { clearInterval(timer); finish(); return; }
+		}
+		if (inFlight && Date.now() - inFlight < 6000) return; /* page watchdog */
+		inFlight = Date.now();
+		pages++;
+		Promise.resolve(conv.loadOlder()).then(function () {
+			paged = true;
+			inFlight = 0;
+		}, function () {
+			paged = true;
+			inFlight = 0;
+		});
+	}, 200);
+	return true;
+}
+
+/** Fallback (no bridge): click the app sidebar's row whose text starts with
+ * this title — opens the conversation without moment positioning. Ported
+ * from the history drawer's openViaSidebar so BOTH jump entry points share
+ * one fallback chain. */
+function openViaSidebarByTitle(title) {
+	if (!title) return false;
+	var divs = document.getElementsByTagName('div');
+	for (var i = 0; i < divs.length; i++) {
+		var cls = divs[i].className;
+		var clsStr = typeof cls === 'string' ? cls : (cls && cls.baseVal) || '';
+		if (clsStr.indexOf('sessionRow') < 0) continue;
+		var t = (divs[i].textContent || '').trim();
+		if (t && t.indexOf(title) === 0) {
+			divs[i].click();
+			return true;
+		}
+	}
+	return false;
+}
+
+/* boot pickup: the bridge may run before whale eval and stash the service */
+if (typeof window !== 'undefined' && window.__dshWhaleSessions) bindJumpSessions(window.__dshWhaleSessions);
 /* ---- module: src/core/exports.js ---- */
 
 	if (document.readyState === 'loading') {
@@ -6173,6 +6394,10 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	window.__dshWhale.applyPressureHue = applyPressureHue;
 	window.__dshWhale.pressurePercentOf = pressurePercentOf;
 	window.__dshWhale._clearTitleBook = clearTitleBook;
+	window.__dshWhale.bindJumpSessions = bindJumpSessions;
+	window.__dshWhale.jumpReady = jumpReady;
+	window.__dshWhale.openSessionAt = openSessionAt;
+	window.__dshWhale._parseStamp = parseStamp;
 	window.__dshWhale.affection = function () {
 		return affection;
 	};

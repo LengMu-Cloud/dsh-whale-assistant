@@ -3,7 +3,7 @@
 > 由 node build-whale.js 产出：每个模块的职责（取文件头注释首段）与顶层函数清单。
 > 改代码前先在这里定位模块，再进 src/ 对应文件；改完重新构建本表自动更新。
 
-共 32 个模块（构建产物为单文件 IIFE，全部模块共享同一作用域）。
+共 33 个模块（构建产物为单文件 IIFE，全部模块共享同一作用域）。
 
 ## **src/index.js**（行切片）
 
@@ -61,7 +61,7 @@
 
 > Server-events consumer (inline module): polls the whale-assistant host's /api/whale-assistant/events route (the host lives in the dsh server's cordis container and buffers session events for EVERY session) and feeds the frames the DOM adapter cannot see:    - turn/start of EVERY session (2026-09-02 
 
-**rememberSeq()** · **feedEventFrame()** · **registerBackground()** · **lookupTitlesFromHistory()** · **consume()** · **poll()**
+**rememberSeq()** · **feedEventFrame()** · **registerBackground()** · **lookupTitlesFromHistory()** · **consume()** · **poll()** · **handleSseData()** · **connectSSE()**
 
 ## **src/core/health.js**
 
@@ -166,5 +166,11 @@
 ## **src/input/drag.js**（行切片）
 
 > Quick trembling shake of the whale's body (used when caught).
+
+## **src/ui/session-jump.js**
+
+> Session jump (inline module): open a conversation in the DSH UI and, when a target moment (atMs) is given, page the conversation log backwards until the rendered message stamps cover that moment (or the whole log is in memory), then scroll the closest older stamp into view.  0.4.0 provenance: this l
+
+**stampEls()** · **stampMs()** · **hasMoreNode()** · **finish()**
 
 ## **src/core/exports.js**（行切片）

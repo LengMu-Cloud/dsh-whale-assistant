@@ -54,6 +54,10 @@
 	window.__dshWhale.applyPressureHue = applyPressureHue;
 	window.__dshWhale.pressurePercentOf = pressurePercentOf;
 	window.__dshWhale._clearTitleBook = clearTitleBook;
+	window.__dshWhale.bindJumpSessions = bindJumpSessions;
+	window.__dshWhale.jumpReady = jumpReady;
+	window.__dshWhale.openSessionAt = openSessionAt;
+	window.__dshWhale._parseStamp = parseStamp;
 	window.__dshWhale.affection = function () {
 		return affection;
 	};

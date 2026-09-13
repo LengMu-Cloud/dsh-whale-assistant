@@ -70,10 +70,21 @@ let frameSeq = 0;
  * per bootId — a host restart resets frameSeq, and a stale seq from the
  * previous generation would silently drop every new frame */
 const bootId = globalThis.crypto?.randomUUID?.() || 'boot-' + Date.now();
+const sseClients = new Set(); /* EventSource responses (0.4.0 push channel) */
+
 function pushFrame(frame) {
 	frame.seq = ++frameSeq;
 	recentFrames.push(frame);
 	while (recentFrames.length > 400) recentFrames.shift();
+	/* SSE fan-out: deliver the frame the moment it exists — network push is
+	 * NOT throttled in hidden tabs (timers are), so background notification
+	 * latency drops from "whenever the throttled 3s poll next runs" to now */
+	if (sseClients.size) {
+		const payload = 'data: ' + JSON.stringify(frame) + '\n\n';
+		for (const res of sseClients) {
+			try { res.write(payload); } catch (e) { sseClients.delete(res); }
+		}
+	}
 }
 
 function apply(ctx) {
@@ -474,10 +485,48 @@ function apply(ctx) {
 				});
 				res.end(code);
 			}
+		},
+		{
+			kind: 'exact',
+			path: '/api/whale-assistant/events/stream',
+			handler: (req, res) => {
+				if (req.method !== 'GET') {
+					res.writeHead(405, { 'cache-control': 'no-store' });
+					res.end();
+					return;
+				}
+				if (!isLoopbackRequest(req)) {
+					res.writeHead(403, { 'cache-control': 'no-store' });
+					res.end('forbidden');
+					return;
+				}
+				/* 0.4.0 push channel: hello + live frames + heartbeats. EventSource
+				 * reconnects on its own (retry below); a dropped socket just
+				 * removes the subscriber. */
+				res.writeHead(200, {
+					'content-type': 'text/event-stream; charset=utf-8',
+					'cache-control': 'no-store',
+					connection: 'keep-alive'
+				});
+				req.socket.setTimeout(0);
+				res.write('retry: 3000\n\n');
+				res.write('data: ' + JSON.stringify({ type: 'hello', bootId, now: Date.now() }) + '\n\n');
+				sseClients.add(res);
+				req.on('close', () => sseClients.delete(res));
+				req.on('error', () => sseClients.delete(res));
+			}
 		}
 	];
 	const disposers = [];
 	for (const route of routes) disposers.push(ctx.webServer.register(route));
+	/* SSE heartbeat: a real event the whale counts toward server liveness —
+	 * an IDLE server must not read as dead to the health check (R3) */
+	const sseHeartbeat = setInterval(() => {
+		for (const res of sseClients) {
+			try { res.write('data: ' + JSON.stringify({ type: 'ping' }) + '\n\n'); } catch (e) { sseClients.delete(res); }
+		}
+	}, 20000);
+	disposers.push(() => clearInterval(sseHeartbeat));
 	return () => {
 		for (const dispose of disposers) dispose();
 	};

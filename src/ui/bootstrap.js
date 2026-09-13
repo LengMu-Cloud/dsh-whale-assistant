@@ -33,31 +33,39 @@
 				uiSay('这条消息没有对应的对话哦 🐳', 2000);
 				return;
 			}
-			var opener = window.__dshOpenSession;
-			if (typeof opener !== 'function') {
-				uiSay('跳转功能需要刷新页面（插件未加载）', 2500);
-				return;
-			}
 			/* the report's endTime (the moment THIS report is about) lets the
-			 * host page back to that message — on a SAME-session jump (the
+			 * jump page back to that message — on a SAME-session jump (the
 			 * alpha adapter only tracks the current conversation) open() alone
 			 * would be a no-op with zero visible feedback */
 			var rep = reading || lastShownReport;
 			var atMs = rep && typeof rep.endTime === 'number' ? rep.endTime : undefined;
-			try {
-				opener(sessionId, atMs);
-				/* jumping to the conversation counts as reading the report:
-				 * the badge drops by one and the notification leaves the
-				 * queue (it must NOT still pop up from the red badge later) */
-				markBubbleRead();
-				/* keep the session attached to the bubble — the feedback
-				 * must not clear currentSaySession or the NEXT double-click
-				 * would lose the conversation */
-				uiSay('正在跳转到该对话… 🐳', 1500, sessionId);
-			} catch (error) {
-				/* the jump failed: the report stays unread */
-				uiSay('找不到对应的对话 🥲', 2000, sessionId);
+			/* 0.4.0: in-house jump (client-module bridge) with the sidebar as
+			 * fallback tail — the bridge carries no title, so the sidebar
+			 * tail looks the name up in the address book */
+			var jumped = false;
+			if (jumpReady()) {
+				jumped = openSessionAt(sessionId, atMs);
+				if (!jumped) {
+					/* the bridge jumped but the session is gone: the report
+					 * stays unread (same contract as the old hook) */
+					uiSay('找不到对应的对话 🥲', 2000, sessionId);
+					return;
+				}
+			} else if (openViaSidebarByTitle(sessionTitles.get(sessionId) || bookTitle(sessionId) || '')) {
+				jumped = true;
 			}
+			if (!jumped) {
+				uiSay('跳转功能需要刷新页面（插件未加载）', 2500);
+				return;
+			}
+			/* jumping to the conversation counts as reading the report:
+			 * the badge drops by one and the notification leaves the
+			 * queue (it must NOT still pop up from the red badge later) */
+			markBubbleRead();
+			/* keep the session attached to the bubble — the feedback
+			 * must not clear currentSaySession or the NEXT double-click
+			 * would lose the conversation */
+			uiSay('正在跳转到该对话… 🐳', 1500, sessionId);
 		}
 
 		/** Is viewport (x, y) inside the bubble's rendered rectangle?

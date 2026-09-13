@@ -70,7 +70,7 @@
 			rep = {
 				server: (sh && (sh.failStreak >= 3 || visibleStale)) ? 'fail' : 'ok',
 				dom: (uh && uh.missStreak >= 3) ? 'fail' : 'ok',
-				jump: (typeof window !== 'undefined' && typeof window.__dshOpenSession === 'function') ? 'ok' : 'warn'
+				jump: jumpReady() ? 'ok' : 'warn' /* 0.4.0: the in-house client-module bridge replaces the injected hook */
 			};
 		}
 		var degraded = rep.server === 'fail' || rep.dom === 'fail';

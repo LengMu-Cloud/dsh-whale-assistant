@@ -369,6 +369,7 @@
 	}
 
 	function poll() {
+		if (sseUp) return; /* the stream is live: it delivers frames + pings */
 		fetch('/api/whale-assistant/events').then(function (r) {
 			return r.ok ? r.json() : null;
 		}).then(function (data) {
@@ -385,11 +386,43 @@
 		});
 	}
 
+	/* 0.4.0 SSE client: frames + hello + pings pushed the instant they exist.
+	 * EventSource reconnects on its own (server sent retry: 3000); while the
+	 * stream is up the 3s poll skips itself — network callbacks are NOT
+	 * throttled in hidden tabs, which is the whole point. Pings count toward
+	 * server liveness so an IDLE server no longer reads as dead (R3). */
+	var sse = null;
+	var sseUp = false;
+	var sseBootId = null;
+	function handleSseData(raw) {
+		var f = null;
+		try { f = JSON.parse(raw); } catch (e) { return; }
+		if (!f || typeof f !== 'object') return;
+		if (f.type === 'ping') { markServerPoll(true); return; }
+		if (f.type === 'hello') {
+			if (f.bootId && f.bootId !== knownBootId) { sseBootId = f.bootId; consume([], f.bootId); }
+			else if (f.bootId) { sseBootId = f.bootId; }
+			return;
+		}
+		consume([f], sseBootId || undefined);
+	}
+	function connectSSE() {
+		if (typeof EventSource !== 'function') return; /* vm sandbox / ancient browsers */
+		try { sse = new EventSource('/api/whale-assistant/events/stream'); } catch (e) { return; }
+		sse.onopen = function () { sseUp = true; };
+		sse.onerror = function () { sseUp = false; }; /* EventSource auto-reconnects */
+		sse.onmessage = function (ev) { handleSseData(ev.data); };
+	}
+	/* test seam: this whole module is a closure, so exports.js can't see it —
+	 * mirror the _pollConsume pattern and hang the handler on the window seam */
+	if (typeof window !== 'undefined' && window.__dshWhale) window.__dshWhale._sseFrame = handleSseData;
+
 	/* start as soon as the boot render settles (1.5s); the first polls still
 	 * skip frames that predate the page via the bootAt guards above */
 	setTimeout(function () {
 		setInterval(poll, POLL_MS);
 		poll();
+		connectSSE();
 	}, 1500);
 
 	/* test seam: drive the polled-frame gate directly (active-session skip +

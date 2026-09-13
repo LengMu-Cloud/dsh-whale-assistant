@@ -94,9 +94,16 @@ function apply(ctx) {
 		});
 	} catch (e) { /* events unavailable on this host version */ }
 	try {
-		ctx.sessionProjections?.onChanged((session, key, value) => {
-			if (!session) return;
-			pushFrame({ type: 'session/projection', sessionId: session.id, key, value });
+		/* 0.3.3: inject 而非裸取——投影服务与本插件的激活顺序无保证，服务未挂载时
+		 * 裸取 ctx.sessionProjections 是 undefined，`?.` 把整个订阅静默吞掉
+		 * （真机验尸：真实任务后事件环 20 帧、零投影帧 = 转发代码存在但从未触发）。
+		 * 投影服务文档明确要求 inject 声明；照本文件 jobs 订阅同款模式，
+		 * 服务就绪后再挂 onChanged，签名 (session, key, value, seq)。 */
+		ctx.inject(['sessionProjections'], (spCtx) => {
+			spCtx.sessionProjections?.onChanged((session, key, value) => {
+				if (!session) return;
+				pushFrame({ type: 'session/projection', sessionId: session.id, key, value });
+			});
 		});
 	} catch (e) { /* projections unavailable */ }
 	try {

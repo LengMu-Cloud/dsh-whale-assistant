@@ -9,6 +9,7 @@
 
 ### 修复
 - **上下文压力三处同源复活（报告压力行 / 压力描边色 / ≥70% 提醒）**：0.1.5 移除「上下文已用 N%」DOM 文本后三处一起失供——根因是 `server-events` 沿用 0.1.2 时代的「活跃会话投影帧丢弃」守卫（当年 DOM 喂给覆盖得上），0.1.5 下 DOM 无料可喂，活跃会话（提醒唯一读取对象）被自己的守卫掐死。现在 `contextPressure` 投影帧不再跳过活跃会话（`tokenUsage` 维持跳过，累计条 DOM 优先不变），数据改走 **dsh-token-meter 服务端投影**（dsh-base roster 常驻插件，`request/context` + `assistant/message` usage 权威计算）——官方 UI 再怎么改版都不影响供数
+- **宿主半区同修（投影订阅从未触发的真凶）**：`index.js` 裸取 `ctx.sessionProjections?.onChanged`——投影服务与本插件激活顺序无保证，服务未挂载时 `?.` 把整个订阅静默吞掉（推送后真机验尸：真实任务后事件环 20 帧、**零投影帧**——转发代码存在但从未触发；投影服务文档明确要求 `inject` 声明）。已照 jobs 订阅同款改为 `ctx.inject(['sessionProjections'],…)` 就绪后挂载。**宿主半区改动需重启 DSH 服务生效**
 - **百分比口径对齐官方 ContextMeter**：新增 `pressurePercentOf` 纯函数（status-panel 与 reports 同一公式）：`projectedTokens`（采样 + 表面漂移）优先、`pressureTokens` 兜底、`Math.min(100)` 截断、**窗口无采样返回 null 不造假 0%**；旧版 DOM 百分比形状经同一公式不变
 
 ### 新增

@@ -1304,23 +1304,71 @@
 		}
 
 		function savePos() {
+			/* v2 ANCHOR store: keep the whale anchored to the RIGHT-BOTTOM
+			 * corner as pixel offsets, so a window resize re-seats it at the
+			 * same corner offset instead of stranding it at a stale absolute
+			 * x/y (user report 09-14: fullscreen -> windowed left the whale
+			 * off-screen). x/y kept for downgrade readability. */
+			var rx = Math.round(window.innerWidth - whale.offsetLeft - whale.offsetWidth);
+			var by = Math.round(window.innerHeight - whale.offsetTop - whale.offsetHeight);
 			safeSet(POS_KEY, {
+				v: 2,
+				rx: rx,
+				by: by,
 				x: whale.offsetLeft,
 				y: whale.offsetTop
 			});
 		}
 
-		function loadPos() {
-			var pos = safeGet(POS_KEY, function (v0) {
-				/* migrate { x, y } -> v1 */
+		/* v2 anchor re-seat with symmetric clamp: offsets are kept verbatim
+		 * while they fit the current viewport; when the window shrank past
+		 * the stored offset the whale clamps to the nearest edge instead of
+		 * stranding off-screen (and the original offset survives for when
+		 * the window grows back). */
+		function seatFromAnchor(rx, by) {
+			rx = Math.max(0, Math.min(rx, window.innerWidth - whale.offsetWidth));
+			by = Math.max(0, Math.min(by, window.innerHeight - whale.offsetHeight));
+			applyPos(
+				window.innerWidth - whale.offsetWidth - rx,
+				window.innerHeight - whale.offsetHeight - by
+			);
+		}
+
+		function anchorFromStorage() {
+			return safeGet(POS_KEY, function (v0) {
 				return (v0 && typeof v0 === 'object' && typeof v0.x === 'number' && typeof v0.y === 'number') ? v0 : null;
 			});
+		}
+
+		function loadPos() {
+			var pos = anchorFromStorage();
+			if (pos && typeof pos.rx === 'number' && typeof pos.by === 'number') {
+				seatFromAnchor(pos.rx, pos.by);
+				return true;
+			}
 			if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') {
 				applyPos(pos.x, pos.y);
 				return true;
 			}
 			return false;
 		}
+
+		/* window resize: keep the whale in view. v2 anchors re-seat from the
+		 * right-bottom offsets (corner semantics survive any window shape —
+		 * user report 09-14: fullscreen -> windowed left the whale stranded
+		 * at a stale absolute x/y); v1/legacy absolute positions are clamped
+		 * back into the viewport. No stored pos = CSS right/bottom default,
+		 * which already tracks the window by itself. */
+		window.addEventListener('resize', function () {
+			var pos = anchorFromStorage();
+			if (!pos) return;
+			if (typeof pos.rx === 'number' && typeof pos.by === 'number') {
+				seatFromAnchor(pos.rx, pos.by);
+			} else if (typeof pos.x === 'number' && typeof pos.y === 'number') {
+				applyPos(pos.x, pos.y); /* clamp happens inside applyPos */
+			}
+			updateStatusPos();
+		});
 
 		var wiggleTimer = null;
 

@@ -281,6 +281,11 @@ function makeEnv(initStore) {
 		},
 	};
 	sandbox.window = sandbox;
+	/* window event registry (resize listener in menu.js pos system) */
+	const winListeners = {};
+	sandbox.addEventListener = (type, fn) => { (winListeners[type] = winListeners[type] || []).push(fn); };
+	sandbox.removeEventListener = () => {};
+	sandbox.dispatchEvent = (ev) => { (winListeners[ev.type] || []).forEach((fn) => fn(ev)); return true; };
 
 	vm.createContext(sandbox);
 	vm.runInContext(SCRIPT, sandbox, { filename: 'whale.js' });
@@ -438,7 +443,43 @@ async function main() {
 	assert.strictEqual(whale.style.top, '40px', 'dragged top');
 	assert.strictEqual(whale.style.right, 'auto', 'right cleared after drag');
 	const saved = JSON.parse(env.sandbox.localStorage.getItem('dsh-whale:pos'));
-	assert.deepStrictEqual(saved, { v: 1, data: { x: 80, y: 40 } }, 'position persisted (v1 envelope)');
+	assert.deepStrictEqual(saved, { v: 1, data: { v: 2, rx: 1032, by: 672, x: 80, y: 40 } }, 'position persisted (v2 anchor in v1 envelope: rx/by right-bottom offsets + x/y mirror)');
+	assert.strictEqual(saved.data.rx, env.sandbox.innerWidth - 80 - 88, 'rx = innerWidth - left - width');
+	assert.strictEqual(saved.data.by, env.sandbox.innerHeight - 40 - 88, 'by = innerHeight - top - height');
+
+	/* 6b. window resize re-seats the whale from its right-bottom anchor
+	 * (user report 09-14: fullscreen -> windowed left the whale stranded
+	 * at a stale absolute x/y). Corner anchors follow the new corner;
+	 * offsets that no longer fit clamp to the nearest edge, reversibly. */
+	env.sandbox.innerWidth = 1000;
+	env.sandbox.innerHeight = 700;
+	env.sandbox.window.dispatchEvent({ type: 'resize' });
+	assert.strictEqual(whale.style.left, '0px', 'shrink: rx=1032 no longer fits 1000w -> clamps to the nearest edge (left=0)');
+	assert.strictEqual(whale.style.top, '0px', 'shrink: by=672 no longer fits 700h -> clamps to the top edge');
+	env.sandbox.innerWidth = 1200;
+	env.sandbox.innerHeight = 800;
+	env.sandbox.window.dispatchEvent({ type: 'resize' });
+	assert.strictEqual(whale.style.left, '80px', 'growing back re-seats at the ORIGINAL offset (rx=1032 fits again, reversible)');
+	assert.strictEqual(whale.style.top, '40px', 'original by=672 also restored');
+
+	/* 6c. THE reported scenario: whale parked at the right-bottom corner
+	 * (small rx/by) -> windowed -> it follows the NEW right-bottom corner */
+	whale._fire('pointerdown', pt(2, 100, 100));
+	whale._fire('pointermove', pt(2, 1120, 760));
+	whale._fire('pointerup', pt(2, 1120, 760));
+	assert.strictEqual(whale.style.left, '1100px', 'dragged near the right-bottom corner');
+	assert.strictEqual(whale.style.top, '700px', 'corner parking top');
+	const c = JSON.parse(env.sandbox.localStorage.getItem('dsh-whale:pos')).data;
+	assert.strictEqual(c.rx, 12, 'corner anchor rx stored (1200-1100-88)');
+	assert.strictEqual(c.by, 12, 'corner anchor by stored (800-700-88)');
+	env.sandbox.innerWidth = 1000;
+	env.sandbox.innerHeight = 700;
+	env.sandbox.window.dispatchEvent({ type: 'resize' });
+	assert.strictEqual(whale.style.left, '900px', 'windowed: whale follows the new RIGHT edge (1000-88-12)');
+	assert.strictEqual(whale.style.top, '600px', 'windowed: whale follows the new BOTTOM edge (700-88-12)');
+	env.sandbox.innerWidth = 1200;
+	env.sandbox.innerHeight = 800;
+	env.sandbox.window.dispatchEvent({ type: 'resize' }); /* restore viewport for later tests */
 
 	/* 7. double-click swims back to the corner: directional, with ripples */
 	whale._fire('dblclick', {});

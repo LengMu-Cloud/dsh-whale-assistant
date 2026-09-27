@@ -1678,6 +1678,41 @@ async function main() {
 	assert.ok(statusRd().textContent.includes('上下文已用 10%'), 'pressure re-shown too');
 	RD._setHoldMs(null);
 
+	/* 32b. late usage after turn/end: live panel upgrades to 3 lines via
+	 * backfill, and the red-badge re-read must keep those numbers (09-27:
+	 * 弹出三行、点读回两行 — snapshot was written before usage landed) */
+	const envLate = makeEnv();
+	envLate.ready();
+	const LT = envLate.sandbox.__dshWhale;
+	const muxpLt = (payload) => LT.handleMuxPayload(payload);
+	const statusLt = () => envLate.whale.children.find((c) => c.className === 'dsh-whale-status');
+	envLate.setFetch(() => Promise.resolve({ ok: false, json: () => Promise.resolve({}) }));
+	LT._setHoldMs(10);
+	muxpLt({ type: 'session/projection', sessionId: 'session-late1', key: 'subagentTiming', value: { settledMs: 0 } });
+	muxpLt({ type: 'session/projection', sessionId: 'session-late1', key: 'title', value: '迟到用量', seq: 1 });
+	muxpLt({ type: 'session/projection', sessionId: 'session-late1', key: 'tokenUsage', value: { uncachedInputTokens: 40000, outputTokens: 3300, cacheReadTokens: 0, cacheWriteTokens: 0 } });
+	muxpLt({ type: 'session/projection', sessionId: 'session-late1', key: 'contextPressure', value: { pressureTokens: 1000, projectedTokens: 1000, contextWindow: 100000 } });
+	muxpLt({ type: 'session/event', sessionId: 'session-late1', event: { type: 'turn/start', seq: 1, time: 0, data: {} } });
+	/* end BEFORE any usage: snapshot turnTokens stays 0 */
+	muxpLt({ type: 'session/event', sessionId: 'session-late1', event: { type: 'turn/end', seq: 5, time: 5, data: {} } });
+	assert.ok(statusLt() && !statusLt().textContent.includes('此次任务消耗'), 'at end with no usage yet: no task line (got ' + (statusLt() && statusLt().textContent) + ')');
+	assert.ok(statusLt().textContent.includes('全对话累计消耗'), 'cumulative line still shows');
+	/* late usage lands (projection path also calls backfillEndPanel) */
+	muxpLt({ type: 'session/event', sessionId: 'session-late1', event: { type: 'assistant/message', seq: 6, time: 6, data: { turn: 1, step: 1, message: { role: 'assistant', content: [], id: 'mL' }, usage: { inputTokens: 30000, outputTokens: 3300, cacheReadTokens: 0, reasoningTokens: 0 } } } });
+	muxpLt({ type: 'session/projection', sessionId: 'session-late1', key: 'tokenUsage', value: { uncachedInputTokens: 40000, outputTokens: 3300, cacheReadTokens: 0, cacheWriteTokens: 0 } });
+	assert.ok(statusLt().textContent.includes('此次任务消耗'), 'backfill upgrades live panel with the task line: ' + statusLt().textContent);
+	/* hide the live panel, then re-read from the badge */
+	statusLt().classList.remove('show');
+	statusLt().textContent = '';
+	await sleep(20);
+	envLate.whale._fire('pointerdown', { pointerId: 1, pointerType: 'mouse', button: 0, clientX: 100, clientY: 100 });
+	envLate.whale._fire('pointerup', { pointerId: 1, pointerType: 'mouse', button: 0, clientX: 100, clientY: 100 });
+	await sleep(320);
+	assert.ok(envLate.bubble().textContent.includes('完成了'), 'late-usage report text replayed on read');
+	assert.ok(statusLt().textContent.includes('此次任务消耗'), 're-read keeps the task line (snapshot patched): ' + statusLt().textContent);
+	assert.ok(statusLt().textContent.includes('全对话累计消耗'), 're-read keeps cumulative line');
+	LT._setHoldMs(null);
+
 	/* 33. gear lives INSIDE the whale SVG: swimming (rotate + mirror) works
 	 * and the gear groups ride along automatically — no JS compensation */
 	const envFollow = makeEnv();

@@ -136,6 +136,24 @@
 		return changed;
 	}
 
+	/** Late turnTokens: history written at turn/end can carry 0 when usage
+	 * projections land after the end frame (09-27 用户截图：读回少一行).
+	 * Upgrade ONLY the newest empty row for this session — rewriting every
+	 * zero row would inflate the weekly report sum (same-session old ends). */
+	function correctHistoryTurnTokens(sessionId, turnTokens) {
+		if (!sessionId || !(turnTokens > 0)) return false;
+		for (var i = 0; i < history.length; i++) {
+			var row = history[i];
+			if (row.sessionId !== sessionId) continue;
+			if (row.turnTokens != null && row.turnTokens !== 0) return false; /* newest already has a number */
+			row.turnTokens = turnTokens;
+			safeSet(HISTORY_KEY, history);
+			pushCloudHistory();
+			return true;
+		}
+		return false;
+	}
+
 	/** Timestamp of the newest 'fail' record, or null. */
 	function recentFailAt() {
 		for (var i = 0; i < history.length; i++) {

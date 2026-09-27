@@ -573,7 +573,10 @@
 		/* per-session ledger (用户报告 09-20): the DOM chip is the official
 		 * number for the active turn — write THIS session's ledger entry so
 		 * a completion report can never read another conversation's burn */
-		if (turnTokens > 0) turnTokensBySession.set(sid, turnTokens);
+		if (turnTokens > 0) {
+			turnTokensBySession.set(sid, turnTokens);
+			if (typeof patchEndSnapshots === 'function') patchEndSnapshots(sid);
+		}
 		feedSessionUsage(sid); /* cumulative burn for the status panel */
 		/* the stats node may render a beat after the chip: re-feed once */
 		setTimeout(function () {

@@ -35,7 +35,7 @@
 
 > Task history (inline module): the most recent finished main-task records, newest first, persisted as 'dsh-whale:history' (v1 envelope, cap 50). Consumed by the history drawer (ui/history.js) and the fail-recall hint (M3.2, via recentFailAt).
 
-**getClearAt()** · **bumpClearAt()** · **dedupeKey()** · **mergeHistories()** · **pushCloudHistory()** · **pullCloudHistory()** · **loadHistory()** · **pushHistory()** · **correctHistoryTitle()** · **recentFailAt()**
+**getClearAt()** · **bumpClearAt()** · **dedupeKey()** · **mergeHistories()** · **pushCloudHistory()** · **pullCloudHistory()** · **loadHistory()** · **pushHistory()** · **correctHistoryTitle()** · **correctHistoryTurnTokens()** · **recentFailAt()**
 
 ## **src/core/stuck.js**
 
@@ -77,7 +77,7 @@
 
 > Unread job-report count: accumulates reports, one click reads one.
 
-**say()** · **renderUnread()** · **sessionTurnTokens()** · **addSessionTurnTokens()** · **armEndBackfill()** · **backfillEndPanel()** · **sessionTotalTokens()** · **statusReport()** · **pushReport()** · **readNext()**
+**say()** · **renderUnread()** · **sessionTurnTokens()** · **addSessionTurnTokens()** · **armEndBackfill()** · **patchEndSnapshots()** · **backfillEndPanel()** · **sessionTotalTokens()** · **statusReport()** · **pushReport()** · **readNext()**
 
 ## **src/core/dings.js**（行切片）
 

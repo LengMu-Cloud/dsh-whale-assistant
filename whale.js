@@ -463,6 +463,24 @@ function resolveCurrentSessionId() {
 		return changed;
 	}
 
+	/** Late turnTokens: history written at turn/end can carry 0 when usage
+	 * projections land after the end frame (09-27 用户截图：读回少一行).
+	 * Upgrade ONLY the newest empty row for this session — rewriting every
+	 * zero row would inflate the weekly report sum (same-session old ends). */
+	function correctHistoryTurnTokens(sessionId, turnTokens) {
+		if (!sessionId || !(turnTokens > 0)) return false;
+		for (var i = 0; i < history.length; i++) {
+			var row = history[i];
+			if (row.sessionId !== sessionId) continue;
+			if (row.turnTokens != null && row.turnTokens !== 0) return false; /* newest already has a number */
+			row.turnTokens = turnTokens;
+			safeSet(HISTORY_KEY, history);
+			pushCloudHistory();
+			return true;
+		}
+		return false;
+	}
+
 	/** Timestamp of the newest 'fail' record, or null. */
 	function recentFailAt() {
 		for (var i = 0; i < history.length; i++) {
@@ -1282,7 +1300,10 @@ if (typeof module !== 'undefined' && module.exports) {
 		/* per-session ledger (用户报告 09-20): the DOM chip is the official
 		 * number for the active turn — write THIS session's ledger entry so
 		 * a completion report can never read another conversation's burn */
-		if (turnTokens > 0) turnTokensBySession.set(sid, turnTokens);
+		if (turnTokens > 0) {
+			turnTokensBySession.set(sid, turnTokens);
+			if (typeof patchEndSnapshots === 'function') patchEndSnapshots(sid);
+		}
 		feedSessionUsage(sid); /* cumulative burn for the status panel */
 		/* the stats node may render a beat after the chip: re-feed once */
 		setTimeout(function () {
@@ -2123,6 +2144,9 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		if (turnTokensBySession.size > 20) {
 			turnTokensBySession.delete(turnTokensBySession.keys().next().value);
 		}
+		/* NOTE: do NOT patchEndSnapshots here — usage for a LATER turn would
+		 * rewrite the previous turn's empty history row. Only backfillEndPanel
+		 * (armed for the just-ended completion) refreshes the read-back copies. */
 	}
 
 	/** Late-projection backfill (same 用户报告): the tokenUsage/
@@ -2137,14 +2161,46 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		endPanelBackfill = { sessionId: sessionId, deadline: Date.now() + DURATION_END, lines: lines };
 	}
 
+	/** Patch the unread/read-back snapshots for one session with the latest
+	 * ledger numbers. Without this, late usage only upgrades the LIVE panel
+	 * (backfillEndPanel) and a red-badge re-read still shows the empty
+	 * "此次任务" line missing (用户截图：弹出三行、点读回两行). */
+	function patchEndSnapshots(sessionId) {
+		if (!sessionId) return;
+		var turn = sessionTurnTokens(sessionId);
+		var total = sessionTotalTokens(sessionId);
+		var pressure = sessionPressure.get(sessionId);
+		function patchItem(item) {
+			if (!item || item.sessionId !== sessionId) return;
+			if (item.turnTokens === null) return; /* snapshot=false: intentionally empty */
+			if (typeof turn === 'number' && turn > 0) item.turnTokens = turn;
+			if (typeof total === 'number' && total > 0) item.sessionTokens = total;
+			if (pressure) item.pressure = pressure;
+		}
+		for (var i = reportQueue.length - 1; i >= 0; i--) {
+			if (reportQueue[i].sessionId === sessionId) { patchItem(reportQueue[i]); break; }
+		}
+		patchItem(reading);
+		patchItem(lastShownReport);
+		if (typeof turn === 'number' && turn > 0 && typeof correctHistoryTurnTokens === 'function') {
+			correctHistoryTurnTokens(sessionId, turn);
+		}
+	}
+
 	function backfillEndPanel(sessionId) {
 		if (!endPanelBackfill || endPanelBackfill.sessionId !== sessionId) return;
 		var now = Date.now();
 		if (now >= endPanelBackfill.deadline) { endPanelBackfill = null; return; }
 		var rep = statusReport(sessionTurnTokens(sessionId), sessionTotalTokens(sessionId), sessionPressure.get(sessionId));
-		if (!rep || rep.lines.length <= endPanelBackfill.lines) return;
+		if (!rep || rep.lines.length <= endPanelBackfill.lines) {
+			/* lines may be unchanged while turnTokens just became non-zero
+			 * after a 0-snapshot — still refresh the read-back copies */
+			patchEndSnapshots(sessionId);
+			return;
+		}
 		endPanelBackfill.lines = rep.lines.length;
 		showStatusPanel(rep, Math.max(1500, endPanelBackfill.deadline - now));
+		patchEndSnapshots(sessionId);
 		if (endPanelBackfill.lines >= 3) endPanelBackfill = null;
 	}
 	/** debug counters (diagnostics only). */

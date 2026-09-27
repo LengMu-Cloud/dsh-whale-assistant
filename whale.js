@@ -1279,9 +1279,16 @@ if (typeof module !== 'undefined' && module.exports) {
 		recordUsageHealth(turnTokens > 0);
 		if (turnTokens > 0) turnTokenUsage = turnTokens;
 		var sid = ensureRegistered();
+		/* per-session ledger (用户报告 09-20): the DOM chip is the official
+		 * number for the active turn — write THIS session's ledger entry so
+		 * a completion report can never read another conversation's burn */
+		if (turnTokens > 0) turnTokensBySession.set(sid, turnTokens);
 		feedSessionUsage(sid); /* cumulative burn for the status panel */
 		/* the stats node may render a beat after the chip: re-feed once */
-		setTimeout(function () { feedSessionUsage(resolveCurrentSessionId()); }, 800);
+		setTimeout(function () {
+			feedSessionUsage(resolveCurrentSessionId());
+			backfillEndPanel(resolveCurrentSessionId()); /* 迟到的芯片数字补全面板 */
+		}, 800);
 		/* mirror guard (09-06 B3): the polled frame may have announced this
 		 * same end first (active-session completed now passes the poll gate);
 		 * an ±8s match means one physical end — stay silent, keep the usage */
@@ -2095,6 +2102,51 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	 * conversation's — the attention panel only quotes it when the tag
 	 * matches the asking session, otherwise it shows cumulative-only. */
 	var turnTokenSession = null;
+	/** Per-session burn (用户报告 09-20): the single global counter above is
+	 * clobbered by ANY session's turn/start — back-to-back quick tasks made
+	 * a completion report read 0 and lose its 此次 line right before render
+	 * (面板只剩压力行，甚至整块消失). The map keeps every session's running
+	 * turn honest regardless of who started later; sessionTurnTokens() is
+	 * the only read the report paths use. Capped like the other maps. */
+	var turnTokensBySession = new Map();
+
+	function sessionTurnTokens(sessionId) {
+		var t = turnTokensBySession.get(sessionId);
+		if (t != null) return t;
+		/* legacy fallback: the global counter when it still carries THIS
+		 * session's burn (events seen before the map existed) */
+		return (turnTokenSession === sessionId) ? turnTokenUsage : 0;
+	}
+
+	function addSessionTurnTokens(sessionId, add) {
+		turnTokensBySession.set(sessionId, (turnTokensBySession.get(sessionId) || 0) + add);
+		if (turnTokensBySession.size > 20) {
+			turnTokensBySession.delete(turnTokensBySession.keys().next().value);
+		}
+	}
+
+	/** Late-projection backfill (same 用户报告): the tokenUsage/
+	 * contextPressure projections can land AFTER turn/end — a panel rendered
+	 * before them shows missing lines, or nothing at all. armEndBackfill
+	 * remembers the end panel's deadline (the bubble's lifetime) and
+	 * backfillEndPanel re-renders it — same deadline — when the missing
+	 * projection finally arrives. */
+	var endPanelBackfill = null;
+
+	function armEndBackfill(sessionId, lines) {
+		endPanelBackfill = { sessionId: sessionId, deadline: Date.now() + DURATION_END, lines: lines };
+	}
+
+	function backfillEndPanel(sessionId) {
+		if (!endPanelBackfill || endPanelBackfill.sessionId !== sessionId) return;
+		var now = Date.now();
+		if (now >= endPanelBackfill.deadline) { endPanelBackfill = null; return; }
+		var rep = statusReport(sessionTurnTokens(sessionId), sessionTotalTokens(sessionId), sessionPressure.get(sessionId));
+		if (!rep || rep.lines.length <= endPanelBackfill.lines) return;
+		endPanelBackfill.lines = rep.lines.length;
+		showStatusPanel(rep, Math.max(1500, endPanelBackfill.deadline - now));
+		if (endPanelBackfill.lines >= 3) endPanelBackfill = null;
+	}
 	/** debug counters (diagnostics only). */
 	var debugCounters = { assistantMsgs: 0, usageEvents: 0, usageSum: 0 };
 
@@ -2148,8 +2200,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			duration: duration,
 			sessionId: sessionId,
 			at: Date.now(),
-			turnTokens: snapshot === false ? null :
-				(turnTokenSession === sessionId ? turnTokenUsage : null),
+			turnTokens: snapshot === false ? null : sessionTurnTokens(sessionId),
 			sessionTokens: snapshot === false ? null : sessionTotalTokens(sessionId),
 			pressure: snapshot === false ? null : sessionPressure.get(sessionId),
 			endTime: typeof endTime === 'number' ? endTime : null
@@ -3290,6 +3341,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				capMap(sessionUsage, 150); /* memory audit */
 				lastMainSession = frame.sessionId;
 			}
+			backfillEndPanel(frame.sessionId); /* 用量投影迟到 → 补全完成面板 (用户报告 09-20) */
 			touchActivity();
 			return;
 		}
@@ -3299,6 +3351,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				capMap(sessionPressure, 150); /* memory audit */
 				lastMainSession = frame.sessionId;
 			}
+			backfillEndPanel(frame.sessionId); /* 压力投影迟到 → 补全完成面板 */
 			maybeWarnPressure();
 			/* pressure -> status panel border hue */
 			applyPressureHue();
@@ -3390,18 +3443,19 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				var stopMsg = '[' + title + ']被中止了 ✋';
 				say(stopMsg, DURATION_END, frame.sessionId);
 				pushReport(stopMsg, DURATION_END, frame.sessionId, undefined, atMs);
-				pushHistory({ title: title, sessionId: frame.sessionId, kind: 'killed', at: Date.now(), endTime: atMs, turnTokens: turnTokenUsage });
+				pushHistory({ title: title, sessionId: frame.sessionId, kind: 'killed', at: Date.now(), endTime: atMs, turnTokens: sessionTurnTokens(frame.sessionId) });
 			} else if (isError) {
 				var endMsg = '[' + title + ']失败了 ' + pickTail('failed') + '（双击通知可回到该对话）';
 				if (!dndActive()) {
 					say(endMsg, DURATION_END, frame.sessionId);
 					playDing('fail');
-					var repFail = statusReport(turnTokenUsage, sessionTotalTokens(frame.sessionId), sessionPressure.get(frame.sessionId));
+					var repFail = statusReport(sessionTurnTokens(frame.sessionId), sessionTotalTokens(frame.sessionId), sessionPressure.get(frame.sessionId));
 					if (repFail) showStatusPanel(repFail, DURATION_END);
+					armEndBackfill(frame.sessionId, repFail ? repFail.lines.length : 0);
 				}
 				pushReport(endMsg, DURATION_END, frame.sessionId, undefined, atMs);
 				/* a failed task does not count toward the daily gear */
-				pushHistory({ title: title, sessionId: frame.sessionId, kind: 'fail', at: Date.now(), endTime: atMs, turnTokens: turnTokenUsage });
+				pushHistory({ title: title, sessionId: frame.sessionId, kind: 'fail', at: Date.now(), endTime: atMs, turnTokens: sessionTurnTokens(frame.sessionId) });
 			} else {
 				/* batch-fold contract (see server-events consume pre-scan):
 				 * a flood batch's OLDER completed turns carry foldSuppress —
@@ -3417,7 +3471,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 						kind: 'done',
 						at: Date.now(),
 						endTime: atMs,
-						turnTokens: turnTokenUsage
+						turnTokens: sessionTurnTokens(frame.sessionId)
 					});
 					return;
 				}
@@ -3434,9 +3488,10 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				if (!dndActive()) {
 					say(endMsg, DURATION_END, frame.sessionId);
 					playDing('done');
-					var rep = statusReport(turnTokenUsage, sessionTotalTokens(frame.sessionId), sessionPressure.get(frame.sessionId));
+					var rep = statusReport(sessionTurnTokens(frame.sessionId), sessionTotalTokens(frame.sessionId), sessionPressure.get(frame.sessionId));
 					// KNOWN-COUPLING: frames->status-panel — push render (completion report opens the panel; the failure twin is the repFail call above)
 					if (rep) showStatusPanel(rep, DURATION_END);
+					armEndBackfill(frame.sessionId, rep ? rep.lines.length : 0);
 				}
 				pushReport(endMsg, DURATION_END, frame.sessionId, undefined, atMs);
 				/* gear: each successfully finished main task counts */
@@ -3449,7 +3504,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					kind: isMaxTokens ? 'max-tokens' : 'done',
 					at: Date.now(),
 					endTime: atMs,
-					turnTokens: turnTokenUsage
+					turnTokens: sessionTurnTokens(frame.sessionId)
 				});
 				/* the polled path announced this end: record it so the DOM
 				 * chip (which may render a beat later for the visible turn)
@@ -3509,6 +3564,9 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					(usage.outputTokens || 0) +
 					(usage.cacheReadTokens || 0);
 				turnTokenUsage += add;
+				/* per-session ledger: another session's turn/start must not
+				 * clobber THIS conversation's burn (用户报告 09-20) */
+				addSessionTurnTokens(frame.sessionId, add);
 				debugCounters.usageEvents++;
 				debugCounters.usageSum += add;
 			}
@@ -3524,6 +3582,11 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		if (event.type === 'turn/start') {
 			turnTokenUsage = 0;
 			turnTokenSession = frame.sessionId;
+			/* per-session ledger reset: this session's next report reads its
+			 * OWN burn, not whatever the global counter was left holding.
+			 * (No cancel of endPanelBackfill here — another session starting
+			 * a turn says nothing about THIS completion's pending backfill.) */
+			turnTokensBySession.set(frame.sessionId, 0);
 			/* long-task run timer (>2min ⇒ "⏳ 已运行" line in the panel) */
 			startRunTimer(frame.sessionId);
 		}

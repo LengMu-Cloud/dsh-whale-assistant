@@ -260,6 +260,7 @@
 				capMap(sessionUsage, 150); /* memory audit */
 				lastMainSession = frame.sessionId;
 			}
+			backfillEndPanel(frame.sessionId); /* 用量投影迟到 → 补全完成面板 (用户报告 09-20) */
 			touchActivity();
 			return;
 		}
@@ -269,6 +270,7 @@
 				capMap(sessionPressure, 150); /* memory audit */
 				lastMainSession = frame.sessionId;
 			}
+			backfillEndPanel(frame.sessionId); /* 压力投影迟到 → 补全完成面板 */
 			maybeWarnPressure();
 			/* pressure -> status panel border hue */
 			applyPressureHue();
@@ -360,18 +362,19 @@
 				var stopMsg = '[' + title + ']被中止了 ✋';
 				say(stopMsg, DURATION_END, frame.sessionId);
 				pushReport(stopMsg, DURATION_END, frame.sessionId, undefined, atMs);
-				pushHistory({ title: title, sessionId: frame.sessionId, kind: 'killed', at: Date.now(), endTime: atMs, turnTokens: turnTokenUsage });
+				pushHistory({ title: title, sessionId: frame.sessionId, kind: 'killed', at: Date.now(), endTime: atMs, turnTokens: sessionTurnTokens(frame.sessionId) });
 			} else if (isError) {
 				var endMsg = '[' + title + ']失败了 ' + pickTail('failed') + '（双击通知可回到该对话）';
 				if (!dndActive()) {
 					say(endMsg, DURATION_END, frame.sessionId);
 					playDing('fail');
-					var repFail = statusReport(turnTokenUsage, sessionTotalTokens(frame.sessionId), sessionPressure.get(frame.sessionId));
+					var repFail = statusReport(sessionTurnTokens(frame.sessionId), sessionTotalTokens(frame.sessionId), sessionPressure.get(frame.sessionId));
 					if (repFail) showStatusPanel(repFail, DURATION_END);
+					armEndBackfill(frame.sessionId, repFail ? repFail.lines.length : 0);
 				}
 				pushReport(endMsg, DURATION_END, frame.sessionId, undefined, atMs);
 				/* a failed task does not count toward the daily gear */
-				pushHistory({ title: title, sessionId: frame.sessionId, kind: 'fail', at: Date.now(), endTime: atMs, turnTokens: turnTokenUsage });
+				pushHistory({ title: title, sessionId: frame.sessionId, kind: 'fail', at: Date.now(), endTime: atMs, turnTokens: sessionTurnTokens(frame.sessionId) });
 			} else {
 				/* batch-fold contract (see server-events consume pre-scan):
 				 * a flood batch's OLDER completed turns carry foldSuppress —
@@ -387,7 +390,7 @@
 						kind: 'done',
 						at: Date.now(),
 						endTime: atMs,
-						turnTokens: turnTokenUsage
+						turnTokens: sessionTurnTokens(frame.sessionId)
 					});
 					return;
 				}
@@ -404,9 +407,10 @@
 				if (!dndActive()) {
 					say(endMsg, DURATION_END, frame.sessionId);
 					playDing('done');
-					var rep = statusReport(turnTokenUsage, sessionTotalTokens(frame.sessionId), sessionPressure.get(frame.sessionId));
+					var rep = statusReport(sessionTurnTokens(frame.sessionId), sessionTotalTokens(frame.sessionId), sessionPressure.get(frame.sessionId));
 					// KNOWN-COUPLING: frames->status-panel — push render (completion report opens the panel; the failure twin is the repFail call above)
 					if (rep) showStatusPanel(rep, DURATION_END);
+					armEndBackfill(frame.sessionId, rep ? rep.lines.length : 0);
 				}
 				pushReport(endMsg, DURATION_END, frame.sessionId, undefined, atMs);
 				/* gear: each successfully finished main task counts */
@@ -419,7 +423,7 @@
 					kind: isMaxTokens ? 'max-tokens' : 'done',
 					at: Date.now(),
 					endTime: atMs,
-					turnTokens: turnTokenUsage
+					turnTokens: sessionTurnTokens(frame.sessionId)
 				});
 				/* the polled path announced this end: record it so the DOM
 				 * chip (which may render a beat later for the visible turn)
@@ -479,6 +483,9 @@
 					(usage.outputTokens || 0) +
 					(usage.cacheReadTokens || 0);
 				turnTokenUsage += add;
+				/* per-session ledger: another session's turn/start must not
+				 * clobber THIS conversation's burn (用户报告 09-20) */
+				addSessionTurnTokens(frame.sessionId, add);
 				debugCounters.usageEvents++;
 				debugCounters.usageSum += add;
 			}
@@ -494,6 +501,11 @@
 		if (event.type === 'turn/start') {
 			turnTokenUsage = 0;
 			turnTokenSession = frame.sessionId;
+			/* per-session ledger reset: this session's next report reads its
+			 * OWN burn, not whatever the global counter was left holding.
+			 * (No cancel of endPanelBackfill here — another session starting
+			 * a turn says nothing about THIS completion's pending backfill.) */
+			turnTokensBySession.set(frame.sessionId, 0);
 			/* long-task run timer (>2min ⇒ "⏳ 已运行" line in the panel) */
 			startRunTimer(frame.sessionId);
 		}

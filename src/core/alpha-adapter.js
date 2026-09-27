@@ -570,9 +570,16 @@
 		recordUsageHealth(turnTokens > 0);
 		if (turnTokens > 0) turnTokenUsage = turnTokens;
 		var sid = ensureRegistered();
+		/* per-session ledger (用户报告 09-20): the DOM chip is the official
+		 * number for the active turn — write THIS session's ledger entry so
+		 * a completion report can never read another conversation's burn */
+		if (turnTokens > 0) turnTokensBySession.set(sid, turnTokens);
 		feedSessionUsage(sid); /* cumulative burn for the status panel */
 		/* the stats node may render a beat after the chip: re-feed once */
-		setTimeout(function () { feedSessionUsage(resolveCurrentSessionId()); }, 800);
+		setTimeout(function () {
+			feedSessionUsage(resolveCurrentSessionId());
+			backfillEndPanel(resolveCurrentSessionId()); /* 迟到的芯片数字补全面板 */
+		}, 800);
 		/* mirror guard (09-06 B3): the polled frame may have announced this
 		 * same end first (active-session completed now passes the poll gate);
 		 * an ±8s match means one physical end — stay silent, keep the usage */

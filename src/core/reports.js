@@ -27,6 +27,51 @@
 	 * conversation's — the attention panel only quotes it when the tag
 	 * matches the asking session, otherwise it shows cumulative-only. */
 	var turnTokenSession = null;
+	/** Per-session burn (用户报告 09-20): the single global counter above is
+	 * clobbered by ANY session's turn/start — back-to-back quick tasks made
+	 * a completion report read 0 and lose its 此次 line right before render
+	 * (面板只剩压力行，甚至整块消失). The map keeps every session's running
+	 * turn honest regardless of who started later; sessionTurnTokens() is
+	 * the only read the report paths use. Capped like the other maps. */
+	var turnTokensBySession = new Map();
+
+	function sessionTurnTokens(sessionId) {
+		var t = turnTokensBySession.get(sessionId);
+		if (t != null) return t;
+		/* legacy fallback: the global counter when it still carries THIS
+		 * session's burn (events seen before the map existed) */
+		return (turnTokenSession === sessionId) ? turnTokenUsage : 0;
+	}
+
+	function addSessionTurnTokens(sessionId, add) {
+		turnTokensBySession.set(sessionId, (turnTokensBySession.get(sessionId) || 0) + add);
+		if (turnTokensBySession.size > 20) {
+			turnTokensBySession.delete(turnTokensBySession.keys().next().value);
+		}
+	}
+
+	/** Late-projection backfill (same 用户报告): the tokenUsage/
+	 * contextPressure projections can land AFTER turn/end — a panel rendered
+	 * before them shows missing lines, or nothing at all. armEndBackfill
+	 * remembers the end panel's deadline (the bubble's lifetime) and
+	 * backfillEndPanel re-renders it — same deadline — when the missing
+	 * projection finally arrives. */
+	var endPanelBackfill = null;
+
+	function armEndBackfill(sessionId, lines) {
+		endPanelBackfill = { sessionId: sessionId, deadline: Date.now() + DURATION_END, lines: lines };
+	}
+
+	function backfillEndPanel(sessionId) {
+		if (!endPanelBackfill || endPanelBackfill.sessionId !== sessionId) return;
+		var now = Date.now();
+		if (now >= endPanelBackfill.deadline) { endPanelBackfill = null; return; }
+		var rep = statusReport(sessionTurnTokens(sessionId), sessionTotalTokens(sessionId), sessionPressure.get(sessionId));
+		if (!rep || rep.lines.length <= endPanelBackfill.lines) return;
+		endPanelBackfill.lines = rep.lines.length;
+		showStatusPanel(rep, Math.max(1500, endPanelBackfill.deadline - now));
+		if (endPanelBackfill.lines >= 3) endPanelBackfill = null;
+	}
 	/** debug counters (diagnostics only). */
 	var debugCounters = { assistantMsgs: 0, usageEvents: 0, usageSum: 0 };
 
@@ -80,8 +125,7 @@
 			duration: duration,
 			sessionId: sessionId,
 			at: Date.now(),
-			turnTokens: snapshot === false ? null :
-				(turnTokenSession === sessionId ? turnTokenUsage : null),
+			turnTokens: snapshot === false ? null : sessionTurnTokens(sessionId),
 			sessionTokens: snapshot === false ? null : sessionTotalTokens(sessionId),
 			pressure: snapshot === false ? null : sessionPressure.get(sessionId),
 			endTime: typeof endTime === 'number' ? endTime : null

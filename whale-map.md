@@ -77,7 +77,7 @@
 
 > Unread job-report count: accumulates reports, one click reads one.
 
-**say()** · **renderUnread()** · **sessionTotalTokens()** · **statusReport()** · **pushReport()** · **readNext()**
+**say()** · **renderUnread()** · **sessionTurnTokens()** · **addSessionTurnTokens()** · **armEndBackfill()** · **backfillEndPanel()** · **sessionTotalTokens()** · **statusReport()** · **pushReport()** · **readNext()**
 
 ## **src/core/dings.js**（行切片）
 

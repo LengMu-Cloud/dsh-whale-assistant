@@ -58,13 +58,19 @@ function scanStatic(rootDir) {
 	}
 	const files = [];
 	(function walk(dir, depth) {
-		if (depth > 8) return;
+		if (depth > 12) return;
 		for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-			if (e.name === 'node_modules' || e.name === '.git') continue;
+			if (e.name === '.git') continue;
 			const p = path.join(dir, e.name);
-			if (!path.resolve(p).startsWith(abs)) continue; /* boundary check */
-			if (e.isDirectory()) walk(p, depth + 1);
-			else if (/\.(js|mjs|cjs|html)$/i.test(e.name) && e.size < 5 * 1024 * 1024) files.push(p);
+			if (!path.resolve(p).toLowerCase().startsWith(abs.toLowerCase())) continue; /* boundary check */
+			if (e.isDirectory()) {
+				/* node_modules must be walked: npm layout keeps coupling targets there */
+				walk(p, depth + 1);
+			} else if (/\.(js|mjs|cjs|html)$/i.test(e.name)) {
+				let sz = 0;
+				try { sz = fs.statSync(p).size; } catch (err) { continue; }
+				if (sz < 5 * 1024 * 1024) files.push(p);
+			}
 		}
 	})(abs, 0);
 	console.log('扫描 ' + files.length + ' 个文件（' + abs + '）\n');

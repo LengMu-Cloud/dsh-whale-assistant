@@ -13,8 +13,15 @@
     "engines": {
       "dsh": ">=0.1.2-alpha.1"
     },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
-      "inject": [],
+      "inject": [
+        "sessions",
+        "conversation",
+        "uiWorkspace"
+      ],
       "platform": "web"
     }
   },

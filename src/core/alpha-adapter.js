@@ -249,20 +249,25 @@
 	 * "9月1日 02:17") is. A conversation switch re-renders the WHOLE
 	 * log and historical chips flow through this observer — they carry
 	 * old stamps; a LIVE turn just ended, so its stamp is fresh. */
-	function chipAgeMinutes(text) {
+	/** Absolute epoch ms of a row's rendered stamp; 0 when no stamp parses.
+	 * Same layouts as chipAgeMinutes (which now derives its age from this). */
+	function chipStampMs(text) {
 		var now = new Date();
-		var m = /(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})/.exec(text);
+		var m = text.match(/(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})/);
 		if (m) {
 			var d = new Date(now.getFullYear(), +m[1] - 1, +m[2], +m[3], +m[4]);
 			if (d.getTime() > Date.now() + 864e5) d = new Date(now.getFullYear() - 1, +m[1] - 1, +m[2], +m[3], +m[4]);
-			return (Date.now() - d.getTime()) / 60000;
+			return d.getTime();
 		}
-		m = /(\d{1,2}):(\d{2})\s*$/.exec(text);
-		if (m) {
-			var d2 = new Date(now.getFullYear(), now.getMonth(), now.getDate(), +m[1], +m[2]);
-			return (Date.now() - d2.getTime()) / 60000;
-		}
-		return 0; /* no stamp parsed: treat as fresh */
+		m = text.match(/(\d{1,2}):(\d{2})\s*$/);
+		if (m) return new Date(now.getFullYear(), now.getMonth(), now.getDate(), +m[1], +m[2]).getTime();
+		return 0;
+	}
+
+	function chipAgeMinutes(text) {
+		var stampMs = chipStampMs(text);
+		if (!stampMs) return 0; /* no stamp parsed: treat as fresh */
+		return (Date.now() - stampMs) / 60000;
 	}
 
 	/* does this batch touch the chat flow at all? (arming is flow-scoped:
@@ -562,7 +567,8 @@
 		var row = chip;
 		var flow = row.closest ? row.closest('[data-chat-flow]') : null;
 		if (flow) { while (row.parentElement && row.parentElement !== flow) row = row.parentElement; }
-		var age = chipAgeMinutes((row.textContent || '') + ' ' + (chip.textContent || ''));
+		var chipStampText = (row.textContent || '') + ' ' + (chip.textContent || '');
+		var age = chipAgeMinutes(chipStampText);
 		if (age > 10) return;
 		var turnTokens = readTurnUsage();
 		/* health sample: a REAL turn finish with nothing read is one strike
@@ -572,8 +578,23 @@
 		var sid = ensureRegistered();
 		/* per-session ledger (用户报告 09-20): the DOM chip is the official
 		 * number for the active turn — write THIS session's ledger entry so
-		 * a completion report can never read another conversation's burn */
-		if (turnTokens > 0) {
+		 * a completion report can never read another conversation's burn.
+		 * FLOOR guard (0.2.0 desktop, 用户报告 09-30): the server
+		 * assistant/message frame is now forwarded for the active session
+		 * too and ADDS per-reply deltas (multi-step turns sum correctly);
+		 * the chip only reads the NEWEST row's total, so a blind .set()
+		 * would CLOBBER the accumulated ledger back down to the last step.
+		 * The chip may only RAISE the ledger — it stays the backstop for
+		 * engines/hosts where the server frame never arrives.
+		 * STALE guard (same report round): a chip whose row stamp is from a
+		 * minute BEFORE the current turn's start belongs to the PREVIOUS
+		 * turn (back-to-back tasks race the chip render) — writing it would
+		 * pre-inflate the new turn's ledger by the whole previous burn.
+		 * Minute-granular stamps keep a +60s slack (same-minute chips pass). */
+		var stampMs = chipStampMs(chipStampText);
+		var startedAt = sessionTurnStartedAt(sid);
+		var staleChip = !!(stampMs && startedAt && startedAt > stampMs + 60000);
+		if (turnTokens > 0 && turnTokens > sessionTurnTokens(sid) && !staleChip) {
 			turnTokensBySession.set(sid, turnTokens);
 			if (typeof patchEndSnapshots === 'function') patchEndSnapshots(sid);
 		}

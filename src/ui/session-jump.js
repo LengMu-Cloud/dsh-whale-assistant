@@ -12,18 +12,22 @@
  * missing (old host / exotic builds): sidebar row click — opens the
  * conversation without moment positioning (openViaSidebarByTitle). */
 
-var jumpSessions = null; /* client-side sessions service (via the bridge) */
+var jumpSessions = null; /* 0.1.x sessions service via the bridge (has .open) */
+var jumpUiWorkspace = null; /* 0.2.0 uiWorkspace service face via the bridge (has .openSession) */
 var jumpRunSeq = 0; /* supersede counter: a newer jump cancels the paging loop */
 
-/** Wire the sessions service in (called by the client-module bridge, or at
- * boot when the bridge stashed it before whale eval). Idempotent. */
-function bindJumpSessions(sessions) {
+/** Wire the services in (called by the client-module bridges, or at boot when
+ * a bridge stashed its face before whale eval). Idempotent and ADDITIVE: each
+ * bridge callback delivers only ITS services, so an argument that is absent
+ * must never clear a binding another callback already made. */
+function bindJumpSessions(sessions, conversation, uiWorkspace) {
 	if (sessions && typeof sessions.open === 'function') jumpSessions = sessions;
+	if (uiWorkspace && typeof uiWorkspace.openSession === 'function') jumpUiWorkspace = uiWorkspace;
 }
 
-/** True once the sessions service is bridged (health jump item + callers). */
+/** True once any jump path is bridged (health jump item + callers). */
 function jumpReady() {
-	return !!jumpSessions;
+	return !!(jumpSessions || jumpUiWorkspace);
 }
 
 /** Parse a rendered message stamp into ms epoch; null when not a stamp.
@@ -58,16 +62,33 @@ function parseStamp(text) {
 
 /** Open the session and (with atMs) page back to it. Returns true when the
  * jump was initiated via the bridge; false lets callers fall back to the
- * sidebar. A newer call supersedes a still-running paging loop. */
+ * sidebar. A newer call supersedes a still-running paging loop.
+ *
+ * Two bridge shapes (第35章九):
+ * - 0.1.x: sessions.open(sessionId, atMs) — service-level open.
+ * - 0.2.0: uiWorkspace.openSession(sessionId) — the SAME call the sidebar's
+ *   row click makes (onOpen → openSession → replaceMain(id, signal, "reveal"):
+ *   switches the main view AND reveals the row in the sidebar). The moment
+ *   paging below is DOM-based and engine-agnostic, so it rides on either. */
 function openSessionAt(sessionId, atMs) {
-	if (!jumpSessions || !sessionId) return false;
-	try {
-		/* atMs forwarded on the call surface (same 2-arg shape as the old
-		 * hook) for observability; the REAL anchor consumer is the paging
-		 * loop below — the official open() ignores the extra arg */
-		jumpSessions.open(sessionId, atMs);
-	} catch (e) {
-		return false; /* open failed: callers fall back to the sidebar */
+	if (!sessionId) return false;
+	if (jumpSessions && typeof jumpSessions.open === 'function') {
+		try {
+			/* atMs forwarded on the call surface (same 2-arg shape as the old
+			 * hook) for observability; the REAL anchor consumer is the paging
+			 * loop below — the official open() ignores the extra arg */
+			jumpSessions.open(sessionId, atMs);
+		} catch (e) {
+			return false; /* open failed: callers fall back to the sidebar */
+		}
+	} else if (jumpUiWorkspace && typeof jumpUiWorkspace.openSession === 'function') {
+		try {
+			jumpUiWorkspace.openSession(sessionId);
+		} catch (e) {
+			return false; /* open failed: callers fall back to the sidebar */
+		}
+	} else {
+		return false; /* no bridge bound */
 	}
 	if (!atMs) return true;
 	var run = (jumpRunSeq = jumpRunSeq + 1);
@@ -179,6 +200,36 @@ function openSessionAt(sessionId, atMs) {
 	return true;
 }
 
+/** 0.2.0 desktop fallback (B-2, precise): the app sidebar is a virtualized
+ * rc-tree whose rows carry data-row-key="session:<sessionId>" — click the row
+ * by ID, immune to same-titled conversations and to the cordis inject gate
+ * that blocks the sessions bridge. Rows exist only while rendered (expanded
+ * project + viewport) — absent row = false, title fallback runs next. */
+function openViaSidebarById(sessionId) {
+	if (!sessionId) return false;
+	var items = document.querySelectorAll('[role="treeitem"]');
+	for (var i = 0; i < items.length; i++) {
+		var el = items[i];
+		var rk = el.getAttribute('data-row-key');
+		if (rk !== 'session:' + sessionId) {
+			/* react may keep it only in props (getAttribute misses on some trees) */
+			rk = null;
+			var own = Object.keys(el);
+			for (var k = 0; k < own.length; k++) {
+				if (own[k].indexOf('__reactProps$') === 0 && el[own[k]] && el[own[k]]['data-row-key']) {
+					rk = el[own[k]]['data-row-key'];
+					break;
+				}
+			}
+		}
+		if (rk === 'session:' + sessionId) {
+			el.click();
+			return true;
+		}
+	}
+	return false;
+}
+
 /** Fallback (no bridge): click the app sidebar's row whose text starts with
  * this title — opens the conversation without moment positioning. Ported
  * from the history drawer's openViaSidebar so BOTH jump entry points share
@@ -199,5 +250,12 @@ function openViaSidebarByTitle(title) {
 	return false;
 }
 
-/* boot pickup: the bridge may run before whale eval and stash the service */
-if (typeof window !== 'undefined' && window.__dshWhaleSessions) bindJumpSessions(window.__dshWhaleSessions);
+/* boot pickup: a bridge may run before whale eval and stash its service
+ * faces. GUARDED: a stashed value from a mismatched engine must never kill
+ * the whale boot — the bridges keep working; worst case jump stays unbound
+ * (sidebar fallbacks cover it). */
+if (typeof window !== 'undefined' && (window.__dshWhaleSessions || window.__dshWhaleUiWorkspace)) {
+	try {
+		bindJumpSessions(window.__dshWhaleSessions, window.__dshWhaleConversation, window.__dshWhaleUiWorkspace);
+	} catch (e) { /* service shape mismatch — jump unbound until the bridges rebind */ }
+}

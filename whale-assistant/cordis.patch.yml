@@ -1,5 +1,9 @@
-# dsh-whale-assistant bundle patch: inserts the dual-face plugin row into the web
-# profile roster (same recipe as the task-board specimen).
+# dsh-whale-assistant bundle patch: inserts the dual-face plugin row. Declared
+# via package.json `dsh.bundle.patch` (09-30) — the whale is a FIRST-CLASS
+# bundle: the launcher applies this row as a bundle layer (before the user's
+# profile patch), and the official plugin manager page lists it with an
+# enable/disable toggle (which appends a `disabled` override to the profile's
+# cordis.patch.yml, last-write-wins over this layer).
 - insert:
   - id: ui-whale-assistant
     name: '@lengmu-cloud/dsh-whale-assistant'

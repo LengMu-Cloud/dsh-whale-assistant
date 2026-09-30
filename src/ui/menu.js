@@ -242,6 +242,18 @@
 				openSettings();
 			});
 			menu.appendChild(settingsItem);
+			/* refresh (B-2 desktop): the official desktop binds NO F5/Ctrl+R —
+			 * plugin updates and recovery both need a page reload, and the
+			 * whale menu is the reachable way to get one */
+			var refreshItem = document.createElement('div');
+			refreshItem.className = 'dsh-whale-menu-item';
+			refreshItem.textContent = '🔄 刷新页面';
+			refreshItem.addEventListener('click', function (event) {
+				event.stopPropagation();
+				closeCtxMenu();
+				setTimeout(function () { location.reload(); }, 80);
+			});
+			menu.appendChild(refreshItem);
 			if (!ctxMenu) document.body.appendChild(menu);
 			ctxMenu = menu;
 			/* position near the cursor, flipping at the viewport edges — the
@@ -489,7 +501,8 @@
 			item('装扮与成就', '完成任务攒进度，解锁新装扮后去 右键菜单 → 🎨我的装扮 查看。');
 			sec('🙋 常见问题');
 			item('怎么没有声音？', '依次看：右键菜单 🔊 声音是否开 → 设置里音量 → 🎵 音色里对应通知是否选了"静音" → 是否在免打扰时段（深夜只记红标不出声）。');
-			item('通知突然不来了？', '多半是页面放久了过期：按 Ctrl+F5 刷新即可恢复。我自己的链路自检在 设置 → 🩺 运行状态 里，哪条失效会明说。');
+			item('通知突然不来了？', '多半是页面放久了过期：刷新页面即可恢复——官方桌面端没有 F5，用我的右键菜单 🔄 刷新页面；浏览器里按 Ctrl+F5。我自己的链路自检在 设置 → 🩺 运行状态 里，哪条失效会明说。');
+			item('插件更新了怎么加载新版？', '同样刷新页面：右键菜单 🔄 刷新页面（桌面端）或 Ctrl+F5（浏览器）——新版本在下次加载时自动生效。');
 			item('后台任务会打扰我吗？', '不会：只有完成/失败/需要你动手时才提醒，中间过程只在状态面板安静展示；深夜时段只记红标不出声。');
 			item('换浏览器历史还在吗？', '在——历史跟服务端走，同一台机器的桌面壳和各浏览器窗口看到同一份；跨机器不同步。');
 			panel.appendChild(list);
@@ -588,11 +601,11 @@
 					return function (event) {
 						event.stopPropagation();
 						closeCtxHistory();
-						if (openSessionAt(sessionId, endTime) || openViaSidebarByTitle(title)) {
+						if (openSessionAt(sessionId, endTime) || openViaSidebarById(sessionId) || openViaSidebarByTitle(title)) {
 							uiSay('正在跳转到该对话… 🐳', 1500, sessionId);
 							return;
 						}
-						uiSay('跳转失败：请按 Ctrl+F5 刷新页面后重试 🥲', 3000, sessionId);
+						uiSay('跳转失败：右键菜单 🔄 刷新页面后重试（浏览器可按 Ctrl+F5）🥲', 3000, sessionId);
 					};
 				})(rec.sessionId, rec.endTime || rec.at, rec.title));
 				list.appendChild(row);
@@ -1239,7 +1252,7 @@
 			}
 			var hint = document.createElement('div');
 			hint.className = 'dsh-whale-settings-section';
-			hint.textContent = '多数失效是页面过期：按 Ctrl+F5 刷新即可恢复；仍失效请看控制台 [🐋] 日志';
+			hint.textContent = '多数失效是页面过期：右键菜单 🔄 刷新页面（或浏览器 Ctrl+F5）即可恢复；仍失效请看控制台 [🐋] 日志';
 			panel.appendChild(hint);
 			/* footer via shared helper: ← 返回设置 / ✕ 关闭 */
 			mkPanelFoot(panel);

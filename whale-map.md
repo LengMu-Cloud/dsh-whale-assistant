@@ -51,7 +51,7 @@
 
 > Alpha adapter (inline module, M5 alpha-compat): synthesizes mux-equivalent event frames from DOM observations. dsh 0.1.2-alpha removed the WebSocket event mux; the web UI is per-request streaming + DOM rendering.  The gate POLICY lives in core/chip-gate.js as a pure function (unit tested); this file
 
-**ensureRegistered()** · **parseTokNum()** · **readTurnUsage()** · **applyPageTitleFallback()** · **seedActiveTitle()** · **synthOn()** · **synth()** · **feedSessionUsage()** · **chipAgeMinutes()** · **batchInFlow()** · **debugOn()** · **debugInject()** · **dumpComposer()** · **describeEl()** · **ensureToolSweep()** · **attach()**
+**ensureRegistered()** · **parseTokNum()** · **readTurnUsage()** · **applyPageTitleFallback()** · **seedActiveTitle()** · **synthOn()** · **synth()** · **feedSessionUsage()** · **chipStampMs()** · **chipAgeMinutes()** · **batchInFlow()** · **debugOn()** · **debugInject()** · **dumpComposer()** · **describeEl()** · **ensureToolSweep()** · **attach()**
 
 ## **src/core/dedup.js**
 
@@ -111,9 +111,9 @@
 
 ## **src/core/frames.js**（行切片）
 
-> Completed subtasks for one session since a moment — the run timer's "已完成 N 个子任务" count (see ui/status-panel.js).
+> When each session's CURRENT turn started (event.time at turn/start). The DOM usage chip (alpha-adapter) reads a row's rendered stamp — a chip whose stamp is OLDER than the current turn's start belongs to the PREVIOUS turn (back-to-back tasks race the chip render) and must not write the ledger, or th
 
-**isMainSession()** · **isFailedJob()** · **handleJobsFrame()** · **countJobsCompleted()** · **handleSubscribedFrame()** · **rememberTitle()** · **bookTitle()** · **clearTitleBook()** · **correctReports()** · **fetchSubagentLabel()** · **flushHeld()** · **handleProjectionFrame()** · **reportTurn()** · **handleEventFrame()** · **reportAttention()** · **handleAttentionFrame()** · **handleMuxPayload()**
+**isMainSession()** · **sessionTurnStartedAt()** · **isFailedJob()** · **handleJobsFrame()** · **countJobsCompleted()** · **handleSubscribedFrame()** · **rememberTitle()** · **bookTitle()** · **clearTitleBook()** · **correctReports()** · **fetchSubagentLabel()** · **flushHeld()** · **handleProjectionFrame()** · **reportTurn()** · **handleEventFrame()** · **reportAttention()** · **handleAttentionFrame()** · **handleMuxPayload()**
 
 ## **src/utils/fmt-title.js**（行切片）
 

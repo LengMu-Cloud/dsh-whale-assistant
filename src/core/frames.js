@@ -2,6 +2,19 @@
 		return typeof sessionId === 'string' && sessionId.indexOf(SESSION_ID_PREFIX) === 0;
 	}
 
+	/** When each session's CURRENT turn started (event.time at turn/start).
+	 * The DOM usage chip (alpha-adapter) reads a row's rendered stamp — a chip
+	 * whose stamp is OLDER than the current turn's start belongs to the
+	 * PREVIOUS turn (back-to-back tasks race the chip render) and must not
+	 * write the ledger, or the new turn's report starts pre-inflated by the
+	 * whole previous burn. Minute-granular stamps: comparisons keep a +60s
+	 * slack so a chip from the same displayed minute is never discarded. */
+	var turnStartedAtBySession = new Map();
+
+	function sessionTurnStartedAt(sessionId) {
+		return turnStartedAtBySession.get(sessionId) || 0;
+	}
+
 	function isFailedJob(job) {
 		if (job.status === 'failed') return true;
 		if (job.status !== 'completed') return false;
@@ -506,6 +519,12 @@
 			 * (No cancel of endPanelBackfill here — another session starting
 			 * a turn says nothing about THIS completion's pending backfill.) */
 			turnTokensBySession.set(frame.sessionId, 0);
+			/* stamp the start so a late PREVIOUS-turn chip can be recognized
+			 * and discarded by the DOM chip writer (alpha-adapter) */
+			turnStartedAtBySession.set(frame.sessionId, event.time || Date.now());
+			if (turnStartedAtBySession.size > 100) {
+				turnStartedAtBySession.delete(turnStartedAtBySession.keys().next().value);
+			}
 			/* long-task run timer (>2min ⇒ "⏳ 已运行" line in the panel) */
 			startRunTimer(frame.sessionId);
 		}

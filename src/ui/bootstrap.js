@@ -51,7 +51,7 @@
 					uiSay('找不到对应的对话 🥲', 2000, sessionId);
 					return;
 				}
-			} else if (openViaSidebarByTitle(sessionTitles.get(sessionId) || bookTitle(sessionId) || '')) {
+			} else if (openViaSidebarById(sessionId) || openViaSidebarByTitle(sessionTitles.get(sessionId) || bookTitle(sessionId) || '')) {
 				jumped = true;
 			}
 			if (!jumped) {

@@ -3,6 +3,25 @@
 所有对外可感知的变更按版本记录。当前版本见 `src/utils/constants.js` 的 `PATCH_VERSION`
 （构建时可用 `PATCH_VERSION=0.4.0 node build-whale.js` 覆盖）。
 
+## [未发布] - 2026-09-30
+
+### 修复（0.2.0 桌面三行报告回归，用户报告）
+- **完成通知的「此次任务消耗」行缺失/整块消失（0.2.0 桌面）**：事件转发门沿用了 0.1.x 的假设「活动会话的用量由可见 DOM 芯片兜底」，把**活动会话**的 `assistant/message` 帧挡在 `feedEventFrame` 门外——0.2.0 桌面上芯片渲染晚 0.4s+ 且时有时无，完成面板首渲丢「此次任务」行、靠 800ms 回填抢救、芯片没接住的历史行直接记 0。现改为**活动会话也转发**（服务端帧比 turn/end 早 ~1ms 到，权威源；活体实证：驱动 `_pollConsume`，活动帧被丢、背景帧入账）。配套：DOM 芯片路径加**地板守卫**（芯片只读最新一行的总量，盲写会 clobber 多步回合的服务端累计——只允许抬高、不许拉低，服务端帧缺席时仍兜底）。真机复验：完成面板**首渲三行齐**、无回填闪烁，服务端计数器入账
+- **连发任务被上一轮芯片抬高账本（同源边缘，防患）**：turn/start 清零后，上一轮的用量芯片若渲染更晚会把账本整块抬回去，本轮报告 = 上一轮全部 + 本轮增量。现按芯片行内**渲染时间戳**判代（行戳早于本轮开始一分钟以上 = 上一轮的芯片，弃写；分钟粒度留 +60s 余量，同分钟芯片不受影响）。真机连发两轮 14001→14013 实证无膨胀
+- **e2e 工具两处**：菜单数 6→7（上轮加刷新行时漏改 run-e2e.js）；场景 2 清理与问题行的写穿保存赛跑（remove 先落盘读到 removed:0，在途 save 又把行复活）——清理前等 900ms
+- **跳转失败提示漏网**：历史抽屉跳转失败的 toast 仍写「按 Ctrl+F5」（桌面端没有 F5，即用户截图那条）——改双路径指引
+
+### 新增（0.2.0 适配第二批：跳转桥 + bundle 纳管）
+- **0.2.0 跳转桥适配（第35章欠账清偿，`jumpReady` 自 B-2 以来首次为真）**：考古引擎源码（asar 提取 dsh-client-ui-workspace）定位官方导航链——侧栏行点击 `onOpen(node.id)` → **`uiWorkspace.openSession(id)`** → `replaceMain(id, signal, "reveal")`（切主视图+侧栏 reveal）。桥新增**独立** `ctx.inject(['uiWorkspace'])`（与 `['sessions','conversation']` 分列——合并在 0.1.x web 上会因 uiWorkspace 永不到达而吊死整桥），服务面 stash+绑定全自守卫；`bindJumpSessions` 改**加性绑定**（各路回调只带自己的服务，绝不互清），`openSessionAt` 按服务形状分流（0.1.x `sessions.open` / 0.2.0 `uiWorkspace.openSession`）。真机验证：跨会话跳转落点正确、原视图可复原；跳转链升回「桥 → ID 兜底 → 标题兜底」全开
+- **dsh.bundle 一等组合包纳管**：包 manifest 声明 `dsh.bundle.patch: ./cordis.patch.yml`（自带注册行），profile `dsh.profile.bundles` 引用即成——**官方插件管理页「已安装」出现鲸鱼卡片（名称+描述+启停开关）**，启停写 profile patch 覆盖项、双引擎（0.1.7-rc.2/0.2.0-rc.2）均支持；desktop 与 web 两套 profile 已迁移（手工 insert 行退役），`ensure-whale-assistant.ps1` 改 bundle 模式（依赖并入已有 dependencies 块防重复键、bundles 数组内查重、旧 insert 行自动清退+混合块警告不误删），合成往返+幂等双测通过。**警告**：手工往 profile patch 加同 id insert 行=双注册双鲸鱼
+
+## [未发布] - 2026-09-29
+
+### 变更（B-2 官方桌面迁移）
+- **官方桌面端适配（0.2.0-rc.2 实测）**：桌面端独占 `profiles/desktop`，插件三件套（link 依赖 + junction + patch 注册行）注册进去即得全功能——通知/报告/历史/红标实测全绿；`whale-assistant/client.js` 的 sessions 桥改为注入 `['sessions','conversation']` 双服务（0.2.0 起 `sessions.scope(id).conversation` 为 inject 门控属性，且 scope 面须在注入回调的 ctx 代理作用域内寻址）；启动拾取全面加守卫（服务形状错配只降级跳转，绝不炸启动）。**跳转兜底重写**：桌面侧栏是虚拟化 rc-tree、行带 `data-row-key="session:<id>"`——新增 `openViaSidebarById` 按 ID 精准点击（同名对话不再点错行），接入历史单击与通知双击两条链（桥未适配 0.2.0 manager 架构，`jumpReady=false` 期间由它兜底；目标行未在侧栏渲染（项目折叠/滚动出视口）时仍会降级提示——随 0.2.0 桥适配一并解决）
+- 自制桌面壳退役：官方桌面端发布后，`shell/` 源码保留供参考、`scripts/fix-shell.ps1` 不再需要；README 组件关系表改版（官方桌面端=推荐载体）
+- **右键菜单新增「🔄 刷新页面」**：官方桌面端不绑 F5/Ctrl+R（实测 asar 无加速器），插件更新加载与页面恢复都没有入口——鲸鱼菜单补上这个缺口；使用说明与运行状态面板的刷新指引同步改写（桌面端指向菜单行，浏览器仍 Ctrl+F5）
+
 ## [未发布] - 2026-09-14
 
 ### 修复

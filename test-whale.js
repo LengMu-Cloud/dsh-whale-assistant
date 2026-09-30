@@ -1403,6 +1403,32 @@ async function main() {
 	assert.strictEqual(PP.pressurePercentOf({ pressureTokens: 1200000, contextWindow: 1000000 }), 100, 'clamped at 100 like the official meter');
 	assert.strictEqual(PP.pressurePercentOf({ pressureTokens: 0, contextWindow: 100 }), 0, 'a real zero sample is honest');
 
+	/* 0.2.0 desktop (用户报告 09-30): the poll gate dropped the ACTIVE
+	 * session's assistant/message (old assumption: the visible DOM chip
+	 * covers it) — on the official desktop the chip is 0.4s+ late and
+	 * sometimes never renders, so completion panels lost the 此次任务
+	 * line and history recorded 0 tokens. Proven live by driving
+	 * _pollConsume: active frame dropped, background counted. The gate
+	 * now forwards the frame for EVERY session; this test drives the
+	 * full poll path (not the handleMuxPayload shortcut) to keep it so. */
+	const envAm = makeEnv();
+	envAm.ready();
+	const AM = envAm.sandbox.__dshWhale;
+	const statusAm = () => envAm.whale.children.find((c) => c.className === 'dsh-whale-status');
+	AM._setHoldMs(200);
+	envAm.setFetch(() => Promise.resolve({ ok: false, json: () => Promise.resolve({}) }));
+	envAm.sandbox.localStorage.setItem('dsh.sessions.current', JSON.stringify({ sessionId: 'session-am1' }));
+	AM.handleMuxPayload({ type: 'session/projection', sessionId: 'session-am1', key: 'title', value: '活动会话用量', seq: 1 });
+	await sleep(30);
+	AM._pollConsume([
+		{ type: 'session/event', sessionId: 'session-am1', event: { type: 'turn/start', time: Date.now(), data: {} }, seq: 2 },
+		{ type: 'session/event', sessionId: 'session-am1', event: { type: 'assistant/message', time: Date.now(), data: { turn: 1, step: 1, usage: { inputTokens: 1000000, outputTokens: 200000, cacheReadTokens: 300000 } } }, seq: 3 },
+		{ type: 'session/event', sessionId: 'session-am1', event: { type: 'turn/end', time: Date.now() + 50, data: { reason: { kind: 'completed' } } }, seq: 4 }
+	], 'boot-am');
+	await sleep(120);
+	assert.ok(statusAm() && statusAm().textContent.includes('此次任务消耗 1.5M tokens'), `active-session turn burn counted via the poll path on FIRST render: ${statusAm() && statusAm().textContent}`);
+	assert.ok(envAm.bubble().textContent.includes('完成了'), 'completion still announced');
+
 	/* 0.4.0 session jump: the retired client.js patch now runs in-house —
 	 * bridge bind, open via the bridge, fallback tail when unbound */
 	const envJ = makeEnv();
@@ -1416,6 +1442,26 @@ async function main() {
 	assert.strictEqual(J.openSessionAt('session-j1'), true, 'open initiated via the bridge');
 	assert.deepStrictEqual(openedJp, ['session-j1'], 'sessions.open called with the session id');
 	assert.strictEqual(J.openSessionAt(''), false, 'empty session id refuses');
+
+	/* 0.2.0 jump adaptation (第35章九): the bridge hands the uiWorkspace face
+	 * (openSession) instead of a sessions service with .open — the sidebar's
+	 * own navigation call. Binding is ADDITIVE across bridge callbacks: a
+	 * later partial callback (uiWorkspace only) must not clear an earlier
+	 * sessions binding, and vice versa. */
+	const envJ2 = makeEnv();
+	envJ2.ready();
+	const J2 = envJ2.sandbox.__dshWhale;
+	assert.strictEqual(J2.jumpReady(), false, 'no bridge yet -> jump not ready (0.2.0 env)');
+	const openedUw = [];
+	J2.bindJumpSessions({ rootCtx: {}, manager: {} }, null, null); /* 0.2.0 sessions shape without .open binds NOTHING */
+	assert.strictEqual(J2.jumpReady(), false, 'manager-shape sessions without .open does not bind');
+	J2.bindJumpSessions(null, null, { openSession: (sid) => openedUw.push(sid) }); /* uiWorkspace bridge delivers */
+	assert.strictEqual(J2.jumpReady(), true, 'uiWorkspace face -> jump ready');
+	assert.strictEqual(J2.openSessionAt('session-j2'), true, 'open initiated via uiWorkspace');
+	assert.deepStrictEqual(openedUw, ['session-j2'], 'uiWorkspace.openSession called with the session id');
+	J2.bindJumpSessions(null, null, null); /* a serviceless callback must not unbind */
+	assert.strictEqual(J2.jumpReady(), true, 'empty callback keeps existing bindings');
+	assert.strictEqual(J2.openSessionAt('session-j2b'), true, 'still routable after an empty callback');
 	assert.strictEqual(J._parseStamp('2026-09-13 10:30'), new Date(2026, 8, 13, 10, 30).getTime(), 'ISO-ish stamp parses');
 	assert.strictEqual(J._parseStamp('9月13日 10:30'), new Date(new Date().getFullYear(), 8, 13, 10, 30).getTime(), 'CJK stamp parses');
 	assert.strictEqual(J._parseStamp('hello'), null, 'non-stamp text -> null');
@@ -1820,7 +1866,7 @@ async function main() {
 	const mEl = ctxMenuEl();
 	assert.ok(mEl, 'menu element exists');
 	const mItems = mEl.children.filter((c) => c.className === 'dsh-whale-menu-item').map((c) => c.textContent);
-	assert.strictEqual(mItems.length, 6, `6 menu items: ${mItems.join(' | ')}`);
+	assert.strictEqual(mItems.length, 7, `7 menu items: ${mItems.join(' | ')}`);
 	assert.ok(mEl.children.some((c) => c.className === 'dsh-whale-menu-sep'), 'group separator present (#4)');
 	assert.ok(mItems[0].includes('提醒'), 'reminder first in the quick group (#4)');
 	assert.ok(mItems[1].includes('声音'), 'sound toggle present');
@@ -1828,6 +1874,7 @@ async function main() {
 	assert.ok(mItems[3].includes('装扮'), 'wardrobe entry present');
 	assert.ok(mItems[4].includes('历史'), 'history entry present');
 	assert.ok(mItems[5].includes('设置'), 'settings entry present');
+	assert.ok(mItems[6].includes('刷新页面'), 'refresh row present (0.2.0 desktop has no F5)');
 	const mHead = mEl.children.find((c) => c.className === 'dsh-whale-menu-head');
 	assert.ok(mHead.textContent.includes('🐳') && mHead.textContent.includes('待命中'), `mood header: ${mHead.textContent}`);
 	/* clicking outside closes the menu */

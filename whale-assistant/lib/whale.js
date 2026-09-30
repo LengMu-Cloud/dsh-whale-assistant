@@ -976,20 +976,25 @@ if (typeof module !== 'undefined' && module.exports) {
 	 * "9月1日 02:17") is. A conversation switch re-renders the WHOLE
 	 * log and historical chips flow through this observer — they carry
 	 * old stamps; a LIVE turn just ended, so its stamp is fresh. */
-	function chipAgeMinutes(text) {
+	/** Absolute epoch ms of a row's rendered stamp; 0 when no stamp parses.
+	 * Same layouts as chipAgeMinutes (which now derives its age from this). */
+	function chipStampMs(text) {
 		var now = new Date();
-		var m = /(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})/.exec(text);
+		var m = text.match(/(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})/);
 		if (m) {
 			var d = new Date(now.getFullYear(), +m[1] - 1, +m[2], +m[3], +m[4]);
 			if (d.getTime() > Date.now() + 864e5) d = new Date(now.getFullYear() - 1, +m[1] - 1, +m[2], +m[3], +m[4]);
-			return (Date.now() - d.getTime()) / 60000;
+			return d.getTime();
 		}
-		m = /(\d{1,2}):(\d{2})\s*$/.exec(text);
-		if (m) {
-			var d2 = new Date(now.getFullYear(), now.getMonth(), now.getDate(), +m[1], +m[2]);
-			return (Date.now() - d2.getTime()) / 60000;
-		}
-		return 0; /* no stamp parsed: treat as fresh */
+		m = text.match(/(\d{1,2}):(\d{2})\s*$/);
+		if (m) return new Date(now.getFullYear(), now.getMonth(), now.getDate(), +m[1], +m[2]).getTime();
+		return 0;
+	}
+
+	function chipAgeMinutes(text) {
+		var stampMs = chipStampMs(text);
+		if (!stampMs) return 0; /* no stamp parsed: treat as fresh */
+		return (Date.now() - stampMs) / 60000;
 	}
 
 	/* does this batch touch the chat flow at all? (arming is flow-scoped:
@@ -1289,7 +1294,8 @@ if (typeof module !== 'undefined' && module.exports) {
 		var row = chip;
 		var flow = row.closest ? row.closest('[data-chat-flow]') : null;
 		if (flow) { while (row.parentElement && row.parentElement !== flow) row = row.parentElement; }
-		var age = chipAgeMinutes((row.textContent || '') + ' ' + (chip.textContent || ''));
+		var chipStampText = (row.textContent || '') + ' ' + (chip.textContent || '');
+		var age = chipAgeMinutes(chipStampText);
 		if (age > 10) return;
 		var turnTokens = readTurnUsage();
 		/* health sample: a REAL turn finish with nothing read is one strike
@@ -1299,8 +1305,23 @@ if (typeof module !== 'undefined' && module.exports) {
 		var sid = ensureRegistered();
 		/* per-session ledger (用户报告 09-20): the DOM chip is the official
 		 * number for the active turn — write THIS session's ledger entry so
-		 * a completion report can never read another conversation's burn */
-		if (turnTokens > 0) {
+		 * a completion report can never read another conversation's burn.
+		 * FLOOR guard (0.2.0 desktop, 用户报告 09-30): the server
+		 * assistant/message frame is now forwarded for the active session
+		 * too and ADDS per-reply deltas (multi-step turns sum correctly);
+		 * the chip only reads the NEWEST row's total, so a blind .set()
+		 * would CLOBBER the accumulated ledger back down to the last step.
+		 * The chip may only RAISE the ledger — it stays the backstop for
+		 * engines/hosts where the server frame never arrives.
+		 * STALE guard (same report round): a chip whose row stamp is from a
+		 * minute BEFORE the current turn's start belongs to the PREVIOUS
+		 * turn (back-to-back tasks race the chip render) — writing it would
+		 * pre-inflate the new turn's ledger by the whole previous burn.
+		 * Minute-granular stamps keep a +60s slack (same-minute chips pass). */
+		var stampMs = chipStampMs(chipStampText);
+		var startedAt = sessionTurnStartedAt(sid);
+		var staleChip = !!(stampMs && startedAt && startedAt > stampMs + 60000);
+		if (turnTokens > 0 && turnTokens > sessionTurnTokens(sid) && !staleChip) {
 			turnTokensBySession.set(sid, turnTokens);
 			if (typeof patchEndSnapshots === 'function') patchEndSnapshots(sid);
 		}
@@ -1681,11 +1702,19 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			});
 			return;
 		}
-		if (type === 'assistant/message' && !isActive) {
-			/* per-model-reply usage: the ONLY source of THIS-turn token burn
-			 * for a background session (the DOM chip path cannot see it).
-			 * Without this the completion panel re-showed the previous
-			 * foreground turn's stale count (live-verified 2026-09-03). */
+		if (type === 'assistant/message') {
+			/* per-model-reply usage: THE authoritative source of THIS-turn
+			 * token burn for EVERY session — it lands ~1ms before turn/end,
+			 * so the completion report reads a full ledger on first render.
+			 * Forwarded for BACKGROUND sessions since 2026-09-03 (the DOM
+			 * chip cannot see them); the old `&& !isActive` gate also
+			 * dropped the ACTIVE session's frame on the 0.1.x assumption
+			 * that the visible chip covers it — on the 0.2.0 desktop the
+			 * chip renders 0.4s+ late and sometimes never, so completion
+			 * panels lost the 此次任务 line entirely (用户报告 09-30, proven
+			 * by driving _pollConsume live: active frame dropped, background
+			 * counted). The chip path (alpha-adapter) keeps its floor-guard
+			 * write, so both engines stay correct when this frame is absent. */
 			touchActivity();
 			handleMuxPayload({
 				type: 'session/event',
@@ -3139,6 +3168,19 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		return typeof sessionId === 'string' && sessionId.indexOf(SESSION_ID_PREFIX) === 0;
 	}
 
+	/** When each session's CURRENT turn started (event.time at turn/start).
+	 * The DOM usage chip (alpha-adapter) reads a row's rendered stamp — a chip
+	 * whose stamp is OLDER than the current turn's start belongs to the
+	 * PREVIOUS turn (back-to-back tasks race the chip render) and must not
+	 * write the ledger, or the new turn's report starts pre-inflated by the
+	 * whole previous burn. Minute-granular stamps: comparisons keep a +60s
+	 * slack so a chip from the same displayed minute is never discarded. */
+	var turnStartedAtBySession = new Map();
+
+	function sessionTurnStartedAt(sessionId) {
+		return turnStartedAtBySession.get(sessionId) || 0;
+	}
+
 	function isFailedJob(job) {
 		if (job.status === 'failed') return true;
 		if (job.status !== 'completed') return false;
@@ -3643,6 +3685,12 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			 * (No cancel of endPanelBackfill here — another session starting
 			 * a turn says nothing about THIS completion's pending backfill.) */
 			turnTokensBySession.set(frame.sessionId, 0);
+			/* stamp the start so a late PREVIOUS-turn chip can be recognized
+			 * and discarded by the DOM chip writer (alpha-adapter) */
+			turnStartedAtBySession.set(frame.sessionId, event.time || Date.now());
+			if (turnStartedAtBySession.size > 100) {
+				turnStartedAtBySession.delete(turnStartedAtBySession.keys().next().value);
+			}
 			/* long-task run timer (>2min ⇒ "⏳ 已运行" line in the panel) */
 			startRunTimer(frame.sessionId);
 		}
@@ -4432,7 +4480,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					uiSay('找不到对应的对话 🥲', 2000, sessionId);
 					return;
 				}
-			} else if (openViaSidebarByTitle(sessionTitles.get(sessionId) || bookTitle(sessionId) || '')) {
+			} else if (openViaSidebarById(sessionId) || openViaSidebarByTitle(sessionTitles.get(sessionId) || bookTitle(sessionId) || '')) {
 				jumped = true;
 			}
 			if (!jumped) {
@@ -4802,6 +4850,18 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				openSettings();
 			});
 			menu.appendChild(settingsItem);
+			/* refresh (B-2 desktop): the official desktop binds NO F5/Ctrl+R —
+			 * plugin updates and recovery both need a page reload, and the
+			 * whale menu is the reachable way to get one */
+			var refreshItem = document.createElement('div');
+			refreshItem.className = 'dsh-whale-menu-item';
+			refreshItem.textContent = '🔄 刷新页面';
+			refreshItem.addEventListener('click', function (event) {
+				event.stopPropagation();
+				closeCtxMenu();
+				setTimeout(function () { location.reload(); }, 80);
+			});
+			menu.appendChild(refreshItem);
 			if (!ctxMenu) document.body.appendChild(menu);
 			ctxMenu = menu;
 			/* position near the cursor, flipping at the viewport edges — the
@@ -5049,7 +5109,8 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			item('装扮与成就', '完成任务攒进度，解锁新装扮后去 右键菜单 → 🎨我的装扮 查看。');
 			sec('🙋 常见问题');
 			item('怎么没有声音？', '依次看：右键菜单 🔊 声音是否开 → 设置里音量 → 🎵 音色里对应通知是否选了"静音" → 是否在免打扰时段（深夜只记红标不出声）。');
-			item('通知突然不来了？', '多半是页面放久了过期：按 Ctrl+F5 刷新即可恢复。我自己的链路自检在 设置 → 🩺 运行状态 里，哪条失效会明说。');
+			item('通知突然不来了？', '多半是页面放久了过期：刷新页面即可恢复——官方桌面端没有 F5，用我的右键菜单 🔄 刷新页面；浏览器里按 Ctrl+F5。我自己的链路自检在 设置 → 🩺 运行状态 里，哪条失效会明说。');
+			item('插件更新了怎么加载新版？', '同样刷新页面：右键菜单 🔄 刷新页面（桌面端）或 Ctrl+F5（浏览器）——新版本在下次加载时自动生效。');
 			item('后台任务会打扰我吗？', '不会：只有完成/失败/需要你动手时才提醒，中间过程只在状态面板安静展示；深夜时段只记红标不出声。');
 			item('换浏览器历史还在吗？', '在——历史跟服务端走，同一台机器的桌面壳和各浏览器窗口看到同一份；跨机器不同步。');
 			panel.appendChild(list);
@@ -5148,11 +5209,11 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					return function (event) {
 						event.stopPropagation();
 						closeCtxHistory();
-						if (openSessionAt(sessionId, endTime) || openViaSidebarByTitle(title)) {
+						if (openSessionAt(sessionId, endTime) || openViaSidebarById(sessionId) || openViaSidebarByTitle(title)) {
 							uiSay('正在跳转到该对话… 🐳', 1500, sessionId);
 							return;
 						}
-						uiSay('跳转失败：请按 Ctrl+F5 刷新页面后重试 🥲', 3000, sessionId);
+						uiSay('跳转失败：右键菜单 🔄 刷新页面后重试（浏览器可按 Ctrl+F5）🥲', 3000, sessionId);
 					};
 				})(rec.sessionId, rec.endTime || rec.at, rec.title));
 				list.appendChild(row);
@@ -5799,7 +5860,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			}
 			var hint = document.createElement('div');
 			hint.className = 'dsh-whale-settings-section';
-			hint.textContent = '多数失效是页面过期：按 Ctrl+F5 刷新即可恢复；仍失效请看控制台 [🐋] 日志';
+			hint.textContent = '多数失效是页面过期：右键菜单 🔄 刷新页面（或浏览器 Ctrl+F5）即可恢复；仍失效请看控制台 [🐋] 日志';
 			panel.appendChild(hint);
 			/* footer via shared helper: ← 返回设置 / ✕ 关闭 */
 			mkPanelFoot(panel);
@@ -6315,18 +6376,22 @@ function endFiredRecently(sessionId, failMs, anyMs) {
  * missing (old host / exotic builds): sidebar row click — opens the
  * conversation without moment positioning (openViaSidebarByTitle). */
 
-var jumpSessions = null; /* client-side sessions service (via the bridge) */
+var jumpSessions = null; /* 0.1.x sessions service via the bridge (has .open) */
+var jumpUiWorkspace = null; /* 0.2.0 uiWorkspace service face via the bridge (has .openSession) */
 var jumpRunSeq = 0; /* supersede counter: a newer jump cancels the paging loop */
 
-/** Wire the sessions service in (called by the client-module bridge, or at
- * boot when the bridge stashed it before whale eval). Idempotent. */
-function bindJumpSessions(sessions) {
+/** Wire the services in (called by the client-module bridges, or at boot when
+ * a bridge stashed its face before whale eval). Idempotent and ADDITIVE: each
+ * bridge callback delivers only ITS services, so an argument that is absent
+ * must never clear a binding another callback already made. */
+function bindJumpSessions(sessions, conversation, uiWorkspace) {
 	if (sessions && typeof sessions.open === 'function') jumpSessions = sessions;
+	if (uiWorkspace && typeof uiWorkspace.openSession === 'function') jumpUiWorkspace = uiWorkspace;
 }
 
-/** True once the sessions service is bridged (health jump item + callers). */
+/** True once any jump path is bridged (health jump item + callers). */
 function jumpReady() {
-	return !!jumpSessions;
+	return !!(jumpSessions || jumpUiWorkspace);
 }
 
 /** Parse a rendered message stamp into ms epoch; null when not a stamp.
@@ -6361,16 +6426,33 @@ function parseStamp(text) {
 
 /** Open the session and (with atMs) page back to it. Returns true when the
  * jump was initiated via the bridge; false lets callers fall back to the
- * sidebar. A newer call supersedes a still-running paging loop. */
+ * sidebar. A newer call supersedes a still-running paging loop.
+ *
+ * Two bridge shapes (第35章九):
+ * - 0.1.x: sessions.open(sessionId, atMs) — service-level open.
+ * - 0.2.0: uiWorkspace.openSession(sessionId) — the SAME call the sidebar's
+ *   row click makes (onOpen → openSession → replaceMain(id, signal, "reveal"):
+ *   switches the main view AND reveals the row in the sidebar). The moment
+ *   paging below is DOM-based and engine-agnostic, so it rides on either. */
 function openSessionAt(sessionId, atMs) {
-	if (!jumpSessions || !sessionId) return false;
-	try {
-		/* atMs forwarded on the call surface (same 2-arg shape as the old
-		 * hook) for observability; the REAL anchor consumer is the paging
-		 * loop below — the official open() ignores the extra arg */
-		jumpSessions.open(sessionId, atMs);
-	} catch (e) {
-		return false; /* open failed: callers fall back to the sidebar */
+	if (!sessionId) return false;
+	if (jumpSessions && typeof jumpSessions.open === 'function') {
+		try {
+			/* atMs forwarded on the call surface (same 2-arg shape as the old
+			 * hook) for observability; the REAL anchor consumer is the paging
+			 * loop below — the official open() ignores the extra arg */
+			jumpSessions.open(sessionId, atMs);
+		} catch (e) {
+			return false; /* open failed: callers fall back to the sidebar */
+		}
+	} else if (jumpUiWorkspace && typeof jumpUiWorkspace.openSession === 'function') {
+		try {
+			jumpUiWorkspace.openSession(sessionId);
+		} catch (e) {
+			return false; /* open failed: callers fall back to the sidebar */
+		}
+	} else {
+		return false; /* no bridge bound */
 	}
 	if (!atMs) return true;
 	var run = (jumpRunSeq = jumpRunSeq + 1);
@@ -6482,6 +6564,36 @@ function openSessionAt(sessionId, atMs) {
 	return true;
 }
 
+/** 0.2.0 desktop fallback (B-2, precise): the app sidebar is a virtualized
+ * rc-tree whose rows carry data-row-key="session:<sessionId>" — click the row
+ * by ID, immune to same-titled conversations and to the cordis inject gate
+ * that blocks the sessions bridge. Rows exist only while rendered (expanded
+ * project + viewport) — absent row = false, title fallback runs next. */
+function openViaSidebarById(sessionId) {
+	if (!sessionId) return false;
+	var items = document.querySelectorAll('[role="treeitem"]');
+	for (var i = 0; i < items.length; i++) {
+		var el = items[i];
+		var rk = el.getAttribute('data-row-key');
+		if (rk !== 'session:' + sessionId) {
+			/* react may keep it only in props (getAttribute misses on some trees) */
+			rk = null;
+			var own = Object.keys(el);
+			for (var k = 0; k < own.length; k++) {
+				if (own[k].indexOf('__reactProps$') === 0 && el[own[k]] && el[own[k]]['data-row-key']) {
+					rk = el[own[k]]['data-row-key'];
+					break;
+				}
+			}
+		}
+		if (rk === 'session:' + sessionId) {
+			el.click();
+			return true;
+		}
+	}
+	return false;
+}
+
 /** Fallback (no bridge): click the app sidebar's row whose text starts with
  * this title — opens the conversation without moment positioning. Ported
  * from the history drawer's openViaSidebar so BOTH jump entry points share
@@ -6502,8 +6614,15 @@ function openViaSidebarByTitle(title) {
 	return false;
 }
 
-/* boot pickup: the bridge may run before whale eval and stash the service */
-if (typeof window !== 'undefined' && window.__dshWhaleSessions) bindJumpSessions(window.__dshWhaleSessions);
+/* boot pickup: a bridge may run before whale eval and stash its service
+ * faces. GUARDED: a stashed value from a mismatched engine must never kill
+ * the whale boot — the bridges keep working; worst case jump stays unbound
+ * (sidebar fallbacks cover it). */
+if (typeof window !== 'undefined' && (window.__dshWhaleSessions || window.__dshWhaleUiWorkspace)) {
+	try {
+		bindJumpSessions(window.__dshWhaleSessions, window.__dshWhaleConversation, window.__dshWhaleUiWorkspace);
+	} catch (e) { /* service shape mismatch — jump unbound until the bridges rebind */ }
+}
 /* ---- module: src/core/exports.js ---- */
 
 	if (document.readyState === 'loading') {

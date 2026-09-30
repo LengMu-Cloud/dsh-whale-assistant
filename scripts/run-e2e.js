@@ -7,7 +7,7 @@
  *
  *   1. whale present      — #dsh-whale exists, version is semver
  *   2. badge read / clear — synthetic attention → badge up → read → clear
- *   3. right-click menu   — menu renders with the six items
+ *   3. right-click menu   — menu renders with the seven items
  *   4. completion pairing — synthetic turn/end pairs bubble + token panel
  *
  * Exit codes: 0 = all pass OR skipped (CDP port unreachable / web-version
@@ -52,11 +52,18 @@ const SCENARIOS = [
       for (var i = 0; i < keep.length; i++) h.push(keep[i]);
       try { localStorage.setItem('dsh-whale:history', JSON.stringify({ v: 1, data: keep })); } catch (e) {}
       /* save is merge-only (deletions cannot propagate through it): the
-       * surgical removal goes through the debug route */
-      return fetch('/api/whale-assistant/debug', { method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ kind: 'history-remove', sessionId: 'session-e2e' }) })
-        .then(function(r){ return r.json(); })
-        .then(function(j){ return JSON.stringify({ unreadAtEnd: W.unreadCount(), removed: j.removed }); });
+       * surgical removal goes through the debug route. The attention row's
+       * own write-through save POST races this remove on the server file —
+       * a remove that lands first reads a file without the row (removed:0)
+       * and the in-flight save resurrects it. Wait out the loopback save. */
+      return new Promise(function(done){
+        setTimeout(function(){
+          fetch('/api/whale-assistant/debug', { method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ kind: 'history-remove', sessionId: 'session-e2e' }) })
+            .then(function(r){ return r.json(); })
+            .then(function(j){ done(JSON.stringify({ unreadAtEnd: W.unreadCount(), removed: j.removed })); });
+        }, 900);
+      });
     })()`,
     check(r) { return Number(r.unreadAfterAsk) >= 1 && r.badgeVisible === 'block'; },
     afterCheck(r) { return Number(r.unreadAtEnd) === 0 && Number(r.removed) >= 1; },
@@ -76,8 +83,8 @@ const SCENARIOS = [
       return JSON.stringify({ open: open, count: items.length,
         hasManual: items.some(function(t){ return t.indexOf('使用说明') >= 0; }) });
     })()`,
-    check(r) { return r.open && r.count === 6 && r.hasManual; },
-    ok(r) { return 'menu open, ' + r.count + ' items, 使用说明 present'; }
+    check(r) { return r.open && r.count === 7 && r.hasManual; },
+    ok(r) { return 'menu open, ' + r.count + ' items (incl. 🔄 刷新页面), 使用说明 present'; }
   },
   {
     name: '4. completion pairs bubble + token panel',

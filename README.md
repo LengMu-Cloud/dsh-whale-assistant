@@ -14,22 +14,23 @@
 **只读事件流，不拦截、不修改任何任务行为。**
 
 > **定位一句话**：本仓库的核心交付物是 **DSH 的 Web UI 插件**（`src/` + `whale-assistant/`）；
-> `shell/` 里的桌面壳是**可选的DSH桌面封装**——插件只要求 DSH web 在跑，用浏览器直开、
-> 你自制的 Electron 封装、PWA 或本仓库的壳，装上都能用。
+> 插件只要求 DSH 在跑——**官方桌面端**（推荐，0.2.0 起插件注册进 `profiles/desktop` 即得）、
+> 浏览器直开、或本仓库 `shell/` 的自制壳（**遗留可选**，官方桌面已覆盖其全部增量）。
 
 > **前提**：本插件只对**已经在运行 DeepSeek Harness（DSH）**的环境有意义——DSH 本身的
 > 获取与安装不在本仓库范围内；还没有 DSH 的话，装上本插件不会有任何效果。
 
-## 组件关系（插件 / 壳 / 补丁——谁依赖谁）
+## 组件关系（插件 / 桌面端 / 壳——谁依赖谁）
 
 | 组件 | 必需？ | 是什么 | 与小鲸鱼的关系 |
 |---|---|---|---|
 | **插件本体**（`whale-assistant/` + `src/`） | ✅ 必需 | DSH cordis 插件：宿主半区（服务端路由 + 事件/投影订阅）+ 页面半区（`whale.js`） | **全部功能所在**，完全自包含——加载走官方模块清单，跳转走官方 sessions 服务，实时推送走自有路由 |
-| **桌面壳**（`shell/`） | 可选 | DSH 的 Electron 桌面封装 | 插件**不依赖壳**；壳的增量只有两点：黑屏防护/崩溃自恢复、独立进程（无标签页被丢弃问题） |
-| **壳补丁**（`scripts/fix-shell.ps1`，属于壳） | 装壳时需要 | 写入壳 asar 的稳定性修复 | 只改**壳自己的文件**，与插件功能零关系；DSH 升级后重跑的是它 |
+| **官方桌面端**（DSH 官网分发） | 推荐 | DSH 官方 Electron 桌面应用（独占 `profiles/desktop`） | 插件注册进 desktop profile 即得全功能（0.2.0-rc.2 实测：通知/报告/历史全绿）；**会话跳转适配中**（0.2.0 sessions API 改版，见交接报告第35章），临时用侧栏手动切会话 |
+| **浏览器** | 可选 | 任意现代浏览器直开 `dsh web` 的地址 | 与官方桌面共享同一份服务端数据 |
+| **桌面壳**（`shell/`，**遗留**） | — | 本仓库自制的 Electron 封装（09-03~09-28 使用） | **官方桌面端发布后已退役**（其增量——独立进程/后台不丢通知——官方桌面原生具备）；源码保留供参考，`scripts/fix-shell.ps1` 不再需要 |
 | ~~跳转补丁~~（**已退役**） | — | 0.3.x 时代的跳转靠一个手动注入脚本（**从未随本仓库分发**） | **0.4.0 起退役**：跳转已内置。若曾打过它，残留无害，下次 DSH 升级时自然消失 |
 
-依赖方向一句话：**壳可以没有，跳转补丁已成历史，插件自己就是全部。**
+依赖方向一句话：**官方桌面或浏览器二选一，插件自己就是全部；壳已成历史。**
 
 ---
 
@@ -37,10 +38,10 @@
 
 | 组件 | 要求 |
 |---|---|
-| DeepSeek Harness | 实测版本 **0.1.7-rc.2**（2026-09-28，由 0.1.5-rc.3 升级；npm `latest` 通道）；兼容下限见 `whale-assistant/package.json` 的 `dsh.engines`；插件只走公开插件接口与 HTTP 路由。0.1.5 起「上下文已用 N%」由内联文字改为发送按钮旁的环形件；插件压力数据 0.3.3 起改由 DSH 的 token-meter 服务端投影供给，报告压力行/压力色/提醒不受官方 UI 改版影响 |
+| DeepSeek Harness | 实测版本 **0.1.7-rc.2**（npm `latest`，2026-09-28）与 **0.2.0-rc.2**（官方桌面端捆绑，2026-09-29 桌面迁移实测）双版本；兼容下限见 `whale-assistant/package.json` 的 `dsh.engines`；插件只走公开插件接口与 HTTP 路由。0.1.5 起「上下文已用 N%」由内联文字改为发送按钮旁的环形件；插件压力数据 0.3.3 起改由 DSH 的 token-meter 服务端投影供给，报告压力行/压力色/提醒不受官方 UI 改版影响 |
 | Node.js | 跟随 DSH 自身要求即可（开发机 v24 实测）；仅改源码/构建/跑测试时需要 |
 | 操作系统 | 插件本体为纯 JS，跨平台；自动化脚本为 PowerShell（Windows），macOS/Linux 按下文手动步骤 |
-| 运行载体 | 任意现代浏览器；Electron 桌面壳为可选增强 |
+| 运行载体 | **官方桌面端**（推荐）/ 任意现代浏览器；本仓库 Electron 桌面壳已退役（遗留参考） |
 
 ## 能力矩阵（先看这个再安装）
 
@@ -62,7 +63,13 @@
 
 插件以 DSH cordis 插件形式安装到 DSH 服务（不是 npm 公共包，当前为开发版分发）。
 DSH 的 profile 目录默认在 `~/.dsh/profiles/web`（DSH 首次运行后生成），注册共三件套：
-**package.json 依赖 + node_modules 实体 + cordis.patch.yml 注册行**，缺一不可。
+**package.json 依赖 + node_modules 实体 + `dsh.profile.bundles` 清单**，缺一不可。
+（0.1.7-rc.2 与 0.2.0-rc.2 双引擎实测支持 bundle 声明；插件自带 `cordis.patch.yml`
+作为 bundle 层被启动器应用，并出现在**官方插件管理页**「已安装」里，带启停开关。）
+
+> **用官方桌面端的话**：桌面端独占 `~/.dsh/profiles/desktop`（与 web profile 不共享插件），
+> 首次启动桌面端生成该目录后，把下文命令里的 `profiles\web` 全部换成 `profiles\desktop`
+> 再跑一遍（两套 profile 可并存注册，互不影响）。官方桌面 0.2.0-rc.2 实测兼容。
 
 1. 把本仓库放到任意固定目录（下称 `<repo>`；路径含空格也可以，但后续命令里给含
    空格的路径加英文引号）。
@@ -72,8 +79,9 @@ DSH 的 profile 目录默认在 `~/.dsh/profiles/web`（DSH 首次运行后生�
    powershell -ExecutionPolicy Bypass -File <repo>\ensure-whale-assistant.ps1
    ```
 
-   脚本自动完成其中两件：profile `package.json` 写入 `link:` 依赖、`cordis.patch.yml`
-   追加注册行。剩下一件是把插件实体挂进 profile 的 node_modules（Windows junction）：
+   脚本自动完成其中两件：profile `package.json` 写入 `link:` 依赖、
+   `dsh.profile.bundles` 追加鲸鱼（并自动清退旧版手工 insert 注册行，防双注册）。
+   剩下一件是把插件实体挂进 profile 的 node_modules（Windows junction）：
 
    ```powershell
    New-Item -ItemType Directory -Force ~\.dsh\profiles\web\node_modules\@lengmu-cloud | Out-Null
@@ -85,17 +93,19 @@ DSH 的 profile 目录默认在 `~/.dsh/profiles/web`（DSH 首次运行后生�
    ```bash
    # profile package.json 的 dependencies 里加一行：
    #   "@lengmu-cloud/dsh-whale-assistant": "link:<repo>/whale-assistant"
+   # dsh.profile.bundles 数组里加一行：
+   #   "@lengmu-cloud/dsh-whale-assistant"
    mkdir -p ~/.dsh/profiles/web/node_modules/@lengmu-cloud
    ln -s <repo>/whale-assistant ~/.dsh/profiles/web/node_modules/@lengmu-cloud/dsh-whale-assistant
    ```
 
-   **注册行**（由脚本自动写入，手动编辑 `~/.dsh/cordis.patch.yml` 时照此格式——
-   注意是顶层 FLAT 数组，不要包在 `patch:` 里）：
+   **bundle 注册行**（包内 `cordis.patch.yml` 已自带，无需手写；此处仅为格式说明——
+   插件的 `dsh.bundle.patch` 指向它，启动器作为 bundle 层自动应用）：
 
    ```yaml
    - insert:
-       - id: ui-whale-assistant     # 唯一注册点；不要重复注册（会双鲸鱼双通知）
-         name: '@lengmu-cloud/dsh-whale-assistant'
+     - id: ui-whale-assistant       # 唯一注册点；同一 profile 只允许这一层声明它
+       name: '@lengmu-cloud/dsh-whale-assistant'
    ```
 
 3. 构建产物已随仓库提供（`whale.js`）；自行改源码后重建：
@@ -113,8 +123,9 @@ DSH 的 profile 目录默认在 `~/.dsh/profiles/web`（DSH 首次运行后生�
    健康自检零痕迹（鲸鱼旁无 ⚠️）。有问题先看下方「常见问题」。
 
 > ⚠️ **包名必须带 scope**（alpha client 的模块清单只聚合带 scope 的包，scope 用谁家的都行）。
-> ⚠️ 不要把插件同时注册进包内 `dsh.bundle.patch` 和 profile patch —— 双注册 =
-> 双鲸鱼 = 双份通知。
+> ⚠️ 插件经 `dsh.bundle.patch` 声明注册（由 `dsh.profile.bundles` 引用）——**不要**再往
+> profile 的 `cordis.patch.yml` 手工加同 id insert 行：双注册 = 双鲸鱼 = 双份通知
+> （`ensure-whale-assistant.ps1` 会自动清退旧版手工行）。
 
 ## 桌面封装版第二步（可选增强）
 
@@ -156,9 +167,10 @@ node build-whale.js    # 仅当改了 src/ 源码才需要（构建产物 whale.
 **卸载**（删干净三处即完全移除；历史数据 `~/.dsh/whale-assistant.json` 与浏览器
 localStorage 可留可删）：
 
-1. profile `cordis.patch.yml` 里的 `ui-whale-assistant` 注册行
-2. profile `package.json` 里的 `@lengmu-cloud/dsh-whale-assistant` 依赖行
-3. profile node_modules 里的 junction / 软链
+1. profile `package.json` 里的 `@lengmu-cloud/dsh-whale-assistant` 依赖行 +
+   `dsh.profile.bundles` 数组里的同名条目（或在官方插件管理页「已安装」里直接移除）
+2. profile node_modules 里的 junction / 软链
+3. 若 profile `cordis.patch.yml` 里有旧版手工 `ui-whale-assistant` 注册行，一并删掉
 
 ## 工作原理（为什么说它是"只读"的）
 

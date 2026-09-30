@@ -201,11 +201,19 @@
 			});
 			return;
 		}
-		if (type === 'assistant/message' && !isActive) {
-			/* per-model-reply usage: the ONLY source of THIS-turn token burn
-			 * for a background session (the DOM chip path cannot see it).
-			 * Without this the completion panel re-showed the previous
-			 * foreground turn's stale count (live-verified 2026-09-03). */
+		if (type === 'assistant/message') {
+			/* per-model-reply usage: THE authoritative source of THIS-turn
+			 * token burn for EVERY session — it lands ~1ms before turn/end,
+			 * so the completion report reads a full ledger on first render.
+			 * Forwarded for BACKGROUND sessions since 2026-09-03 (the DOM
+			 * chip cannot see them); the old `&& !isActive` gate also
+			 * dropped the ACTIVE session's frame on the 0.1.x assumption
+			 * that the visible chip covers it — on the 0.2.0 desktop the
+			 * chip renders 0.4s+ late and sometimes never, so completion
+			 * panels lost the 此次任务 line entirely (用户报告 09-30, proven
+			 * by driving _pollConsume live: active frame dropped, background
+			 * counted). The chip path (alpha-adapter) keeps its floor-guard
+			 * write, so both engines stay correct when this frame is absent. */
 			touchActivity();
 			handleMuxPayload({
 				type: 'session/event',

@@ -1,9 +1,16 @@
 # Changelog — dsh-whale
 
 所有对外可感知的变更按版本记录。当前版本见 `src/utils/constants.js` 的 `PATCH_VERSION`
-（构建时可用 `PATCH_VERSION=0.4.0 node build-whale.js` 覆盖）。
+（构建时可用 `PATCH_VERSION=0.4.1 node build-whale.js` 覆盖）。
 
-## [未发布] - 2026-09-30
+## [0.4.1] - 2026-09-30
+
+> **0.2.0 桌面适配波**：官方桌面端（0.2.0-rc.2 实测）与 web 引擎（0.1.7-rc.2）双载体全功能。**需要 DSH 0.1.7-rc.2+**（bundle 注册模式在 0.1.7 实证，更早引擎未验）。
+
+### 变更（B-2 官方桌面迁移）
+- **官方桌面端适配（0.2.0-rc.2 实测）**：桌面端独占 `profiles/desktop`，插件注册进去即得全功能——通知/报告/历史/红标实测全绿；`whale-assistant/client.js` 的 sessions 桥改为注入 `['sessions','conversation']` 双服务（0.2.0 起 `sessions.scope(id).conversation` 为 inject 门控属性）；启动拾取全面加守卫（服务形状错配只降级跳转，绝不炸启动）。**跳转兜底重写**：桌面侧栏是虚拟化 rc-tree、行带 `data-row-key="session:<id>"`——新增 `openViaSidebarById` 按 ID 精准点击（同名对话不再点错行），接入历史单击与通知双击两条链（本版内跳转桥已适配 0.2.0，见下「新增」——此兜底成为第三层保险）
+- 自制桌面壳退役：官方桌面端发布后，`shell/` 源码保留供参考、`scripts/fix-shell.ps1` 不再需要；README 组件关系表改版（官方桌面端=推荐载体）
+- **右键菜单新增「🔄 刷新页面」**：官方桌面端不绑 F5/Ctrl+R（实测 asar 无加速器），插件更新加载与页面恢复都没有入口——鲸鱼菜单补上这个缺口；使用说明与运行状态面板的刷新指引同步改写（桌面端指向菜单行，浏览器仍 Ctrl+F5）
 
 ### 修复（0.2.0 桌面三行报告回归，用户报告）
 - **完成通知的「此次任务消耗」行缺失/整块消失（0.2.0 桌面）**：事件转发门沿用了 0.1.x 的假设「活动会话的用量由可见 DOM 芯片兜底」，把**活动会话**的 `assistant/message` 帧挡在 `feedEventFrame` 门外——0.2.0 桌面上芯片渲染晚 0.4s+ 且时有时无，完成面板首渲丢「此次任务」行、靠 800ms 回填抢救、芯片没接住的历史行直接记 0。现改为**活动会话也转发**（服务端帧比 turn/end 早 ~1ms 到，权威源；活体实证：驱动 `_pollConsume`，活动帧被丢、背景帧入账）。配套：DOM 芯片路径加**地板守卫**（芯片只读最新一行的总量，盲写会 clobber 多步回合的服务端累计——只允许抬高、不许拉低，服务端帧缺席时仍兜底）。真机复验：完成面板**首渲三行齐**、无回填闪烁，服务端计数器入账
@@ -15,16 +22,7 @@
 - **0.2.0 跳转桥适配（第35章欠账清偿，`jumpReady` 自 B-2 以来首次为真）**：考古引擎源码（asar 提取 dsh-client-ui-workspace）定位官方导航链——侧栏行点击 `onOpen(node.id)` → **`uiWorkspace.openSession(id)`** → `replaceMain(id, signal, "reveal")`（切主视图+侧栏 reveal）。桥新增**独立** `ctx.inject(['uiWorkspace'])`（与 `['sessions','conversation']` 分列——合并在 0.1.x web 上会因 uiWorkspace 永不到达而吊死整桥），服务面 stash+绑定全自守卫；`bindJumpSessions` 改**加性绑定**（各路回调只带自己的服务，绝不互清），`openSessionAt` 按服务形状分流（0.1.x `sessions.open` / 0.2.0 `uiWorkspace.openSession`）。真机验证：跨会话跳转落点正确、原视图可复原；跳转链升回「桥 → ID 兜底 → 标题兜底」全开
 - **dsh.bundle 一等组合包纳管**：包 manifest 声明 `dsh.bundle.patch: ./cordis.patch.yml`（自带注册行），profile `dsh.profile.bundles` 引用即成——**官方插件管理页「已安装」出现鲸鱼卡片（名称+描述+启停开关）**，启停写 profile patch 覆盖项、双引擎（0.1.7-rc.2/0.2.0-rc.2）均支持；desktop 与 web 两套 profile 已迁移（手工 insert 行退役），`ensure-whale-assistant.ps1` 改 bundle 模式（依赖并入已有 dependencies 块防重复键、bundles 数组内查重、旧 insert 行自动清退+混合块警告不误删），合成往返+幂等双测通过。**警告**：手工往 profile patch 加同 id insert 行=双注册双鲸鱼
 
-## [未发布] - 2026-09-29
-
-### 变更（B-2 官方桌面迁移）
-- **官方桌面端适配（0.2.0-rc.2 实测）**：桌面端独占 `profiles/desktop`，插件三件套（link 依赖 + junction + patch 注册行）注册进去即得全功能——通知/报告/历史/红标实测全绿；`whale-assistant/client.js` 的 sessions 桥改为注入 `['sessions','conversation']` 双服务（0.2.0 起 `sessions.scope(id).conversation` 为 inject 门控属性，且 scope 面须在注入回调的 ctx 代理作用域内寻址）；启动拾取全面加守卫（服务形状错配只降级跳转，绝不炸启动）。**跳转兜底重写**：桌面侧栏是虚拟化 rc-tree、行带 `data-row-key="session:<id>"`——新增 `openViaSidebarById` 按 ID 精准点击（同名对话不再点错行），接入历史单击与通知双击两条链（桥未适配 0.2.0 manager 架构，`jumpReady=false` 期间由它兜底；目标行未在侧栏渲染（项目折叠/滚动出视口）时仍会降级提示——随 0.2.0 桥适配一并解决）
-- 自制桌面壳退役：官方桌面端发布后，`shell/` 源码保留供参考、`scripts/fix-shell.ps1` 不再需要；README 组件关系表改版（官方桌面端=推荐载体）
-- **右键菜单新增「🔄 刷新页面」**：官方桌面端不绑 F5/Ctrl+R（实测 asar 无加速器），插件更新加载与页面恢复都没有入口——鲸鱼菜单补上这个缺口；使用说明与运行状态面板的刷新指引同步改写（桌面端指向菜单行，浏览器仍 Ctrl+F5）
-
-## [未发布] - 2026-09-14
-
-### 修复
+### 修复（0.4.0 后续批次，09-14 ～ 09-27）
 - **点红标读回比弹出少一行「此次任务消耗」（用户截图 09-27）**：完成瞬间 `pushReport` 写入的用量快照经常还是 0（token 投影 / DOM 芯片晚到）；迟到数据只会补**屏上**面板（`armEndBackfill`），未读队列里的快照不动——点红标 `readNext` 回放旧快照，`turnTokens=0` 导致「此次任务消耗」整行消失（弹出三行、读回两行）。现在迟到回填会**同步刷新**未读队列 / 当前读回项 / 历史最近一条空行；只补刚结束这一轮，不误改同会话更早的空行（周报合计不受影响）。F5 生效
 - **完成/失败时用量报告缺行甚至整块消失（用户报告 09-20）**：本轮用量原存**单一全局计数器**，任何会话的 turn/start 都会清零——连续快速跑几个小任务时，A 会话刚完成、B 会话一开工就把计数器抹了，A 的完成报告当场读出 0（`此次任务消耗`行消失），tokenUsage/压力投影再迟到一步就连`全对话累计`一起丢（面板只剩`上下文已用`一行，三行全空时整块不渲染）。现改为**按会话记账**（`turnTokensBySession` 每会话独立累计，turn/start 只清自己、互不踩踏；完成/失败/中止/历史快照全部改读会话账本）；另挂**迟到投影回填**——tokenUsage/contextPressure 投影在 turn/end 之后才到达时，按会话补渲染完成面板（同一条气泡的寿命内，deadline 不变）；活动会话的 DOM 用量芯片同样写入会话账本并触发回填。F5 生效（纯页面半区）
 - **窗口缩放后鲸鱼悬在屏外（用户报告）**：位置原存绝对 left/top 且全库无 resize 监听——全屏时贴右下、窗口化后鲸鱼留在旧坐标系（部分出屏），须再全屏拖回。现改为**右下锚点存储**（v2 格式：距右/距底像素偏移，拖动落手时保存）+ `window resize` 监听按锚点重排——鲸鱼住右下角时，窗口化/还原/调整大小都**自动跟随新窗口的右下角**，且完全可逆；窗口剧缩导致锚点超出新视口时对称 clamp 到最近边缘（原偏移保留，放大后回原位）。旧 v1 绝对坐标数据兼容（恢复时 clamp 入视口，下次拖动自然迁移 v2）；无存储位置时走 CSS right/bottom 默认值本就跟随窗口，不受影响。单测 +12（v2 存储/锚点重排/双可逆/clamp/真报告场景），685+19 全绿

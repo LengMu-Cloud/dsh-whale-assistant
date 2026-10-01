@@ -1,6 +1,6 @@
 # 🐋 dsh-whale-assistant — DeepSeek Harness 的小鲸鱼助手插件
 
-住在 DeepSeek Harness（DSH）Web 界面右下角的打工小鲸鱼，功能包括：
+住在 DeepSeek Harness（DSH）界面右下角的打工小鲸鱼，功能包括：
 ①实时任务通知（开工/完成/失败/中止/截断/提问/审核，每种独立音效）；
 ②Token 用量报告（每轮任务消耗 + 全对话累计 + 上下文压力百分比）；
 ③跨会话后台通知（切换对话后仍能收到任务状态；0.4.0 起网页版同样实时推送）；
@@ -25,7 +25,7 @@
 | 组件 | 必需？ | 是什么 | 与小鲸鱼的关系 |
 |---|---|---|---|
 | **插件本体**（`whale-assistant/` + `src/`） | ✅ 必需 | DSH cordis 插件：宿主半区（服务端路由 + 事件/投影订阅）+ 页面半区（`whale.js`） | **全部功能所在**，完全自包含——加载走官方模块清单，跳转走官方 sessions 服务，实时推送走自有路由 |
-| **官方桌面端**（DSH 官网分发） | 推荐 | DSH 官方 Electron 桌面应用（独占 `profiles/desktop`） | 插件注册进 desktop profile 即得全功能（0.2.0-rc.2 实测：通知/报告/历史全绿）；**会话跳转适配中**（0.2.0 sessions API 改版，见交接报告第35章），临时用侧栏手动切会话 |
+| **官方桌面端**（DSH 官网分发） | 推荐 | DSH 官方 Electron 桌面应用（独占 `profiles/desktop`） | 插件注册进 desktop profile 即得全功能（0.2.0-rc.2 实测：通知/报告/历史/三行报告/跳转全绿）；**会话跳转已适配 0.2.0**（0.4.1 起，官方 `uiWorkspace.openSession` 导航链） |
 | **浏览器** | 可选 | 任意现代浏览器直开 `dsh web` 的地址 | 与官方桌面共享同一份服务端数据 |
 | **桌面壳**（`shell/`，**遗留**） | — | 本仓库自制的 Electron 封装（09-03~09-28 使用） | **官方桌面端发布后已退役**（其增量——独立进程/后台不丢通知——官方桌面原生具备）；源码保留供参考，`scripts/fix-shell.ps1` 不再需要 |
 | ~~跳转补丁~~（**已退役**） | — | 0.3.x 时代的跳转靠一个手动注入脚本（**从未随本仓库分发**） | **0.4.0 起退役**：跳转已内置。若曾打过它，残留无害，下次 DSH 升级时自然消失 |
@@ -219,18 +219,21 @@ node scripts/run-e2e.js  # CDP 端到端四场景（调试口 9222 不可达时�
 | `whale-assistant/` | 插件包（宿主半区 lib/index.js + 页面半区 client.js + 注册样本） |
 | `ensure-whale-assistant.ps1` | 插件注册脚本（写 profile 依赖 + 注册行，幂等） |
 | `parts/style.css` | 鲸鱼全部样式 |
-| `test-whale.js` / `test-chip-gate.js` | 单元测试（vm 沙箱 670+ 断言 / 闸门纯函数 19 断言） |
+| `test-whale.js` / `test-chip-gate.js` | 单元测试（vm 沙箱 694+ 断言 / 闸门纯函数 19 断言） |
 | `FEATURES.md` / `CHANGELOG.md` / `docs/seams.md` | 用户功能手册 / 版本变更记录 / 调试与测试导出缝清单 |
 | `shell/` + `scripts/fix-shell.ps1` | 旧桌面瘦壳源码与安装脚本（**已退役**，官方桌面端覆盖其全部增量；保留供参考） |
 | `docs/shell-setup.md` | 桌面壳手动安装指南（遗留参考） |
 
 ## 常见问题
 
-- **出现两只鲸鱼 / 通知双份** —— 插件被注册了两次：确认 profile `cordis.patch.yml`
-  只有一行 `ui-whale-assistant` 注册，且没有同时启用包内 bundle patch。
+- **出现两只鲸鱼 / 通知双份** —— 插件被注册了两次：现行注册 = 包 manifest
+  `dsh.bundle.patch` + profile `dsh.profile.bundles` 引用（一处即够）；若 profile
+  `cordis.patch.yml` 里还有旧版手工 `insert: ui-whale-assistant` 行，删掉它
+  （`ensure-whale-assistant.ps1` 重跑会自动清退）。
 - **点历史条目 / 双击通知没有跳转** —— 0.4.0 起跳转已内置（经 DSH 官方 sessions 服务），
   升级到 0.4.0 即可（0.3.x 依赖一个未随仓库分发的补丁，对 GitHub 用户不可用）；
-  仍无效就 Ctrl+F5 刷新后重试。
+  0.4.1 起官方桌面端走 `uiWorkspace.openSession` 桥。仍无效就刷新页面后重试
+  （桌面端右键菜单 🔄 刷新页面 / 浏览器 Ctrl+F5）。
 - **后台任务的完成通知不来 / 迟到** —— 0.4.0 起网页版走 SSE 实时推送，正常不再迟到；
   若通知彻底消失，多半是标签页被浏览器「内存节省」功能丢弃了（重开标签页即可）。
 - **鲸鱼旁出现 ⚠️** —— 健康自检发现依赖失效，点开看逐项明细，多数一次 Ctrl+F5 恢复
@@ -244,7 +247,8 @@ node scripts/run-e2e.js  # CDP 端到端四场景（调试口 9222 不可达时�
 
 鲸鱼每 60 秒自检一次依赖（服务端事件轮询与 SSE 推送 / 用量 DOM 读取 / 会话跳转桥）。
 一切正常时**零痕迹**；检测到失效会在鲸鱼旁出现 ⚠️ 小图标，点开看逐项明细；
-控制台同步输出 `[🐋] Health check: {...}`。多数失效一次 Ctrl+F5 即可恢复。
+控制台同步输出 `[🐋] Health check: {...}`。多数失效一次刷新即可恢复
+（桌面端右键菜单 🔄 刷新页面 / 浏览器 Ctrl+F5）。
 
 ## 作者与许可
 

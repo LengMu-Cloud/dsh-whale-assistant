@@ -45,17 +45,20 @@
 
 ## 能力矩阵（先看这个再安装）
 
-| 能力 | 网页版（浏览器访问 dsh web） | 桌面封装版（Electron 壳） |
+| 能力 | 网页版（浏览器访问 dsh web） | 官方桌面端（推荐） |
 |---|---|---|
 | 任务通知 / 用量面板 / 运行计时 / 历史（搜索·范围清空·单击跳转对话） / 周报 / 提醒 | ✅ 开箱即用 | ✅ 开箱即用 |
 | 陪伴系统（摸头好感 / 爱心 / 班味情绪 / 装饰成就 / 使用手册） | ✅ | ✅ |
 | 多窗口/多端历史同步（同一台机器） | ✅ 服务端镜像，自动合并 | ✅ 同左 |
-| 后台任务通知实时性 | ✅ SSE 实时推送（0.4.0 起）；标签页被浏览器「内存节省」丢弃时例外 | ✅ 实时（SSE + 独立进程，无标签页丢弃问题） |
-| 冷启动黑屏防护 / 崩溃自恢复 | 不适用（浏览器自己管） | ✅ 壳提供（装壳时由 `fix-shell.ps1` 写入，与插件无关） |
+| 后台任务通知实时性 | ✅ SSE 实时推送（0.4.0 起）；标签页被浏览器「内存节省」丢弃时例外 | ✅ 实时（SSE；桌面应用无标签页节流问题） |
+| 官方插件管理页启停（0.4.1 起） | ✅（dsh web 0.1.7+） | ✅（0.2.0+，「已安装」卡片+开关） |
+| 应用级稳定性（崩溃自恢复等） | 不适用（浏览器自己管） | 官方桌面自带（非插件职责） |
+| 页面刷新 | 浏览器 F5 | 右键菜单 **🔄 刷新页面**（官方桌面无 F5） |
 | 跨机器同步 | ❌ 明确不支持（历史存在各自机器的 `~/.dsh/whale-assistant.json`） | ❌ 同左 |
 
-> 插件功能两版**完全一致**，完整清单见 [FEATURES.md](FEATURES.md)；壳的增量只有
-> 上面最后两行（独立进程兜底 + 稳定性防护）。组件之间的依赖关系见「组件关系」一节。
+> 插件功能两版**完全一致**，完整清单见 [FEATURES.md](FEATURES.md)。本仓库旧自制
+> Electron 壳已**退役**（09-29 起，官方桌面端覆盖其全部增量——源码保留 `shell/` 供
+> 参考）。组件之间的依赖关系见「组件关系」一节。
 
 ---
 
@@ -114,10 +117,10 @@ DSH 的 profile 目录默认在 `~/.dsh/profiles/web`（DSH 首次运行后生�
    node build-whale.js        # 产出 whale.js + whale-map.md（函数导航）
    ```
 
-4. **重启 DSH 服务**让插件挂载：最稳妥是**重启电脑**；或用任务管理器结束 DSH 的
-   后台服务进程（node，监听 3080 端口）后再开壳。⚠️ **只关壳重开是不够的**——
-   服务是壳派生的独立后台进程，关壳它并不退出。首次安装时若 DSH 服务尚未运行过，
-   直接开壳即可。浏览器 F5 即可看到鲸鱼。
+4. **重启 DSH 服务**让插件挂载：官方桌面用户**重启桌面应用**即可；网页版用户用
+   任务管理器结束 DSH 的后台服务进程（node，监听 3080 端口）后重新运行
+   `dsh --profile web`（或直接重启电脑）。首次安装时若 DSH 服务尚未运行过，先跑一次
+   `dsh --profile web`（网页版）或打开官方桌面（桌面版）。浏览器 F5 即可看到鲸鱼。
 5. **验证安装**：右下角出现鲸鱼、控制台（F12）有
    `[dsh-whale-assistant] whale loaded from plugin routes` 即成功；一切正常时
    健康自检零痕迹（鲸鱼旁无 ⚠️）。有问题先看下方「常见问题」。
@@ -127,17 +130,19 @@ DSH 的 profile 目录默认在 `~/.dsh/profiles/web`（DSH 首次运行后生�
 > profile 的 `cordis.patch.yml` 手工加同 id insert 行：双注册 = 双鲸鱼 = 双份通知
 > （`ensure-whale-assistant.ps1` 会自动清退旧版手工行）。
 
-## 桌面封装版第二步（可选增强）
+## 桌面封装版第二步（遗留参考——官方桌面端已覆盖此需求）
 
-> **如果你已有自己喜欢的封装方式**（自制 Electron 壳、Edge/Chrome PWA、
-> 或干脆浏览器直开），**本节整节跳过**——上面的安装完成后插件即已完整可用。
+> **推荐直接用官方桌面端**（安装即用，本节整节跳过）。此节保留给想自制封装
+> （Edge/Chrome PWA、自己的 Electron 壳等）的用户；本仓库自带的瘦壳已退役，
+> 源码在 `shell/` 仅供参考。
 
 如果你想把 DSH 封装成 Electron 桌面应用（任何壳都行），鲸鱼照常工作；但壳需要
 自己处理两件事：**认证 URL 的读取**（dsh web 启动时打印一次性 token URL）与
 **后台限流关闭**（`backgroundThrottling: false`）。
 
-- 使用与我们同款瘦壳：运行 `scripts/fix-shell.ps1`（见 `docs/shell-setup.md`）。
-- **macOS / Linux**：暂无自动脚本，请按 `docs/shell-setup.md` 手动操作。
+- 同款瘦壳已退役：`shell/` 源码与 `scripts/fix-shell.ps1` 保留在仓库但不再维护
+  （见 `docs/shell-setup.md` 的历史说明）。
+- **macOS / Linux**：无自动脚本，请按 `docs/shell-setup.md` 手动操作。
 
 ---
 
@@ -152,10 +157,11 @@ node build-whale.js    # 仅当改了 src/ 源码才需要（构建产物 whale.
 
 按改动面生效：
 
-- 只动页面半区（`src/`、`whale.js`）：浏览器 **F5** 即生效
-- 动了宿主半区（`whale-assistant/lib/index.js`）：**重启 DSH 服务**——⚠️ 关壳重开
-  **不会重启它**（服务是壳派生的独立后台进程）：结束 node 服务进程（监听 3080 端口）
-  或重启电脑
+- 只动页面半区（`src/`、`whale.js`）：右键菜单 **🔄 刷新页面**（官方桌面端）或浏览器
+  **F5** 即生效
+- 动了宿主半区（`whale-assistant/lib/index.js`）：**重启 DSH 服务**——官方桌面用户
+  重启桌面应用；网页版用户结束 node 服务进程（监听 3080 端口）后重新运行
+  `dsh --profile web`，或重启电脑
 
 **换机迁移**（数据不跨机器同步，搬家前手动备份两处）：
 
@@ -192,12 +198,12 @@ localStorage 可留可删）：
 ```text
 node build-whale.js      # 重建 whale.js + whale-map.md，并同步发布副本到 whale-assistant/lib/
                          # 构建时强制：顶层声明重复断言 / menu 热点 guard / KNOWN-COUPLING 登记表
-node test-whale.js       # vm 沙箱单元测试，670+ 断言
+node test-whale.js       # vm 沙箱单元测试，694+ 断言
 node test-chip-gate.js   # 芯片闸门纯函数测试，19 断言
 node scripts/audit-deps.js        # 静态架构审计（作用域/依赖边/缝清单/时序契约 lint，自检前置）
 node check-dsh-compat.js --static "<DSH安装目录>"   # DSH 升级前：对新版包扫耦合点特征
 node check-dsh-compat.js --live [--cdp]             # DSH 升级后：对运行实例探活（接口/调试口）
-node scripts/run-e2e.js  # CDP 端到端四场景（桌面壳调试口 9222 不可达时自动跳过）
+node scripts/run-e2e.js  # CDP 端到端四场景（调试口 9222 不可达时自动跳过；官方桌面需带 --remote-debugging-port=9222 启动）
 ```
 
 调试与测试用的导出缝清单见 [docs/seams.md](docs/seams.md)。
@@ -215,8 +221,8 @@ node scripts/run-e2e.js  # CDP 端到端四场景（桌面壳调试口 9222 不�
 | `parts/style.css` | 鲸鱼全部样式 |
 | `test-whale.js` / `test-chip-gate.js` | 单元测试（vm 沙箱 670+ 断言 / 闸门纯函数 19 断言） |
 | `FEATURES.md` / `CHANGELOG.md` / `docs/seams.md` | 用户功能手册 / 版本变更记录 / 调试与测试导出缝清单 |
-| `shell/` + `scripts/fix-shell.ps1` | 桌面瘦壳源码与安装脚本（可选增强） |
-| `docs/shell-setup.md` | 桌面壳手动安装指南 |
+| `shell/` + `scripts/fix-shell.ps1` | 旧桌面瘦壳源码与安装脚本（**已退役**，官方桌面端覆盖其全部增量；保留供参考） |
+| `docs/shell-setup.md` | 桌面壳手动安装指南（遗留参考） |
 
 ## 常见问题
 

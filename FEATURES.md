@@ -220,7 +220,7 @@
 
 ## 十六、安装与开发（给开发者）
 
-安装见 [README.md](README.md)（cordis 插件注册 + 可选桌面壳增强）。常用命令：
+安装见 [README.md](README.md)（cordis 插件注册；推荐官方桌面端，浏览器亦可）。常用命令：
 
 ```
 node build-whale.js     # 重建 whale.js + whale-map.md，并同步发布副本到 whale-assistant/lib/

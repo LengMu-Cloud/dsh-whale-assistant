@@ -33,8 +33,10 @@ if ($Check) {
 		exit 1
 	}
 	$pkg = [System.IO.File]::ReadAllText((Join-Path $ProfileDir 'package.json'))
-	if ($pkg -match [regex]::Escape('"' + $DepName + '": ')) {
-		Write-Host '    [OK] package.json dependency'
+	if ($pkg -match [regex]::Escape('"' + $DepName + '": "link:')) {
+		Write-Host '    [OK] package.json dependency (local link:)'
+	} elseif ($pkg -match [regex]::Escape('"' + $DepName + '": ')) {
+		Write-Host '    [OK] package.json dependency (market/git/npm snapshot) -- local re-registration NOT needed; run -Remove first to switch modes'
 	} else { Write-Host '    [MISSING] package.json dependency'; $fail = 1 }
 	$bm = [regex]::Match($pkg, '"bundles"\s*:\s*\[')
 	$inBundles = $bm.Success -and ($pkg.Substring($bm.Index, $pkg.IndexOf(']', $bm.Index + $bm.Length) - $bm.Index) -match [regex]::Escape($DepName))
@@ -61,8 +63,8 @@ if ($Remove) {
 	$pkg = [System.IO.File]::ReadAllText($pkgPath)
 	$name = [regex]::Escape($DepName)
 	$candidate = $pkg
-	# dependency row: "name": "link:..." with optional trailing comma
-	$candidate = $candidate -replace ('\s*"' + $name + '"\s*:\s*"link:[^"]*"\s*,?'), ''
+	# dependency row: "name": "<any spec>" (link:, git+https, npm range) with optional trailing comma
+	$candidate = $candidate -replace ('\s*"' + $name + '"\s*:\s*"[^"]*"\s*,?'), ''
 	# <name> as LAST list element: drop the leading comma with it (dsh plugin
 	# add writes the whale on the same line as the closing bracket, so this is
 	# text-structural, not line-based)

@@ -1,0 +1,74 @@
+{
+  "format": 1,
+  "title": {
+    "en": "LengMu-Cloud Plugin Index",
+    "zh": "LengMu-Cloud 插件索引"
+  },
+  "description": {
+    "en": "Community index for the dsh-whale-assistant plugin family. Not affiliated with DeepSeek.",
+    "zh": "dsh-whale-assistant 插件家族的社区索引（非官方，与 DeepSeek 无关）。"
+  },
+  "metadata": {
+    "categories": {
+      "companion": {
+        "title": {
+          "en": "Companion",
+          "zh": "陪伴"
+        }
+      },
+      "tooling": {
+        "title": {
+          "en": "Tooling",
+          "zh": "工具"
+        }
+      }
+    }
+  },
+  "plugins": [
+    {
+      "name": "@lengmu-cloud/dsh-whale-assistant",
+      "title": {
+        "en": "Whale Assistant",
+        "zh": "打工小鲸鱼"
+      },
+      "description": {
+        "en": "The companion whale for DeepSeek Harness: task notifications, three-line usage reports, history with session jump, reminders, weekly stats, sleep and moods. Read-only event stream, everything stays on your machine.",
+        "zh": "DeepSeek Harness 的陪伴小鲸鱼：任务通知 / 用量三行报告 / 历史搜索与一键跳转 / 定时提醒 / 周报 / 睡眠与班味情绪——只读事件流，数据全在本机。"
+      },
+      "icon": "../whale-logo.svg",
+      "author": "LengMu-Cloud",
+      "homepage": "https://github.com/LengMu-Cloud/dsh-whale-assistant#readme",
+      "repository": {
+        "url": "https://github.com/LengMu-Cloud/dsh-whale-assistant",
+        "directory": "whale-assistant"
+      },
+      "metadata": {
+        "category": "companion",
+        "keywords": [
+          "whale",
+          "companion",
+          "notification",
+          "usage",
+          "report",
+          "jump",
+          "reminder"
+        ]
+      },
+      "versions": [
+        {
+          "version": "0.4.1",
+          "publishTimestamp": 1790878661,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/LengMu-Cloud/dsh-whale-assistant",
+            "commit": "8fa6497bff235520b137a41c8108e7ec2c3de90d",
+            "path": "whale-assistant"
+          },
+          "engines": {
+            "dsh": ">=0.1.7"
+          }
+        }
+      ]
+    }
+  ]
+}

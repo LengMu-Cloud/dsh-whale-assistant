@@ -6,9 +6,10 @@
 ## [未发布]
 
 ### 新增
+- **`market/` 自定义插件市场索引（实验性，DSH 0.2.1+）**：`market-index.json`（官方格式 1——鲸鱼以标准 `dsh.bundle` 列入，git 源锁定 commit+`path:whale-assistant` 子目录，零 npm 发布负担）+ `market/README.md`（jsDelivr/raw 镜像 URL、用户启用步骤、字段速查）+ `scripts/build-market-index.js`（发版后自动追加最新 tag 条目并按格式 1 规则自检）。用户在官方 UI「发现」页加索引即可安装，与命令行路径二选一（并存=双鲸鱼，ensure 会识别提示）
 - **`install.ps1` 一键安装**：克隆（或定位本地仓库，`-Repo`）→ 注册进 profile（`-TargetProfile desktop|web|both`，默认 desktop）→ 挂 node_modules junction → 体检三件套；幂等可重复执行。全新机器从零到鲸鱼一条命令（前提：先跑一次 DSH 让 profile 生成）
-- **`ensure-whale-assistant.ps1 -Check`**：只读体检注册三件套（依赖行 / bundles 行 / junction 实体），缺件退出码 1，可被脚本分支
-- **`ensure-whale-assistant.ps1 -Remove`**：对称卸载——移除依赖行与 `dsh.profile.bundles` 行（结构化正则，兼容 `dsh plugin add` 写出的任意元素位置）+ 删 junction；写前备份 package.json，改坏 JSON 自动放弃写入
+- **`ensure-whale-assistant.ps1 -Check`**：只读体检注册三件套（依赖行 / bundles 行 / junction 实体），缺件退出码 1，可被脚本分支；**识别市场/git/npm 快照安装模式并提示勿重复本地注册**
+- **`ensure-whale-assistant.ps1 -Remove`**：对称卸载——移除依赖行与 `dsh.profile.bundles` 行（结构化正则，兼容 `dsh plugin add` 写出的任意元素位置与 git/npm 依赖值）+ 删 junction；写前备份 package.json，改坏 JSON 自动放弃写入
 
 ### 变更
 - README 安装节重组：一键安装为推荐路径，原三件套手工步骤降为「路径 B · 手动」，新增引擎自带 `dsh plugin add` 一条命令的备选说明（含全新 profile 缺 `dsh-web-app` 的坑提示）

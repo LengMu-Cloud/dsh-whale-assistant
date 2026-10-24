@@ -143,6 +143,25 @@ dsh plugin --profile web add <repo>\whale-assistant
 ⚠️ 它对**从未运行过 DSH 的全新 profile** 只会初始化出缺 `dsh-web-app` 的最小骨架
 （webServer 起不来、插件一直 pending）——所以无论走哪条路径，**都先跑一次 DSH**。
 
+### 路径 C · 官方自定义插件市场（实验性，DSH 0.2.1+）
+
+0.2.1 起 DSH 内置实验性插件市场（默认关闭）。启用后安装/重装鲸鱼全程在官方 UI 里点，
+不碰命令行——**与路径 A/B 二选一**（同一 profile 两套并存 = 双鲸鱼）：
+
+1. DSH 插件页 →「实验性插件」旁 **更多** → 启用 **自定义插件市场**；
+2. 切到 **发现** 标签 → 添加索引 URL（推荐 jsDelivr 镜像，可达性好）：
+
+   ```text
+   https://cdn.jsdelivr.net/gh/LengMu-Cloud/dsh-whale-assistant@main/market/market-index.json
+   ```
+
+3. 找到 **打工小鲸鱼** → 选版本 → 安装 → 重启 DSH，右下角见鲸鱼、管理页出现开关。
+
+注意：experimental 功能——发现页**只提示有更新、不自动升级**（重装即升级）；索引格式
+可能随官方版本演进，出问题回退路径 A/B 即可。索引由 `market/market-index.json` 承载
+（git 源锁定 commit），发版后 `node scripts/build-market-index.js` 自动追加并按官方
+格式 1 规则自检；镜像与字段说明见 `market/README.md`。
+
 **两条路径跑完后的收尾（对路径 A、路径 B 与备选命令通用）**：
 
 3. 构建产物已随仓库提供（`whale.js`）；自行改源码后重建：

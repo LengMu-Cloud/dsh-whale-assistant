@@ -3,6 +3,19 @@
 所有对外可感知的变更按版本记录。当前版本见 `src/utils/constants.js` 的 `PATCH_VERSION`
 （构建时可用 `PATCH_VERSION=0.4.1 node build-whale.js` 覆盖）。
 
+## [未发布]
+
+### 新增
+- **`install.ps1` 一键安装**：克隆（或定位本地仓库，`-Repo`）→ 注册进 profile（`-TargetProfile desktop|web|both`，默认 desktop）→ 挂 node_modules junction → 体检三件套；幂等可重复执行。全新机器从零到鲸鱼一条命令（前提：先跑一次 DSH 让 profile 生成）
+- **`ensure-whale-assistant.ps1 -Check`**：只读体检注册三件套（依赖行 / bundles 行 / junction 实体），缺件退出码 1，可被脚本分支
+- **`ensure-whale-assistant.ps1 -Remove`**：对称卸载——移除依赖行与 `dsh.profile.bundles` 行（结构化正则，兼容 `dsh plugin add` 写出的任意元素位置）+ 删 junction；写前备份 package.json，改坏 JSON 自动放弃写入
+
+### 变更
+- README 安装节重组：一键安装为推荐路径，原三件套手工步骤降为「路径 B · 手动」，新增引擎自带 `dsh plugin add` 一条命令的备选说明（含全新 profile 缺 `dsh-web-app` 的坑提示）
+
+### 加固
+- **宿主半区停机清理补全**：SSE 推送通道的 disposer 现在会主动 `end()` 所有挂着的 EventSource 响应并清空订阅表，心跳定时器 `unref()`——插件 dispose 不再给引擎停机留下任何等待客户端断开的句柄（桌面应用内更新对整个引擎树只有 ~10s 优雅宽限，任何挂住的句柄都会导致「未能安全停止任务」拒装）
+
 ## [0.4.1] - 2026-09-30
 
 > **0.2.0 桌面适配波**：官方桌面端（0.2.0-rc.2 实测）与 web 引擎（0.1.7-rc.2）双载体全功能。**需要 DSH 0.1.7-rc.2+**（bundle 注册模式在 0.1.7 实证，更早引擎未验）。

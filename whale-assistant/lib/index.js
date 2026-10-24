@@ -526,7 +526,20 @@ function apply(ctx) {
 			try { res.write('data: ' + JSON.stringify({ type: 'ping' }) + '\n\n'); } catch (e) { sseClients.delete(res); }
 		}
 	}, 20000);
-	disposers.push(() => clearInterval(sseHeartbeat));
+	/* unref: the heartbeat must never be the handle keeping an otherwise-idle
+	 * event loop alive (the listening server socket is the real keep-alive) */
+	if (typeof sseHeartbeat.unref === 'function') sseHeartbeat.unref();
+	disposers.push(() => {
+		clearInterval(sseHeartbeat);
+		/* end every open SSE response during disposal: the desktop update path
+		 * grants the whole engine tree only ~10s before SIGTERM (main.js
+		 * requireGraceful), so a live EventSource socket must not be left for
+		 * the webServer teardown to chase via client disconnects */
+		for (const res of sseClients) {
+			try { res.end(); } catch (e) { /* client already gone */ }
+		}
+		sseClients.clear();
+	});
 	return () => {
 		for (const dispose of disposers) dispose();
 	};

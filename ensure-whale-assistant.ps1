@@ -15,15 +15,94 @@
 # files as ANSI/GBK and Chinese comments break the parser.
 param(
 	[string]$ProfileDir = (Join-Path $env:USERPROFILE '.dsh\profiles\web'),
-	[string]$PluginSource = (Join-Path $PSScriptRoot 'whale-assistant')
+	[string]$PluginSource = (Join-Path $PSScriptRoot 'whale-assistant'),
+	[switch]$Check,
+	[switch]$Remove
 )
 
 $ErrorActionPreference = 'Stop'
 
+$DepName = '@lengmu-cloud/dsh-whale-assistant'
+
+if ($Check) {
+	# Read-only audit of the three registration pieces; exits 1 when any is
+	# missing so installers/scripts can branch on it.
+	$fail = 0
+	if (-not (Test-Path $ProfileDir)) {
+		Write-Host '    [MISSING] profile dir: ' $ProfileDir
+		exit 1
+	}
+	$pkg = [System.IO.File]::ReadAllText((Join-Path $ProfileDir 'package.json'))
+	if ($pkg -match [regex]::Escape('"' + $DepName + '": ')) {
+		Write-Host '    [OK] package.json dependency'
+	} else { Write-Host '    [MISSING] package.json dependency'; $fail = 1 }
+	$bm = [regex]::Match($pkg, '"bundles"\s*:\s*\[')
+	$inBundles = $bm.Success -and ($pkg.Substring($bm.Index, $pkg.IndexOf(']', $bm.Index + $bm.Length) - $bm.Index) -match [regex]::Escape($DepName))
+	if ($inBundles) {
+		Write-Host '    [OK] dsh.profile.bundles row'
+	} else { Write-Host '    [MISSING] dsh.profile.bundles row'; $fail = 1 }
+	$entPath = Join-Path $ProfileDir 'node_modules\@lengmu-cloud\dsh-whale-assistant'
+	if (Test-Path (Join-Path $entPath 'package.json')) {
+		Write-Host '    [OK] node_modules entity'
+	} else { Write-Host '    [MISSING] node_modules entity (junction)'; $fail = 1 }
+	if (Test-Path (Join-Path $PluginSource 'package.json')) {
+		$srcPkg = Get-Content (Join-Path $PluginSource 'package.json') | ConvertFrom-Json
+		Write-Host '    [OK] plugin source version:' $srcPkg.version
+	} else { Write-Host '    [MISSING] plugin source dir:' $PluginSource; $fail = 1 }
+	if ($fail -eq 0) { Write-Host '    whale-assistant registration: complete' }
+	exit $fail
+}
+
+if ($Remove) {
+	# Symmetric uninstall: dependency row + bundles row + junction. Backs the
+	# package.json up first; aborts without writing if the edit breaks JSON.
+	$pkgPath = Join-Path $ProfileDir 'package.json'
+	if (-not (Test-Path $pkgPath)) { Write-Host '    [WARN] no package.json at' $ProfileDir; return }
+	$pkg = [System.IO.File]::ReadAllText($pkgPath)
+	$name = [regex]::Escape($DepName)
+	$candidate = $pkg
+	# dependency row: "name": "link:..." with optional trailing comma
+	$candidate = $candidate -replace ('\s*"' + $name + '"\s*:\s*"link:[^"]*"\s*,?'), ''
+	# <name> as LAST list element: drop the leading comma with it (dsh plugin
+	# add writes the whale on the same line as the closing bracket, so this is
+	# text-structural, not line-based)
+	$candidate = $candidate -replace (',\s*"' + $name + '"(?=[\]\}])'), ''
+	# <name> as a NON-last list element: drop it with its trailing comma
+	$candidate = $candidate -replace ('\s*"' + $name + '"\s*,(?=\s*")'), ''
+	# defensive: no orphan commas right before a closing bracket/brace
+	$candidate = $candidate -replace ',(\s*[\]\}])', '$1'
+	if ($candidate -eq $pkg) { Write-Host '    nothing to remove (no whale rows found in package.json)' }
+	else {
+		try { $null = $candidate | ConvertFrom-Json } catch {
+			Write-Host '    [ABORT] edit would break package.json JSON, nothing written:' $_.Exception.Message
+			return
+		}
+		[System.IO.File]::WriteAllText($pkgPath + '.bak-remove-' + [DateTimeOffset]::Now.ToUnixTimeMilliseconds(), $pkg)
+		[System.IO.File]::WriteAllText($pkgPath, $candidate)
+		Write-Host '    package.json: dependency + bundles row removed (backup written alongside)'
+	}
+	$entPath = Join-Path $ProfileDir 'node_modules\@lengmu-cloud\dsh-whale-assistant'
+	if (Test-Path $entPath) {
+		cmd /c rmdir ($entPath -replace '/', '\') | Out-Null
+		if (-not (Test-Path $entPath)) { Write-Host '    node_modules junction removed' }
+		else { Write-Host '    [WARN] junction still present, remove manually:' $entPath }
+		$parent = Split-Path $entPath
+		if ((Test-Path $parent) -and -not (Get-ChildItem $parent -Force)) { Remove-Item $parent -Force }
+	}
+	$patchPath = Join-Path $ProfileDir 'cordis.patch.yml'
+	if (Test-Path $patchPath) {
+		$patch = [System.IO.File]::ReadAllText($patchPath)
+		if ($patch -match 'ui-whale-assistant') {
+			Write-Host '    [NOTE] cordis.patch.yml still mentions ui-whale-assistant (enable/disable override?) -- review manually'
+		}
+	}
+	Write-Host '    whale-assistant removed; restart DSH to take effect'
+	return
+}
+
 # The dependency MUST be scoped: alpha client manifests only aggregate scoped
 # packages into the page's module loader (any scope works -- verified with the
 # third-party task-board plugin -- so the whale ships under the project's own).
-$DepName = '@lengmu-cloud/dsh-whale-assistant'
 
 # --- 1. package.json dependency ---
 $pkgPath = Join-Path $ProfileDir 'package.json'

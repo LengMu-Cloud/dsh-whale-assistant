@@ -70,9 +70,28 @@ DSH 的 profile 目录默认在 `~/.dsh/profiles/web`（DSH 首次运行后生�
 （0.1.7-rc.2 与 0.2.0-rc.2 双引擎实测支持 bundle 声明；插件自带 `cordis.patch.yml`
 作为 bundle 层被启动器应用，并出现在**官方插件管理页**「已安装」里，带启停开关。）
 
-> **用官方桌面端的话**：桌面端独占 `~/.dsh/profiles/desktop`（与 web profile 不共享插件），
-> 首次启动桌面端生成该目录后，把下文命令里的 `profiles\web` 全部换成 `profiles\desktop`
-> 再跑一遍（两套 profile 可并存注册，互不影响）。官方桌面 0.2.0-rc.2 实测兼容。
+> **用官方桌面端的话**：桌面端独占 `~/.dsh/profiles/desktop`（与 web profile 不共享插件）。
+> 两套 profile 可并存注册，互不影响。一键安装用 `-TargetProfile desktop`（默认就是它），
+> 手动安装则把下文命令里的 `profiles\web` 全部换成 `profiles\desktop` 再跑一遍。
+
+### 路径 A · 一键安装（推荐，Windows）
+
+先跑一次 DSH（打开一次官方桌面，或跑一次 `dsh --profile web`）让 profile 目录生成，然后：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File <repo>\install.ps1
+```
+
+脚本会自动：克隆仓库到 `~\dsh-whale-assistant`（已存在则就地复用）→ 注册进 desktop
+profile → 挂 node_modules junction → 体检三件套并提示下一步。变体：
+
+- 浏览器用户加 `-TargetProfile web`；两套 profile 都装加 `-TargetProfile both`
+- 已经下载或克隆过仓库：`-Repo "D:\path\to\dsh-whale-assistant"`（直接以本地目录为源）
+- 幂等可重复执行；配套 `ensure-whale-assistant.ps1 -Check`（只读体检三件套，缺件时
+  退出码 1）与 `-Remove`（对称卸载：依赖行 + bundles 行 + junction，改坏 JSON 会
+  自动放弃写入并留 .bak）
+
+### 路径 B · 手动步骤（macOS / Linux，或想看清每一步）
 
 1. 把本仓库放到任意固定目录（下称 `<repo>`；路径含空格也可以，但后续命令里给含
    空格的路径加英文引号）。
@@ -110,6 +129,21 @@ DSH 的 profile 目录默认在 `~/.dsh/profiles/web`（DSH 首次运行后生�
      - id: ui-whale-assistant       # 唯一注册点；同一 profile 只允许这一层声明它
        name: '@lengmu-cloud/dsh-whale-assistant'
    ```
+
+### 备选 · 官方一条命令（实验性，需 npm 全局 CLI）
+
+装了 npm 全局引擎的用户（`dsh` 命令可用）也可以用引擎自带的插件管理命令，对已有
+profile 等价于路径 B 的全部三件（依赖 + bundles + 实体一次完成，且带官方版本兼容
+守卫）：
+
+```powershell
+dsh plugin --profile web add <repo>\whale-assistant
+```
+
+⚠️ 它对**从未运行过 DSH 的全新 profile** 只会初始化出缺 `dsh-web-app` 的最小骨架
+（webServer 起不来、插件一直 pending）——所以无论走哪条路径，**都先跑一次 DSH**。
+
+**两条路径跑完后的收尾（对路径 A、路径 B 与备选命令通用）**：
 
 3. 构建产物已随仓库提供（`whale.js`）；自行改源码后重建：
 
@@ -217,7 +251,8 @@ node scripts/run-e2e.js  # CDP 端到端四场景（调试口 9222 不可达时�
 | `whale-map.md` | **构建时自动生成**的模块/函数导航（Agent 与人类共用） |
 | `docs/architecture.md` | 架构与分层：作用域三层、三档准入规则、债务登记与触发线 |
 | `whale-assistant/` | 插件包（宿主半区 lib/index.js + 页面半区 client.js + 注册样本） |
-| `ensure-whale-assistant.ps1` | 插件注册脚本（写 profile 依赖 + 注册行，幂等） |
+| `install.ps1` | 一键安装：克隆（或定位本地仓库）+ 注册 + junction + 体检，支持 `-TargetProfile web\|both`、`-Repo <本地路径>` |
+| `ensure-whale-assistant.ps1` | 插件注册脚本（写 profile 依赖 + 注册行，幂等）；`-Check` 只读体检 / `-Remove` 对称卸载 |
 | `parts/style.css` | 鲸鱼全部样式 |
 | `test-whale.js` / `test-chip-gate.js` | 单元测试（vm 沙箱 694+ 断言 / 闸门纯函数 19 断言） |
 | `FEATURES.md` / `CHANGELOG.md` / `docs/seams.md` | 用户功能手册 / 版本变更记录 / 调试与测试导出缝清单 |

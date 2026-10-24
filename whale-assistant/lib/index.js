@@ -518,7 +518,23 @@ function apply(ctx) {
 		}
 	];
 	const disposers = [];
-	for (const route of routes) disposers.push(ctx.webServer.register(route));
+	for (const route of routes) {
+		try {
+			disposers.push(ctx.webServer.register(route));
+		} catch (error) {
+			/* A duplicate exact route means an earlier whale instance is still
+			 * serving these paths (hot reload raced its teardown, e.g. after an
+			 * edit to the linked lib/). The old instance owns the routes: skip
+			 * re-registering instead of failing the whole component, and its
+			 * own disposer remains responsible for cleanup. */
+			if (/duplicate/.test(String(error && error.message || error))) {
+				console.warn('[dsh-whale-assistant] route already registered, skipping:', route.path);
+				disposers.push(() => {});
+			} else {
+				throw error;
+			}
+		}
+	}
 	/* SSE heartbeat: a real event the whale counts toward server liveness —
 	 * an IDLE server must not read as dead to the health check (R3) */
 	const sseHeartbeat = setInterval(() => {

@@ -324,12 +324,12 @@ node scripts/run-e2e.js  # CDP 端到端四场景（调试口 9222 不可达时�
 
 - 作者：**LengMu-Cloud**（[github.com/LengMu-Cloud](https://github.com/LengMu-Cloud)）
 - 许可：[MIT](LICENSE)
-- 鲸鱼形象与 `whale-logo.svg` 为本仓库原创自绘（手写 SVG，无第三方素材）
+- 鲸鱼形象主体为 DeepSeek 官方鲸鱼标志的原始矢量路径（权利归 DeepSeek 及其权利人所有，本仓库不主张任何权利，仅作非官方插件图标之用）；安全帽/咖啡杯装饰为本仓库自绘
 
 ## 免责声明
 
 本项目是 DeepSeek Harness（DSH）的**第三方非官方插件**，与 DeepSeek 官方无关。
 插件仅通过 DSH 公开插件接口与公开 HTTP 路由工作，**不含、不分发 DSH 的任何代码**。
-MIT 许可证只覆盖本仓库的原创代码。DSH 是 DeepSeek 的产品，其权利归其权利人所有。
+MIT 许可证只覆盖本仓库的原创代码（含安全帽/咖啡杯装饰）；**鲸鱼形象主体为 DeepSeek 官方鲸鱼标志**，非本仓库原创，其权利归 DeepSeek 及其权利人所有。DSH 是 DeepSeek 的产品，其权利归其权利人所有。
 
 ---

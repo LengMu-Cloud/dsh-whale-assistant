@@ -18,10 +18,15 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { loadStore, saveStoreAtomic, mergeHistory } from './store.js';
 
 const inject = ['webServer', 'sessionController'];
 
 const DOC_LIMIT = 512 * 1024;
+
+function storeDir() {
+	return join(homedir(), '.dsh');
+}
 
 function storeFile() {
 	return join(homedir(), '.dsh', 'whale-assistant.json');
@@ -57,6 +62,52 @@ function isLoopbackRequest(req) {
 	if (addr === '::1' || addr.startsWith('::ffff:127.')) return true;
 	if (/^127\.\d+\.\d+\.\d+$/.test(addr)) return true;
 	return false;
+}
+
+/** Shared POST body reader: accumulate up to `limit` bytes (413 + socket
+ * destroy beyond), then hand the parsed JSON (and raw text) to onBody.
+ * Parse/validation failures go to onError (default: 400 with the message);
+ * a transport error is answered 400 read-error instead of hanging the
+ * client. Replaces the three byte-identical copies that used to live in
+ * the save / debug / dev-say handlers. */
+function readJsonBody(req, res, limit, onBody, onError) {
+	const chunks = [];
+	let size = 0;
+	let done = false;
+	req.on('data', (chunk) => {
+		size += chunk.length;
+		if (size > limit && !done) {
+			done = true;
+			res.writeHead(413, { 'cache-control': 'no-store' });
+			res.end('{"ok":false,"error":"body-too-large"}');
+			req.destroy();
+			return;
+		}
+		chunks.push(chunk);
+	});
+	req.on('end', () => {
+		if (done) return;
+		done = true;
+		try {
+			const raw = Buffer.concat(chunks).toString('utf8');
+			onBody(JSON.parse(raw), raw);
+		} catch (error) {
+			try {
+				(onError || ((err) => {
+					res.writeHead(400, { 'cache-control': 'no-store' });
+					res.end('{"ok":false,"error":' + JSON.stringify(String(err && err.message || err)) + '}');
+				}))(error);
+			} catch (e) { /* headers already gone */ }
+		}
+	});
+	req.on('error', () => {
+		if (done) return;
+		done = true;
+		try {
+			res.writeHead(400, { 'cache-control': 'no-store' });
+			res.end('{"ok":false,"error":"read-error"}');
+		} catch (e) { /* socket already gone */ }
+	});
 }
 
 /** Rolling buffer of wire frames the whale polls (background-session
@@ -168,106 +219,20 @@ function apply(ctx) {
 					res.end('{"ok":false,"error":"forbidden"}');
 					return;
 				}
-				const chunks = [];
-				let size = 0;
-				let done = false;
-				req.on('data', (chunk) => {
-					size += chunk.length;
-					if (size > DOC_LIMIT && !done) {
-						done = true;
-						res.writeHead(413, { 'cache-control': 'no-store' });
-						res.end('{"ok":false,"error":"body-too-large"}');
-						req.destroy();
-						return;
+				readJsonBody(req, res, DOC_LIMIT, (parsed) => {
+					if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+						throw new Error('document must be a JSON object');
 					}
-					chunks.push(chunk);
-				});
-				req.on('end', () => {
-					if (done) return;
-					done = true;
-					try {
-						const raw = Buffer.concat(chunks).toString('utf8');
-						const parsed = JSON.parse(raw); /* must be valid JSON */
-						if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-							throw new Error('document must be a JSON object');
-						}
-						/* History arrives as a full-document replace from every
-						 * window — two live windows (or a page reload mid-push)
-						 * would silently erase each other's records. Merge the
-						 * incoming history with the stored one instead: union by
-						 * the client's dedupe key (sessionId|endTime|kind),
-						 * preferring the richer entry (a real title beats the
-						 * 未命名任务 placeholder, then the newer `at`). */
-						let existing = null;
-						try {
-							existing = JSON.parse(readFileSync(storeFile(), 'utf8'));
-						} catch (e) { /* first run */ }
-						if (Array.isArray(parsed.history)) {
-							/* Deletion sync: a 清空历史 bumps `clearAt` (a generation
-							 * marker persisted in this doc). Merge-only sync can
-							 * never propagate a deletion — records cleared on one
-							 * window resurrected from the store on the next pull.
-							 * Every record OLDER than clearAt is dropped here and
-							 * on every client-side merge. */
-							const clearAt = Math.max((existing && existing.clearAt) || 0, parsed.clearAt || 0);
-							parsed.clearAt = clearAt;
-							const alive = (e) => !clearAt || (e && (e.at || 0) >= clearAt);
-							const richness = (e) => (e && e.title && e.title !== '未命名任务' ? 2 : 0) + (e && (e.endTime || e.at) ? 1 : 0);
-							const seen = new Map();
-							const put = (e) => {
-								if (!e || typeof e !== 'object' || Array.isArray(e)) return;
-								const key = [e.sessionId || '', e.endTime || e.at || 0, e.kind || ''].join('|');
-								const prev = seen.get(key);
-								if (prev === undefined) { seen.set(key, e); return; }
-								if (richness(e) > richness(prev)) seen.set(key, e);
-								else if (richness(e) === richness(prev) && (e.at || 0) > (prev.at || 0)) seen.set(key, e);
-							};
-							/* second pass: collapse same-turn re-fires (the DOM chip
-							 * can race a page reload and push one turn twice with
-							 * 70ms-different endTime, which the exact key misses) */
-							const all = [...seen.values()].sort((x, y) => (x.at || 0) - (y.at || 0));
-							seen.clear();
-							/* (clear BEFORE the rebuild: rebuilding into the same map
-							 * without clearing left the original exact keys in place
-							 * and the whole pass was a no-op) */
-							for (const e of all) {
-								const near = [...seen.keys()].find((k) => {
-									const p = seen.get(k);
-									return p.sessionId === e.sessionId && p.kind === e.kind
-										&& Math.abs((p.turnTokens || 0) - (e.turnTokens || 0)) < 1
-										&& Math.abs((e.at || 0) - (p.at || 0)) < 120000;
-								});
-								if (near !== undefined) {
-									if (richness(e) > richness(seen.get(near))) seen.set(near, e);
-									continue;
-								}
-								seen.set([...seen.keys()].length + '|' + (e.at || 0) + '|' + (e.kind || ''), e);
-							}
-							for (const e of (existing && Array.isArray(existing.history) ? existing.history : []).filter(alive)) put(e);
-							for (const e of parsed.history.filter(alive)) put(e);
-							parsed.history = [...seen.values()]
-								.sort((x, y) => (y.at || 0) - (x.at || 0))
-								.slice(0, 500);
-						}
-						mkdirSync(join(homedir(), '.dsh'), { recursive: true });
-						writeFileSync(storeFile(), JSON.stringify(parsed), 'utf8');
-						res.writeHead(200, {
-							'content-type': 'application/json; charset=utf-8',
-							'cache-control': 'no-store'
-						});
-						res.end('{"ok":true}');
-					} catch (error) {
-						res.writeHead(400, { 'cache-control': 'no-store' });
-						res.end('{"ok":false,"error":' + JSON.stringify(String(error && error.message || error)) + '}');
-					}
-				});
-				req.on('error', () => {
-					if (done) return;
-					done = true;
-					try {
-						res.writeHead(400, { 'cache-control': 'no-store' });
-						res.end('{"ok":false,"error":"read-error"}');
-					} catch (e) {}
+					/* History arrives as a full-document replace from every
+					 * window — merge (never replace) via mergeHistory
+					 * (lib/store.js), then persist through the atomic writer. */
+					mergeHistory(loadStore(storeDir()), parsed);
+					saveStoreAtomic(storeDir(), parsed);
+					res.writeHead(200, {
+						'content-type': 'application/json; charset=utf-8',
+						'cache-control': 'no-store'
+					});
+					res.end('{"ok":true}');
 				});
 			}
 		},
@@ -298,10 +263,12 @@ function apply(ctx) {
 			kind: 'exact',
 			path: '/api/whale-assistant/debug',
 			handler: (req, res) => {
-				/* TEMP instrumentation: the alpha adapter posts DOM mutation
+				/* Debug/diagnostics route: the alpha adapter posts DOM mutation
 				 * fingerprints here while tuning turn/start + attention
-				 * detection. Writes ~/.dsh/whale-debug.json (read it from
-				 * disk; loopback-only like every other route). */
+				 * detection; `kind:"history-remove"` is the test-teardown hook
+				 * (save is merge-only, teardown needs surgical deletion).
+				 * Writes ~/.dsh/whale-debug.json (read it from disk;
+				 * loopback-only like every other route). */
 				if (req.method !== 'POST') {
 					res.writeHead(405, { 'cache-control': 'no-store' });
 					res.end();
@@ -312,56 +279,29 @@ function apply(ctx) {
 					res.end('{"ok":false,"error":"forbidden"}');
 					return;
 				}
-				const chunks = [];
-				let size = 0;
-				let done = false;
-				req.on('data', (chunk) => {
-					size += chunk.length;
-					if (size > DOC_LIMIT && !done) {
-						done = true;
-						res.writeHead(413, { 'cache-control': 'no-store' });
-						res.end('{"ok":false,"error":"body-too-large"}');
-						req.destroy();
+				readJsonBody(req, res, DOC_LIMIT, (parsed, raw) => {
+					if (parsed && parsed.kind === 'history-remove' && typeof parsed.sessionId === 'string') {
+						const doc = loadStore(storeDir());
+						const before = doc && Array.isArray(doc.history) ? doc.history.length : 0;
+						const kept = doc && Array.isArray(doc.history)
+							? doc.history.filter((e) => e && e.sessionId !== parsed.sessionId)
+							: [];
+						if (doc) {
+							doc.history = kept;
+							saveStoreAtomic(storeDir(), doc);
+						}
+						res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+						res.end(JSON.stringify({ ok: true, removed: before - kept.length }));
 						return;
 					}
-					chunks.push(chunk);
+					mkdirSync(storeDir(), { recursive: true });
+					writeFileSync(join(storeDir(), 'whale-debug.json'), raw, 'utf8');
+					res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+					res.end('{"ok":true}');
+				}, () => {
+					res.writeHead(400, { 'cache-control': 'no-store' });
+					res.end('{"ok":false,"error":"bad-json"}');
 				});
-				req.on('end', () => {
-					if (done) return;
-					done = true;
-					try {
-						const raw = Buffer.concat(chunks).toString('utf8');
-						const parsed = JSON.parse(raw); /* must be valid JSON */
-						/* history-remove: surgical removal by sessionId (test
-						 * teardown / diagnostics) — a plain save cannot delete
-						 * because save is merge-only. Loopback-only like every
-						 * route here. */
-						if (parsed && parsed.kind === 'history-remove' && typeof parsed.sessionId === 'string') {
-							let doc = null;
-							try { doc = JSON.parse(readFileSync(storeFile(), 'utf8')); } catch (e) {}
-							const before = doc && Array.isArray(doc.history) ? doc.history.length : 0;
-							const kept = doc && Array.isArray(doc.history)
-								? doc.history.filter((e) => e && e.sessionId !== parsed.sessionId)
-								: [];
-							if (doc) {
-								doc.history = kept;
-								mkdirSync(join(homedir(), '.dsh'), { recursive: true });
-								writeFileSync(storeFile(), JSON.stringify(doc), 'utf8');
-							}
-							res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-							res.end(JSON.stringify({ ok: true, removed: before - kept.length }));
-							return;
-						}
-						mkdirSync(join(homedir(), '.dsh'), { recursive: true });
-						writeFileSync(join(homedir(), '.dsh', 'whale-debug.json'), raw, 'utf8');
-						res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-						res.end('{"ok":true}');
-					} catch (error) {
-						res.writeHead(400, { 'cache-control': 'no-store' });
-						res.end('{"ok":false,"error":"bad-json"}');
-					}
-				});
-				req.on('error', () => {});
 			}
 		},
 		{
@@ -404,25 +344,8 @@ function apply(ctx) {
 					res.end('{"ok":false,"error":"forbidden"}');
 					return;
 				}
-				const chunks = [];
-				let size = 0;
-				let done = false;
-				req.on('data', (chunk) => {
-					size += chunk.length;
-					if (size > 65536 && !done) {
-						done = true;
-						res.writeHead(413, { 'cache-control': 'no-store' });
-						res.end('{"ok":false,"error":"body-too-large"}');
-						req.destroy();
-						return;
-					}
-					chunks.push(chunk);
-				});
-				req.on('end', () => {
-					if (done) return;
-					done = true;
+				readJsonBody(req, res, 65536, (body) => {
 					(async () => {
-						const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
 						const sessionId = typeof body.sessionId === 'string' ? body.sessionId : '';
 						const text = typeof body.text === 'string' ? body.text.slice(0, 4000) : '';
 						if (!sessionId || !text) throw new Error('need sessionId + text');
@@ -450,7 +373,6 @@ function apply(ctx) {
 						} catch (e) {}
 					});
 				});
-				req.on('error', () => {});
 			}
 		},
 		{

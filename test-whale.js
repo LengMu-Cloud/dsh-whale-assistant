@@ -689,14 +689,14 @@ async function main() {
 				value: {
 					events: [],
 					hasMore: false,
-					projections: { asOfSeq: 1, values: { title: '分析AI_Software目录' } },
+					projections: { asOfSeq: 1, values: { title: '分析工作目录' } },
 				},
 			},
 		}),
 	}));
 	A.handleMuxPayload({ type: 'question/requested', sessionId: 'sd', questions: [{ id: 'q3', question: '选一个方案' }] });
 	await sleep(60);
-	assert.ok(envAtt.bubble().textContent.includes('[分析AI_Software目录]需要你选择'), `on-demand title fetch: ${envAtt.bubble().textContent}`);
+	assert.ok(envAtt.bubble().textContent.includes('[分析工作目录]需要你选择'), `on-demand title fetch: ${envAtt.bubble().textContent}`);
 
 	/* 13. 班味: workload builds gradually across mood stages, completions relieve */
 	const envMood = makeEnv();

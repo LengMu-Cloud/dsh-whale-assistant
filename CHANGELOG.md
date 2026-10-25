@@ -1,9 +1,11 @@
 # Changelog — dsh-whale
 
 所有对外可感知的变更按版本记录。当前版本见 `src/utils/constants.js` 的 `PATCH_VERSION`
-（构建时可用 `PATCH_VERSION=0.4.1 node build-whale.js` 覆盖）。
+（构建时可用 `PATCH_VERSION=0.4.2 node build-whale.js` 覆盖）。
 
-## [未发布]
+## [0.4.2] - 2026-10-25
+
+> **数据安全 + 工程化波**：账本落盘加固（原子写/损坏隔离）、宿主半区首次拥有回归测试、CI 六门禁上线、README 门面补课。**宿主半区有改动——升级后需重启 DSH 服务（桌面端重启应用）**。
 
 ### 新增
 - **`market/` 自定义插件市场索引（实验性，DSH 0.2.1+）**：`market-index.json`（官方格式 1——鲸鱼以标准 `dsh.bundle` 列入，git 源锁定 commit+`path:whale-assistant` 子目录，零 npm 发布负担）+ `market/README.md`（jsDelivr/raw 镜像 URL、用户启用步骤、字段速查）+ `scripts/build-market-index.js`（发版后自动追加最新 tag 条目并按格式 1 规则自检）。用户在官方 UI「发现」页加索引即可安装，与命令行路径二选一（并存=双鲸鱼，ensure 会识别提示）

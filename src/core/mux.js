@@ -14,6 +14,10 @@
 			return;
 		}
 		window.__dshWhale.sockets.push(socket);
+		/* ring-cap the diagnostic socket list: dead sockets from past
+		 * reconnects (sleep/wake cycles churn dozens over a long session)
+		 * would otherwise accumulate for the page's whole life */
+		while (window.__dshWhale.sockets.length > 4) window.__dshWhale.sockets.shift();
 
 		socket.addEventListener('open', function () {
 			reconnectDelay = 1000;

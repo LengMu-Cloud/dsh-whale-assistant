@@ -772,6 +772,13 @@ async function main() {
 	D._resetDing(); /* the queued ding never renders */
 	D.playDing('fail');
 	assert.deepStrictEqual(rounded().slice(2), [550, 415], 'fail ding: dull descending pair');
+	/* remind + thud: the scheme menu offers it, so it must ring — the silent
+	 * fall-through was a real bug (menu listed thud, the synth ignored it) */
+	D._resetDing();
+	envDing.audioStarts().length = 0;
+	D.applyConfig({ soundRemind: 'thud' });
+	D.playDing('remind');
+	assert.deepStrictEqual(rounded(), [330, 277], 'remind thud: gentle low knock-knock');
 	/* sequential playback: a second ding still plays, after the first finished */
 	D._resetDing();
 	envDing.audioStarts().length = 0;
@@ -2563,6 +2570,12 @@ async function main() {
 	sndSels[1]._fire('change', {});
 	assert.strictEqual(CG.CONFIG.soundFail, 'chime', 'fail sound switched to chime via dropdown');
 	assert.strictEqual(JSON.parse(envCfg.sandbox.localStorage.getItem('dsh-whale:config')).data.soundFail, 'chime', 'fail sound persisted');
+	/* the remind sound must persist too — the saveConfig whitelist dropped
+	 * it (P1: the pick silently reverted to bell on the next page load) */
+	sndSels[3].value = 'thud';
+	sndSels[3]._fire('change', {});
+	assert.strictEqual(CG.CONFIG.soundRemind, 'thud', 'remind sound switched to thud via dropdown');
+	assert.strictEqual(JSON.parse(envCfg.sandbox.localStorage.getItem('dsh-whale:config')).data.soundRemind, 'thud', 'remind sound persisted');
 	pickPanel = sPanel();
 	assert.ok(pickPanel.textContent.includes('完成通知'), 'picker still open after a pick (no rebuild)');
 	/* 41c. 1:1 panel lifecycle: a completion shows the token panel; attention

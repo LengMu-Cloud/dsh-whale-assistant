@@ -50,6 +50,7 @@
 	var knownBootId = state.bootId;
 	var bootAt = Date.now();
 	var lastStartAt = {}; /* per-session turn/start announce throttle */
+	var lastEndAt = {}; /* per-session last turn/end seen (throttle refinement) */
 	/* batch fold: how many completed turn/ends of the SAME session ride in
 	 * one poll batch (a hidden/throttled tab lets minutes of events pile up
 	 * in a single fetch). FOLD_MIN or more collapse into ONE 📦 summary
@@ -69,6 +70,11 @@
 		var type = event.type;
 		if (type === 'turn/end') {
 			var reason = event.data && event.data.reason && event.data.reason.kind;
+			/* throttle bookkeeping FIRST, before any dedup/announce return:
+			 * a genuinely NEW turn is "an end arrived after the last start",
+			 * no matter which announcement path that end takes below */
+			lastEndAt[sid] = Date.now();
+			capObj(lastEndAt, 100); /* memory audit */
 			/* the timer stop must NOT hang on the announcement paths: the
 			 * dedup return below (chip fired first) and the fail-window
 			 * return both run BEFORE the processed branch's stopRunTimer —
@@ -190,7 +196,14 @@
 			var startAt = event.time || frame.time;
 			if (startAt && startAt < bootAt - 5000) return;
 			var nowMs = Date.now();
-			if (lastStartAt[sid] && nowMs - lastStartAt[sid] < 15000) return;
+			/* throttle ONLY duplicate emissions of the SAME turn: a start is
+			 * stale when it is recent AND no turn/end arrived since it. The
+			 * bare 15s window used to swallow GENUINE back-to-back turns too
+			 * (retry right after a failure, quick follow-up) — and the
+			 * swallowed forward carries the ledger reset, the turn stamp and
+			 * the ⏳ timer start, so the next report summed onto the previous
+			 * turn's burn. An end after the last start re-arms everything. */
+			if (lastStartAt[sid] && nowMs - lastStartAt[sid] < 15000 && !(lastEndAt[sid] && lastEndAt[sid] > lastStartAt[sid])) return;
 			lastStartAt[sid] = nowMs;
 			capObj(lastStartAt, 100); /* memory audit */
 			try { registerBackground(sid); } catch (e) {}
@@ -370,7 +383,16 @@
 						else f.event.foldCount = foldN[f.sessionId];
 					}
 				}
-				feedEventFrame(f);
+				/* never break the channel loop (mux.js discipline): a frame
+				 * that throws would otherwise (a) kill the SSE onmessage
+				 * handler for good, (b) make the poll path read a handler
+				 * bug as a dead server in the health check. Drop the poisoned
+				 * frame loudly and keep flowing. */
+				try {
+					feedEventFrame(f);
+				} catch (e) {
+					try { console.error('[dsh-whale] event handler failed for seq ' + f.seq, e); } catch (e2) {}
+				}
 			}
 			/* session/jobs frames are intentionally ignored (empty payloads) */
 		}

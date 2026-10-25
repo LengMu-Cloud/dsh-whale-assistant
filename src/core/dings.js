@@ -119,6 +119,13 @@
 		/* 'none' means SILENT — the kind-specific built-ins below must not
 		 * ring either (pre-existing bug: attention 选静音仍会响内置琶音) */
 		if (scheme === 'none') return true;
+		if (kind === 'remind' && scheme === 'thud') {
+			/* gentle low knock-knock: a reminder, not a failure — softer and
+			 * slightly higher than the fail thud, two soft thumps */
+			ring(t0, 330, 0.18, 0.13);
+			ring(t0 + 0.22, 277, 0.22, 0.10);
+			return true;
+		}
 		if (kind === 'fail') {
 			/* thud: dull descending minor third */
 			ring(t0, 550, 0.22, 0.15);

@@ -54,6 +54,7 @@
 			soundDone: CONFIG.soundDone,
 			soundFail: CONFIG.soundFail,
 			soundAttn: CONFIG.soundAttn,
+			soundRemind: CONFIG.soundRemind,
 			pressureWarnPct: CONFIG.pressureWarnPct,
 			dndEnabled: CONFIG.dndEnabled,
 			dndFrom: CONFIG.dndFrom,

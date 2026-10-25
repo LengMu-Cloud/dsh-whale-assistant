@@ -147,6 +147,13 @@
 
 	function idleTick(force) {
 		if (asleep || dndActive()) return;
+		/* day rollover: a page that lives across midnight must re-arm the
+		 * daily cap (gear.js checkDayRollover pattern) — otherwise the
+		 * "3/day" guide cap silently becomes a lifetime cap */
+		if (petHintDay !== todayKey()) {
+			petHintDay = todayKey();
+			petHintCount = 0;
+		}
 		if (typeof window.__dshWhale.unreadCount === 'function' && window.__dshWhale.unreadCount() > 0) return;
 		if (hasRunningJobs()) return;
 		if (!force && Math.random() >= IDLE_CHANCE) return;

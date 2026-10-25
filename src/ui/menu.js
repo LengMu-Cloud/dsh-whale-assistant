@@ -497,7 +497,7 @@
 			item('跳回对话', '双击通知气泡，或点历史抽屉里的任意一条记录。');
 			sec('❤️ 陪伴小彩蛋');
 			item('摸摸头', '右键双击我：好感 +1，还有小心心飘出。');
-			item('状态与情绪', '任务越多我越累、会打瞌睡（左键单击唤醒）；右键菜单标题能看当前心情和进行中的任务数。');
+			item('状态与情绪', '任务越多我越累、会打瞌睡（拖一拖或双击我就醒）；右键菜单标题能看当前心情和进行中的任务数。');
 			item('装扮与成就', '完成任务攒进度，解锁新装扮后去 右键菜单 → 🎨我的装扮 查看。');
 			sec('🙋 常见问题');
 			item('怎么没有声音？', '依次看：右键菜单 🔊 声音是否开 → 设置里音量 → 🎵 音色里对应通知是否选了"静音" → 是否在免打扰时段（深夜只记红标不出声）。');
@@ -505,6 +505,7 @@
 			item('插件更新了怎么加载新版？', '同样刷新页面：右键菜单 🔄 刷新页面（桌面端）或 Ctrl+F5（浏览器）——新版本在下次加载时自动生效。');
 			item('后台任务会打扰我吗？', '不会：只有完成/失败/需要你动手时才提醒，中间过程只在状态面板安静展示；深夜时段只记红标不出声。');
 			item('换浏览器历史还在吗？', '在——历史跟服务端走，同一台机器的桌面壳和各浏览器窗口看到同一份；跨机器不同步。');
+			item('历史突然变空了？', '极少数情况下账本文件损坏会自动隔离重建，~/.dsh/ 下会出现 whale-assistant.json.corrupt-时间戳 备份文件。想救回：先关 DSH，把文件名末尾的 .corrupt-时间戳 后缀删掉、恢复原名，再启动。');
 			panel.appendChild(list);
 			mkPanelFoot(panel, closeCtxHistory, true); /* ← 返回菜单 / ✕ 关闭 — 与其他子面板统一 */
 			if (!ctxHistory) document.body.appendChild(panel);
@@ -694,6 +695,7 @@
 			title.textContent = '⏰ 提醒我';
 			panel.appendChild(title);
 			var PRESETS = [5, 10, 25, 60];
+			var rmId = function () { return 'rm-' + Date.now() + '-' + Math.floor(Math.random() * 1e6); };
 			PRESETS.forEach(function (min) {
 				var row = document.createElement('div');
 				row.className = 'dsh-whale-settings-row';
@@ -701,7 +703,7 @@
 				row.addEventListener('click', function (event) {
 					event.stopPropagation();
 					var list = loadReminders();
-					list.push({ at: Date.now() + min * 60000, text: min + ' 分钟时间到了' });
+					list.push({ id: rmId(), at: Date.now() + min * 60000, text: min + ' 分钟时间到了' });
 					saveReminders(list);
 					uiSay('好，' + min + ' 分钟后提醒你 ⏰', 2000);
 					openReminders();
@@ -780,13 +782,20 @@
 				var pad = function (v) { return v < 10 ? '0' + v : '' + v; };
 				var label = pad(h) + ':' + pad(mi) + ':' + pad(s);
 				var list = loadReminders();
-				list.push({ at: target.getTime(), text: '定时提醒 ' + label });
+				list.push({ id: rmId(), at: target.getTime(), text: '定时提醒 ' + label });
 				saveReminders(list);
 				uiSay('好，' + (target.getDate() === new Date().getDate() ? '今天' : '明天') + ' ' + label + ' 提醒你 ⏰', 2600);
 				openReminders();
 			};
 			var list = loadReminders();
 			list.sort(function (a, b) { return a.at - b.at; });
+			/* hydrate ids onto legacy (pre-id) entries so cancel-by-id below
+			 * never has to fall back to a positional index */
+			var rmDirty = false;
+			for (var hi = 0; hi < list.length; hi++) {
+				if (!list[hi].id) { list[hi].id = 'rm-' + list[hi].at + '-' + hi + '-' + Math.floor(Math.random() * 1e6); rmDirty = true; }
+			}
+			if (rmDirty) saveReminders(list);
 			list.forEach(function (r, idx) {
 				var left = Math.max(0, Math.round((r.at - Date.now()) / 60000));
 				var d = new Date(r.at);
@@ -799,7 +808,15 @@
 				row.addEventListener('click', function (event) {
 					event.stopPropagation();
 					var rest = loadReminders();
-					rest.splice(idx, 1);
+					/* cancel by id, never by the render-time index: the 20s
+					 * trigger interval rewrites the list while the drawer is
+					 * open (due reminders drop out) and another window can
+					 * shrink it too — a stale index deletes the WRONG row */
+					var killAt = -1;
+					for (var ki = 0; ki < rest.length; ki++) {
+						if (rest[ki].id === r.id) { killAt = ki; break; }
+					}
+					if (killAt >= 0) rest.splice(killAt, 1);
 					saveReminders(rest);
 					openReminders();
 				});
@@ -1292,7 +1309,8 @@
 		 * right-click anywhere in the window still pets the whale */
 		document.addEventListener('contextmenu', function (event) {
 			var floatsOpen = (ctxMenu && ctxMenu.classList.contains('show')) ||
-				(ctxPanel && ctxPanel.classList.contains('show'));
+				(ctxPanel && ctxPanel.classList.contains('show')) ||
+				(ctxHistory && ctxHistory.classList.contains('show'));
 			if (!floatsOpen) return; /* outside the whale: browser menu as usual */
 			event.preventDefault();
 			var now = Date.now();

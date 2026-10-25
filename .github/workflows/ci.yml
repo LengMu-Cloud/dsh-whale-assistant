@@ -1,0 +1,50 @@
+# CI for dsh-whale-assistant.
+#
+# Everything here is pure local node — no DSH install, no network beyond the
+# checkout. The build-consistency step is the teeth behind "built artifacts
+# are committed": rebuilding from src/ must produce byte-identical files.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + tags: build-market-index reads git describe
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Unit tests (vm sandbox, 701+ asserts)
+        run: node test-whale.js
+      - name: Chip-gate contract tests
+        run: node test-chip-gate.js
+      - name: Host-half ledger tests (lib/store.js)
+        run: node test-host-store.js
+      - name: Static architecture audit (exit-code gated)
+        run: node scripts/audit-deps.js
+      - name: Built artifacts match src
+        run: |
+          node build-whale.js
+          git diff --exit-code -- whale.js whale-map.md whale-assistant/lib/whale.js || {
+            echo "::error::committed artifacts drifted from src/ — run: node build-whale.js, commit the rebuilt files"
+            exit 1
+          }
+      # Freshness check for the custom-plugin-market index: a release tag is
+      # only listed once build-market-index.js has run AFTER tagging (the
+      # entry references the tag's commit, so it can never be committed
+      # before the tag exists — hence the check lives on main pushes, where
+      # a forgotten sync turns red on the next push with a fix hint).
+      - name: Market index covers the latest tag
+        if: github.ref == 'refs/heads/main'
+        run: |
+          node scripts/build-market-index.js
+          git diff --exit-code -- market/ || {
+            echo "::error::market/market-index.json is stale for the latest tag — run: node scripts/build-market-index.js, commit, push"
+            exit 1
+          }

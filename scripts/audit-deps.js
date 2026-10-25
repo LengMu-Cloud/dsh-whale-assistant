@@ -25,6 +25,11 @@ const path = require('path');
 const ROOT = path.normalize(path.join(__dirname, '..'));
 const { MANIFEST } = require('../whale-manifest.js');
 
+/* CI gate: any of the four hard findings (depth PROBLEM / REAL COLLISION /
+ * LINT FAIL / literal INTERFERENCE) sets a non-zero exit code — run-e2e's
+ * "never block CI" spirit does not extend to architecture violations. */
+let gateFail = 0;
+
 /* reads are whitelisted to manifest files with a root-boundary check */
 const content = {};
 for (const m of MANIFEST) {
@@ -91,9 +96,11 @@ noBlock.forEach((l, i) => {
 });
 
 console.log('== 0) depth sanity ==');
-console.log(depth === 0 && Math.min(...depthAtLine) === 0
+const depthSane = depth === 0 && Math.min(...depthAtLine) === 0;
+console.log(depthSane
 	? '(concatenated source balances to depth 0, min depth 0)'
 	: 'PROBLEM: ends at ' + depth + ', min ' + Math.min(...depthAtLine));
+if (!depthSane) gateFail++;
 
 console.log('\n== A) module surface (top=IIFE-global, clo=closure-local) ==');
 for (const f of ORDER) {
@@ -113,6 +120,7 @@ for (const n of Object.keys(defs).sort()) {
 	else console.log('same-name, distinct scopes (ok):', n, JSON.stringify(ds.map((t) => t.file + ':' + t.line + '@d' + t.depth)));
 }
 if (!real) console.log('(no depth-1 collisions)');
+if (real) gateFail += real;
 
 /* ---- edges ---- */
 console.log('\n== B) dependency edges (scope-correct): consumer -> definer ==');
@@ -230,8 +238,18 @@ noBlock.forEach((l, i) => {
 console.log(lintBad === 0
 	? '(lint clean: every non-owner read goes through a fallback chain or a get-then-set guard)'
 	: lintBad + ' read(s) WITHOUT fallback — a new consumer assuming pre-filled titles. Fix or extend the contract in docs/architecture.md §6.');
+if (lintBad) gateFail += lintBad;
 
 console.log('\n== G) literal-interference self-check (must be clean for depth results to hold) ==');
 console.log('(1) unterminated template literal lines:', tplLines.length ? tplLines.join(' ') : '(none)');
 console.log('(2) regex literals unbalanced/unquotated:', reBad);
 console.log('(3) verdict:', interference ? '!! INTERFERENCE — treat A2/B/C depth conclusions as unreliable !!' : 'clean — depth tracking is sound on this tree');
+if (interference) gateFail++;
+
+console.log('\n== verdict ==');
+if (gateFail) {
+	console.log('AUDIT FAIL: ' + gateFail + ' problem(s) above');
+	process.exitCode = 1;
+} else {
+	console.log('AUDIT OK — all gates clean');
+}

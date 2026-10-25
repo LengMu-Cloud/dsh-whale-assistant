@@ -10,11 +10,20 @@
 - **`install.ps1` 一键安装**：克隆（或定位本地仓库，`-Repo`）→ 注册进 profile（`-TargetProfile desktop|web|both`，默认 desktop）→ 挂 node_modules junction → 体检三件套；幂等可重复执行。全新机器从零到鲸鱼一条命令（前提：先跑一次 DSH 让 profile 生成）
 - **`ensure-whale-assistant.ps1 -Check`**：只读体检注册三件套（依赖行 / bundles 行 / junction 实体），缺件退出码 1，可被脚本分支；**识别市场/git/npm 快照安装模式并提示勿重复本地注册**
 - **`ensure-whale-assistant.ps1 -Remove`**：对称卸载——移除依赖行与 `dsh.profile.bundles` 行（结构化正则，兼容 `dsh plugin add` 写出的任意元素位置与 git/npm 依赖值）+ 删 junction；写前备份 package.json，改坏 JSON 自动放弃写入
+- **CI 工作线（GitHub Actions）**：main 推送与 PR 自动跑 `test-whale.js`（701+ 断言）/ `test-chip-gate.js` / `test-host-store.js` / `audit-deps.js`（本轮起带退出码门禁）/ **构建产物一致性**（从 src 重建后 `git diff` 必须为零，抓住「改源码忘构建就推送」）/ **市场索引新鲜度**（校验最新 tag 已入 `market/market-index.json`，忘跑 build-market-index 时下一次 main 推送红灯并给修复指引）；README 挂 CI 徽章
+- **宿主半区账本测试 `test-host-store.js`**：账本读写抽取为 `whale-assistant/lib/store.js`（`loadStore` / `saveStoreAtomic` / `mergeHistory` 纯函数）后的回归钉——20 断言钉合并语义五件套 + 损坏隔离 + 原子写（此前宿主半区 563 行零测试，全仓库逻辑最精巧处裸奔）
 
 ### 变更
 - README 安装节重组：一键安装为推荐路径，原三件套手工步骤降为「路径 B · 手动」，新增引擎自带 `dsh plugin add` 一条命令的备选说明（含全新 profile 缺 `dsh-web-app` 的坑提示）
+- 宿主半区 `lib/index.js` 的 save / debug / dev-say 三段逐字相同的 POST body 读取样板收敛为 `readJsonBody` 助手（413/传输错误行为统一：传输错误一律回 400 read-error，不再挂死客户端；dev-say 的 JSON 解析失败（含空 body）由 409 改 400，正确参数调用不受影响）；debug 路由的 TEMP 注释转正式身份描述
+- README 门面补课：新增「第 0 步 · 获取仓库」（git clone / Download ZIP / 路径 C 三选一——原先全文没有一句克隆指引，新用户在安装第 0 步断链）；环境要求表补 Git 行、实测矩阵补 0.2.1-rc.3（10-24 三层复查实测）；收尾清单改独立编号；作者与许可节声明鲸鱼形象原创自绘
+
+### 修复
+- **宿主合并管线的「同轮重推坍缩」第二段从未生效**：`all` 快照在两段 `put()` 之前拍下，坍缩循环自写入那天起就始终迭代空表（DOM 芯片与页面刷新竞态产生的 70ms 差双推从未被坍缩）——抽取补测试时实锤，恢复设计顺序（先精确键插入、后坍缩），`test-host-store.js` 钉死
 
 ### 加固
+- **账本写入原子化 + 损坏隔离（`lib/store.js`）**：写 `<file>.tmp` 后 rename 覆盖（Windows 瞬时占用回退直写）——桌面应用内更新对引擎树只有 ~10s 优雅停机宽限，SIGTERM 打断写盘不再可能把 `~/.dsh/whale-assistant.json` 截断成坏文件；解析/读取失败（非 ENOENT）的账本改名 `.corrupt-<时间戳>` 留存后从空基线继续（原为静默当「首次运行」，最多 500 条历史无提示蒸发且不可恢复）
+- **`audit-deps.js` 带退出码**：depth PROBLEM / REAL COLLISION / LINT FAIL / literal INTERFERENCE 任一命中 exit 1 并打印 verdict 行（此前恒 exit 0，永远无法当 CI 门禁）；文档数字回填（依赖边 147→149、core→ui/input 12→14、menu.js 1378→1435）
 - **宿主半区停机清理补全**：SSE 推送通道的 disposer 现在会主动 `end()` 所有挂着的 EventSource 响应并清空订阅表，心跳定时器 `unref()`——插件 dispose 不再给引擎停机留下任何等待客户端断开的句柄（桌面应用内更新对整个引擎树只有 ~10s 优雅宽限，任何挂住的句柄都会导致「未能安全停止任务」拒装）
 
 ## [0.4.1] - 2026-09-30

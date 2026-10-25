@@ -1,5 +1,8 @@
 # 🐋 dsh-whale-assistant — DeepSeek Harness 的小鲸鱼助手插件
 
+![CI](https://github.com/LengMu-Cloud/dsh-whale-assistant/actions/workflows/ci.yml/badge.svg)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 住在 DeepSeek Harness（DSH）界面右下角的打工小鲸鱼，功能包括：
 ①实时任务通知（开工/完成/失败/中止/截断/提问/审核，每种独立音效）；
 ②Token 用量报告（每轮任务消耗 + 全对话累计 + 上下文压力百分比）；
@@ -38,7 +41,8 @@
 
 | 组件 | 要求 |
 |---|---|
-| DeepSeek Harness | 实测版本 **0.1.7-rc.2**（npm `latest`，2026-09-28）与 **0.2.0-rc.2**（官方桌面端捆绑，2026-09-29 桌面迁移实测）双版本；兼容下限见 `whale-assistant/package.json` 的 `dsh.engines`；插件只走公开插件接口与 HTTP 路由。0.1.5 起「上下文已用 N%」由内联文字改为发送按钮旁的环形件；插件压力数据 0.3.3 起改由 DSH 的 token-meter 服务端投影供给，报告压力行/压力色/提醒不受官方 UI 改版影响 |
+| DeepSeek Harness | 实测版本 **0.1.7-rc.2**（npm `latest`，2026-09-28）、**0.2.0-rc.2**（官方桌面端捆绑，2026-09-29 桌面迁移实测）与 **0.2.1-rc.3**（官方桌面端，2026-10-24 三层复查实测）三版本；兼容下限见 `whale-assistant/package.json` 的 `dsh.engines`；插件只走公开插件接口与 HTTP 路由。0.1.5 起「上下文已用 N%」由内联文字改为发送按钮旁的环形件；插件压力数据 0.3.3 起改由 DSH 的 token-meter 服务端投影供给，报告压力行/压力色/提醒不受官方 UI 改版影响 |
+| Git | 路径 A 的 install.ps1 用它克隆仓库（已装可跳过克隆、用 `-Repo` 指向本地副本）；路径 C（插件市场）不需要 |
 | Node.js | 跟随 DSH 自身要求即可（开发机 v24 实测）；仅改源码/构建/跑测试时需要 |
 | 操作系统 | 插件本体为纯 JS，跨平台；自动化脚本为 PowerShell（Windows），macOS/Linux 按下文手动步骤 |
 | 运行载体 | **官方桌面端**（推荐）/ 任意现代浏览器；本仓库 Electron 桌面壳已退役（遗留参考） |
@@ -70,6 +74,15 @@ DSH 的 profile 目录默认在 `~/.dsh/profiles/web`（DSH 首次运行后生�
 （0.1.7-rc.2 与 0.2.0-rc.2 双引擎实测支持 bundle 声明；插件自带 `cordis.patch.yml`
 作为 bundle 层被启动器应用，并出现在**官方插件管理页**「已安装」里，带启停开关。）
 
+**第 0 步 · 获取仓库**（路径 A / B / 备选命令都需要；路径 C 市场安装不需要）：
+
+```powershell
+git clone https://github.com/LengMu-Cloud/dsh-whale-assistant.git
+```
+
+克隆到任意固定目录（下文称 `<repo>`）。没装 git 的话：GitHub 页面 Code →
+Download ZIP 解压同样可用，或直接走路径 C（全程官方 UI 内点按，零命令行）。
+
 > **用官方桌面端的话**：桌面端独占 `~/.dsh/profiles/desktop`（与 web profile 不共享插件）。
 > 两套 profile 可并存注册，互不影响。一键安装用 `-TargetProfile desktop`（默认就是它），
 > 手动安装则把下文命令里的 `profiles\web` 全部换成 `profiles\desktop` 再跑一遍。
@@ -79,11 +92,13 @@ DSH 的 profile 目录默认在 `~/.dsh/profiles/web`（DSH 首次运行后生�
 先跑一次 DSH（打开一次官方桌面，或跑一次 `dsh --profile web`）让 profile 目录生成，然后：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File <repo>\install.ps1
+powershell -ExecutionPolicy Bypass -File <repo>\install.ps1 -Repo "<repo>"
 ```
 
-脚本会自动：克隆仓库到 `~\dsh-whale-assistant`（已存在则就地复用）→ 注册进 desktop
-profile → 挂 node_modules junction → 体检三件套并提示下一步。变体：
+`-Repo` 指向第 0 步克隆出的本地副本（推荐——直接复用，不重复联网克隆）；**省略
+`-Repo`** 时脚本会自行从 GitHub 重新克隆到 `~\dsh-whale-assistant`（第 0 步的克隆
+将被忽略）。脚本随后自动：注册进 desktop profile → 挂 node_modules junction →
+体检三件套并提示下一步。变体：
 
 - 浏览器用户加 `-TargetProfile web`；两套 profile 都装加 `-TargetProfile both`
 - 已经下载或克隆过仓库：`-Repo "D:\path\to\dsh-whale-assistant"`（直接以本地目录为源）
@@ -164,17 +179,17 @@ dsh plugin --profile web add <repo>\whale-assistant
 
 **两条路径跑完后的收尾（对路径 A、路径 B 与备选命令通用）**：
 
-3. 构建产物已随仓库提供（`whale.js`）；自行改源码后重建：
+1. 构建产物已随仓库提供（`whale.js`）；自行改源码后重建：
 
    ```text
    node build-whale.js        # 产出 whale.js + whale-map.md（函数导航）
    ```
 
-4. **重启 DSH 服务**让插件挂载：官方桌面用户**重启桌面应用**即可；网页版用户用
+2. **重启 DSH 服务**让插件挂载：官方桌面用户**重启桌面应用**即可；网页版用户用
    任务管理器结束 DSH 的后台服务进程（node，监听 3080 端口）后重新运行
    `dsh --profile web`（或直接重启电脑）。首次安装时若 DSH 服务尚未运行过，先跑一次
    `dsh --profile web`（网页版）或打开官方桌面（桌面版）。浏览器 F5 即可看到鲸鱼。
-5. **验证安装**：右下角出现鲸鱼、控制台（F12）有
+3. **验证安装**：右下角出现鲸鱼、控制台（F12）有
    `[dsh-whale-assistant] whale loaded from plugin routes` 即成功；一切正常时
    健康自检零痕迹（鲸鱼旁无 ⚠️）。有问题先看下方「常见问题」。
 
@@ -251,8 +266,9 @@ localStorage 可留可删）：
 ```text
 node build-whale.js      # 重建 whale.js + whale-map.md，并同步发布副本到 whale-assistant/lib/
                          # 构建时强制：顶层声明重复断言 / menu 热点 guard / KNOWN-COUPLING 登记表
-node test-whale.js       # vm 沙箱单元测试，694+ 断言
+node test-whale.js       # vm 沙箱单元测试，701+ 断言
 node test-chip-gate.js   # 芯片闸门纯函数测试，19 断言
+node test-host-store.js  # 宿主半区账本测试（临时目录驱动），20 断言
 node scripts/audit-deps.js        # 静态架构审计（作用域/依赖边/缝清单/时序契约 lint，自检前置）
 node check-dsh-compat.js --static "<DSH安装目录>"   # DSH 升级前：对新版包扫耦合点特征
 node check-dsh-compat.js --live [--cdp]             # DSH 升级后：对运行实例探活（接口/调试口）
@@ -273,7 +289,7 @@ node scripts/run-e2e.js  # CDP 端到端四场景（调试口 9222 不可达时�
 | `install.ps1` | 一键安装：克隆（或定位本地仓库）+ 注册 + junction + 体检，支持 `-TargetProfile web\|both`、`-Repo <本地路径>` |
 | `ensure-whale-assistant.ps1` | 插件注册脚本（写 profile 依赖 + 注册行，幂等）；`-Check` 只读体检 / `-Remove` 对称卸载 |
 | `parts/style.css` | 鲸鱼全部样式 |
-| `test-whale.js` / `test-chip-gate.js` | 单元测试（vm 沙箱 694+ 断言 / 闸门纯函数 19 断言） |
+| `test-whale.js` / `test-chip-gate.js` / `test-host-store.js` | 单元测试（vm 沙箱 701+ 断言 / 闸门纯函数 19 断言 / 宿主半区账本 20 断言） |
 | `FEATURES.md` / `CHANGELOG.md` / `docs/seams.md` | 用户功能手册 / 版本变更记录 / 调试与测试导出缝清单 |
 | `shell/` + `scripts/fix-shell.ps1` | 旧桌面瘦壳源码与安装脚本（**已退役**，官方桌面端覆盖其全部增量；保留供参考） |
 | `docs/shell-setup.md` | 桌面壳手动安装指南（遗留参考） |
@@ -308,6 +324,7 @@ node scripts/run-e2e.js  # CDP 端到端四场景（调试口 9222 不可达时�
 
 - 作者：**LengMu-Cloud**（[github.com/LengMu-Cloud](https://github.com/LengMu-Cloud)）
 - 许可：[MIT](LICENSE)
+- 鲸鱼形象与 `whale-logo.svg` 为本仓库原创自绘（手写 SVG，无第三方素材）
 
 ## 免责声明
 

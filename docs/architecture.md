@@ -21,11 +21,12 @@ KNOWN-COUPLING 登记表打印。
 | **三个闭包**（depth ≥2） | ① `core/alpha-adapter` 整模块自包 IIFE（带环境 early-return）② `core/server-events` 的 `initServerEvents` IIFE ③ `uiInit` 巨闭包 = bootstrap→menu→drag 跨文件连续切片（menu 全部 34 个函数、9 个抽屉都是 uiInit 局部） | 闭包内符号**只**对同 span 文件可见；对外只经 `window.__dshWhale` 缝 |
 | **window 缝** | `window.__dshWhale`（index.js 初始化） | 跨闭包委托 / 诊断 / 测试唯一通道；85 条显式命名导出 + 16 处防御式读，10 种动态访问模式全零（audit-deps E 节） |
 
-## 3. 依赖图（147 条模块级边，audit-deps B/C 节）
+## 3. 依赖图（149 条模块级边，audit-deps B/C 节）
 
-- **core→ui/input 共 12 条**：5 条组合根（`exports.js` 装配，职责使然）+
+- **core→ui/input 共 14 条**：5 条组合根（`exports.js` 装配，职责使然）+
   7 条 push 管线（frames→status-panel/messages、reports→status-panel/bubble、
-  stuck/server-events→status-panel、mood→messages）。
+  stuck/server-events→status-panel、mood→messages）+ 2 条 0.4.0 会话跳转桥
+  （health→session-jump、exports→session-jump，10-25 复核回填）。
 - **真互指 3 组**：frames↔status-panel、reports↔status-panel、mood↔messages。
   前两组的回读点以 `// KNOWN-COUPLING:` 标记在代码里（构建时打印，见 §7）。
 - **ui→core 控制面（0.3.3 +1，总边 141→142）**：menu→frames（`clearTitleBook`
@@ -75,7 +76,7 @@ KNOWN-COUPLING 登记表打印。
 
 | 债务/触发线 | 机械检测 | 状态 |
 |---|---|---|
-| menu.js 是唯一热点（1378 行，其中历史/周报/提醒/导出数据抽屉群 ~41%） | `open*` 抽屉函数 >9 或行数 >1450 → 构建 WARN | 未触发；**触发后先拆历史抽屉群（~567 行）再加新抽屉** |
+| menu.js 是唯一热点（1435 行，其中历史/周报/提醒/导出数据抽屉群 ~41%；10-25 实测，距 1450 触发线余 15 行） | `open*` 抽屉函数 >9 或行数 >1450 → 构建 WARN | 未触发；**触发后先拆历史抽屉群（~567 行）再加新抽屉** |
 | mood↔messages 文案互取（1 函数边 + 文案常量互读） | 人工（可消除：WEARY_TAILS 归位 messages + pickTail 传参，~15 分钟） | 与 menu 拆分同批执行 |
 | 位置常量 POS_KEY/DEFAULT_* 住在文案池 messages.js | 人工（归位 utils/constants） | 同上 |
 | push 架构回读点 | `// KNOWN-COUPLING:` 代码标记 ×5（构建时打印清单） | 已登记：frames→status-panel 投影写 ×2 + push 渲染 ×1、status-panel→frames 回查 ×1、reports→status-panel 配对 ×1 |

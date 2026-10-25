@@ -11,7 +11,7 @@
  *   of being silently treated as "first run" — recovery stays possible.
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 
 export const HISTORY_LIMIT = 500;
 
@@ -44,8 +44,25 @@ export function loadStore(dir) {
 
 function quarantineCorruptStore(dir) {
 	try {
-		renameSync(storePath(dir), storePath(dir) + '.corrupt-' + Date.now());
+		const quarantined = storePath(dir) + '.corrupt-' + Date.now();
+		renameSync(storePath(dir), quarantined);
+		/* the ONE user-visible trace of the quarantine: without it the ledger
+		 * silently restarts empty and nobody knows a recovery file exists */
+		console.warn('[dsh-whale-assistant] ledger unreadable, quarantined to ' + quarantined + ' (rename off the .corrupt-<ts> suffix to recover)');
 	} catch (e) { /* nothing left to preserve */ }
+}
+
+/** Generic atomic text write (same temp+rename pattern as the ledger). */
+export function saveFileAtomic(file, text) {
+	mkdirSync(dirname(file), { recursive: true });
+	const tmp = file + '.tmp';
+	writeFileSync(tmp, text, 'utf8');
+	try {
+		renameSync(tmp, file);
+	} catch (e) {
+		writeFileSync(file, text, 'utf8');
+		try { unlinkSync(tmp); } catch (e2) { /* a stale .tmp is harmless */ }
+	}
 }
 
 /**
@@ -55,16 +72,7 @@ function quarantineCorruptStore(dir) {
  * direct write (and drop the stale tmp) rather than fail the save.
  */
 export function saveStoreAtomic(dir, doc) {
-	mkdirSync(dir, { recursive: true });
-	const file = storePath(dir);
-	const tmp = file + '.tmp';
-	writeFileSync(tmp, JSON.stringify(doc), 'utf8');
-	try {
-		renameSync(tmp, file);
-	} catch (e) {
-		writeFileSync(file, JSON.stringify(doc), 'utf8');
-		try { unlinkSync(tmp); } catch (e2) { /* a stale .tmp is harmless */ }
-	}
+	saveFileAtomic(storePath(dir), JSON.stringify(doc));
 }
 
 /**

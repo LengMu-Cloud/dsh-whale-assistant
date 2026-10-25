@@ -6,7 +6,9 @@
  *    NO LONGER needs the dist/index.html injection, so DSH upgrades/reinstalls
  *    can never wipe it again (the browser half loads it from here).
  *
- * Routes (loopback-only, like the task-board fence):
+ * Routes (loopback-only + the platform-style browser fence — exact routes
+ * BYPASS the /api prefix fence dsh-client-connection puts in front of its
+ * own routes, so this file carries its own: see isTrustedRequest):
  *   GET  /api/whale-assistant/state    -> the whole stored document
  *   POST /api/whale-assistant/save     -> replace the document (JSON body, 512KiB cap)
  *   GET  /api/whale-assistant/whale.js -> the whale script (dev source dir first)
@@ -14,22 +16,23 @@
  * Mirrors the @linxin666/dsh-client-ui-task-board host-half recipe
  * (webServer.register returning disposers + exact routes).
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { loadStore, saveStoreAtomic, mergeHistory } from './store.js';
+import { loadStore, saveStoreAtomic, saveFileAtomic, mergeHistory } from './store.js';
 
 const inject = ['webServer', 'sessionController'];
 
 const DOC_LIMIT = 512 * 1024;
 
+/* dev-say is a headless PROMPT INJECTOR for e2e — it must not sit on a
+ * production webServer. Register it only when DSH itself is started with
+ * DSH_WHALE_DEV=1 (live-e2e-test.js depends on it). */
+const DEV_ENDPOINTS = process.env.DSH_WHALE_DEV === '1';
+
 function storeDir() {
 	return join(homedir(), '.dsh');
-}
-
-function storeFile() {
-	return join(homedir(), '.dsh', 'whale-assistant.json');
 }
 
 /** Whale script source: the plugin dir's own copy (release layout).
@@ -64,6 +67,39 @@ function isLoopbackRequest(req) {
 	return false;
 }
 
+/** The platform puts a browser fence (dsh-client-connection admit()) in
+ * front of its OWN /api routes — Host check + sec-fetch-site + Origin.
+ * Exact routes like ours BYPASS that prefix fence, so the whale carries
+ * its own copy of the same semantics:
+ * 1. Host must name THIS listener (127.0.0.1|localhost|[::1]:localPort) —
+ *    the anti-DNS-rebinding line: a rebound page names the attacker's
+ *    domain in the URL, and Host is the one header rebinding cannot forge;
+ * 2. sec-fetch-site: cross-site is refused outright (kills the no-prefill
+ *    CSRF POST a public page can send with text/plain);
+ * 3. an Origin header, when a browser sends one, must be this same
+ *    authority (blocks a page served from another localhost port).
+ * curl / local e2e tools send none of the browser headers and pass. */
+function isTrustedRequest(req) {
+	const port = req.socket.localPort;
+	const host = String(req.headers.host || '');
+	if (!port || (host !== '127.0.0.1:' + port && host !== 'localhost:' + port && host !== '[::1]:' + port)) return false;
+	const sfs = String(req.headers['sec-fetch-site'] || '');
+	if (sfs === 'cross-site') return false;
+	const origin = req.headers.origin;
+	if (origin !== undefined) {
+		try {
+			if (new URL(String(origin)).host !== host) return false;
+		} catch (e) { return false; }
+	}
+	return true;
+}
+
+/** Route guard: the connection must originate from loopback AND the
+ * request must not smell like a browser-forged cross-site/rebound call. */
+function isAllowed(req) {
+	return isLoopbackRequest(req) && isTrustedRequest(req);
+}
+
 /** Shared POST body reader: accumulate up to `limit` bytes (413 + socket
  * destroy beyond), then hand the parsed JSON (and raw text) to onBody.
  * Parse/validation failures go to onError (default: 400 with the message);
@@ -71,6 +107,16 @@ function isLoopbackRequest(req) {
  * client. Replaces the three byte-identical copies that used to live in
  * the save / debug / dev-say handlers. */
 function readJsonBody(req, res, limit, onBody, onError) {
+	/* declared JSON bodies only: the content-type requirement kills the
+	 * text/plain "simple request" path a public page could otherwise use
+	 * to POST here without a CORS preflight (the page half and every e2e
+	 * caller already send application/json) */
+	const ct = String(req.headers['content-type'] || '');
+	if (!/application\/json/i.test(ct)) {
+		res.writeHead(415, { 'cache-control': 'no-store' });
+		res.end('{"ok":false,"error":"content-type"}');
+		return;
+	}
 	const chunks = [];
 	let size = 0;
 	let done = false;
@@ -187,17 +233,16 @@ function apply(ctx) {
 					res.end();
 					return;
 				}
-				if (!isLoopbackRequest(req)) {
+				if (!isAllowed(req)) {
 					res.writeHead(403, { 'cache-control': 'no-store' });
 					res.end('{"ok":false,"error":"forbidden"}');
 					return;
 				}
-				let body = '{}';
-				try {
-					body = readFileSync(storeFile(), 'utf8');
-				} catch (error) {
-					body = '{}'; /* first run: no file yet */
-				}
+				/* loadStore shares the corruption-quarantine path with save:
+				 * the old direct readFileSync handed a corrupt ledger back
+				 * as the body (and only a later save would quarantine it) */
+				const doc = loadStore(storeDir());
+				const body = doc === null ? '{}' : JSON.stringify(doc);
 				res.writeHead(200, {
 					'content-type': 'application/json; charset=utf-8',
 					'cache-control': 'no-store'
@@ -214,7 +259,7 @@ function apply(ctx) {
 					res.end();
 					return;
 				}
-				if (!isLoopbackRequest(req)) {
+				if (!isAllowed(req)) {
 					res.writeHead(403, { 'cache-control': 'no-store' });
 					res.end('{"ok":false,"error":"forbidden"}');
 					return;
@@ -245,7 +290,7 @@ function apply(ctx) {
 					res.end();
 					return;
 				}
-				if (!isLoopbackRequest(req)) {
+				if (!isAllowed(req)) {
 					res.writeHead(403, { 'cache-control': 'no-store' });
 					res.end('{"error":"forbidden"}');
 					return;
@@ -274,7 +319,7 @@ function apply(ctx) {
 					res.end();
 					return;
 				}
-				if (!isLoopbackRequest(req)) {
+				if (!isAllowed(req)) {
 					res.writeHead(403, { 'cache-control': 'no-store' });
 					res.end('{"ok":false,"error":"forbidden"}');
 					return;
@@ -294,8 +339,7 @@ function apply(ctx) {
 						res.end(JSON.stringify({ ok: true, removed: before - kept.length }));
 						return;
 					}
-					mkdirSync(storeDir(), { recursive: true });
-					writeFileSync(join(storeDir(), 'whale-debug.json'), raw, 'utf8');
+					saveFileAtomic(join(storeDir(), 'whale-debug.json'), raw);
 					res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
 					res.end('{"ok":true}');
 				}, () => {
@@ -313,7 +357,7 @@ function apply(ctx) {
 					res.end();
 					return;
 				}
-				if (!isLoopbackRequest(req)) {
+				if (!isAllowed(req)) {
 					res.writeHead(403, { 'cache-control': 'no-store' });
 					res.end('{"events":[]}');
 					return;
@@ -339,7 +383,7 @@ function apply(ctx) {
 					res.end();
 					return;
 				}
-				if (!isLoopbackRequest(req)) {
+				if (!isAllowed(req)) {
 					res.writeHead(403, { 'cache-control': 'no-store' });
 					res.end('{"ok":false,"error":"forbidden"}');
 					return;
@@ -384,7 +428,7 @@ function apply(ctx) {
 					res.end();
 					return;
 				}
-				if (!isLoopbackRequest(req)) {
+				if (!isAllowed(req)) {
 					res.writeHead(403, { 'cache-control': 'no-store' });
 					res.end('/* forbidden */');
 					return;
@@ -417,7 +461,7 @@ function apply(ctx) {
 					res.end();
 					return;
 				}
-				if (!isLoopbackRequest(req)) {
+				if (!isAllowed(req)) {
 					res.writeHead(403, { 'cache-control': 'no-store' });
 					res.end('forbidden');
 					return;
@@ -438,9 +482,11 @@ function apply(ctx) {
 				req.on('error', () => sseClients.delete(res));
 			}
 		}
-	];
-	const disposers = [];
-	for (const route of routes) {
+		];
+		/* dev-say stays off production servers (see DEV_ENDPOINTS above) */
+		const activeRoutes = DEV_ENDPOINTS ? routes : routes.filter((r) => r.path !== '/api/whale-assistant/dev-say');
+		const disposers = [];
+		for (const route of activeRoutes) {
 		try {
 			disposers.push(ctx.webServer.register(route));
 		} catch (error) {
@@ -483,4 +529,6 @@ function apply(ctx) {
 	};
 }
 
-export { apply, inject };
+/* isTrustedRequest is exported for test-host-store.js — the fence deserves
+ * the same regression coverage as the ledger it guards */
+export { apply, inject, isTrustedRequest };

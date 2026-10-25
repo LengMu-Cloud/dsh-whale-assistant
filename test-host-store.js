@@ -8,9 +8,16 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadStore, mergeHistory, saveStoreAtomic, storePath } from './whale-assistant/lib/store.js';
+import { isTrustedRequest } from './whale-assistant/lib/index.js';
 
 let passed = 0;
 function ok(cond, msg) { passed++; assert.ok(cond, msg); }
+
+/* fake request factory: socket carries localPort, headers carry the
+ * browser-forgery vectors the fence exists to stop */
+function fakeReq(headers) {
+	return { headers: headers || {}, socket: { localPort: 3099, remoteAddress: '127.0.0.1' } };
+}
 
 const dir = mkdtempSync(join(tmpdir(), 'whale-store-test-'));
 
@@ -102,6 +109,17 @@ const m8 = mergeHistory(
 	{ clearAt: 0, history: [{ sessionId: 'g', at: 5, kind: 'done', title: '好' }] }
 );
 ok(m8.history.length === 1, 'junk rows filtered, good row kept');
+
+/* 14. browser fence (isTrustedRequest): the page half's own calls pass,
+ *    every forgery vector is refused */
+ok(isTrustedRequest(fakeReq({ host: '127.0.0.1:3099', 'sec-fetch-site': 'same-origin', origin: 'http://127.0.0.1:3099' })), 'fence: same-origin browser POST passes');
+ok(isTrustedRequest(fakeReq({ host: '127.0.0.1:3099' })), 'fence: curl/local tool (Host only) passes');
+ok(isTrustedRequest(fakeReq({ host: 'localhost:3099', 'sec-fetch-site': 'same-origin' })), 'fence: localhost browsing passes');
+ok(!isTrustedRequest(fakeReq({ host: '127.0.0.1:3099', 'sec-fetch-site': 'cross-site' })), 'fence: cross-site fetch refused');
+ok(!isTrustedRequest(fakeReq({ host: 'evil.com:3099', 'sec-fetch-site': 'same-origin', origin: 'http://evil.com:3099' })), 'fence: DNS-rebound Host refused');
+ok(!isTrustedRequest(fakeReq({ host: '127.0.0.1:3099', origin: 'http://localhost:5173' })), 'fence: cross-port localhost Origin refused');
+ok(!isTrustedRequest(fakeReq({})), 'fence: missing Host refused');
+ok(!isTrustedRequest(fakeReq({ host: '127.0.0.1:9999' })), 'fence: wrong port refused');
 
 rmSync(dir, { recursive: true, force: true });
 console.log('ALL HOST-STORE TESTS PASSED (' + passed + ' checks)');

@@ -56,6 +56,7 @@ async function main() {
 		text: '链路测试A：请只回复 OK 两个字母，不要使用任何工具，不要解释。',
 	}, cookie);
 	console.log('[T+' + (Date.now() - t0) + 'ms] dev-say response:', p1.status, p1.body.slice(0, 120));
+	if (p1.status === 404) console.log('[hint] dev-say is gated now — start DSH with DSH_WHALE_DEV=1 (see CHANGELOG)');
 
 	let sawStart = 0, sawEnd = 0, endReason = null, lastSeq = baseMaxSeq;
 	const deadline = t0 + 90000;
@@ -104,6 +105,7 @@ async function main() {
 		text: '链路测试B：请使用 ask_user_question 工具问我一个问题："选哪个方案？"，选项：甲、乙。不要做别的。',
 	}, cookie);
 	console.log('[T1+' + (Date.now() - t1) + 'ms] dev-say response:', p2.status, p2.body.slice(0, 120));
+	if (p2.status === 404) console.log('[hint] dev-say is gated now — start DSH with DSH_WHALE_DEV=1 (see CHANGELOG)');
 
 	const qBase = (await state()).history.filter((h) => h.sessionId === SID && h.kind === 'question').length;
 	let qRec = null, toolCallAt = 0;

@@ -68,10 +68,11 @@
 
 ## 安装（网页版 / 桌面版通用第一步）
 
-插件以 DSH cordis 插件形式安装到 DSH 服务（不是 npm 公共包，当前为开发版分发）。
+插件以 DSH cordis 插件形式安装到 DSH 服务（不是 npm 公共包；经 GitHub 仓库与官方
+插件市场分发，市场安装可锁定版本）。
 DSH 的 profile 目录默认在 `~/.dsh/profiles/web`（DSH 首次运行后生成），注册共三件套：
 **package.json 依赖 + node_modules 实体 + `dsh.profile.bundles` 清单**，缺一不可。
-（0.1.7-rc.2 与 0.2.0-rc.2 双引擎实测支持 bundle 声明；插件自带 `cordis.patch.yml`
+（0.1.7-rc.2 / 0.2.0-rc.2 / 0.2.1-rc.3 多版本实测支持 bundle 声明；插件自带 `cordis.patch.yml`
 作为 bundle 层被启动器应用，并出现在**官方插件管理页**「已安装」里，带启停开关。）
 
 **第 0 步 · 获取仓库**（路径 A / B / 备选命令都需要；路径 C 市场安装不需要）：
@@ -85,23 +86,23 @@ Download ZIP 解压同样可用，或直接走路径 C（全程官方 UI 内点�
 
 > **用官方桌面端的话**：桌面端独占 `~/.dsh/profiles/desktop`（与 web profile 不共享插件）。
 > 两套 profile 可并存注册，互不影响。一键安装用 `-TargetProfile desktop`（默认就是它），
-> 手动安装则把下文命令里的 `profiles\web` 全部换成 `profiles\desktop` 再跑一遍。
+> 手动安装则把下文命令里的 `profiles\web` 全部换成 `profiles\desktop`
+> （`ensure-whale-assistant.ps1` 对应加 `-ProfileDir ~\.dsh\profiles\desktop`）再跑一遍。
 
 ### 路径 A · 一键安装（推荐，Windows）
 
 先跑一次 DSH（打开一次官方桌面，或跑一次 `dsh --profile web`）让 profile 目录生成，然后：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File <repo>\install.ps1 -Repo "<repo>"
+powershell -ExecutionPolicy Bypass -File "<repo>\install.ps1" -Repo "<repo>"
 ```
 
 `-Repo` 指向第 0 步克隆出的本地副本（推荐——直接复用，不重复联网克隆）；**省略
-`-Repo`** 时脚本会自行从 GitHub 重新克隆到 `~\dsh-whale-assistant`（第 0 步的克隆
-将被忽略）。脚本随后自动：注册进 desktop profile → 挂 node_modules junction →
-体检三件套并提示下一步。变体：
+`-Repo`** 时脚本会自行从 GitHub 拉取到 `~\dsh-whale-assistant`（已有副本则复用并
+尝试快进更新；第 0 步的克隆将被忽略）。脚本随后自动：注册进 desktop profile →
+挂 node_modules junction → 体检三件套并提示下一步。变体：
 
 - 浏览器用户加 `-TargetProfile web`；两套 profile 都装加 `-TargetProfile both`
-- 已经下载或克隆过仓库：`-Repo "D:\path\to\dsh-whale-assistant"`（直接以本地目录为源）
 - 幂等可重复执行；配套 `ensure-whale-assistant.ps1 -Check`（只读体检三件套，缺件时
   退出码 1）与 `-Remove`（对称卸载：依赖行 + bundles 行 + junction，改坏 JSON 会
   自动放弃写入并留 .bak）
@@ -185,9 +186,10 @@ dsh plugin --profile web add <repo>\whale-assistant
    node build-whale.js        # 产出 whale.js + whale-map.md（函数导航）
    ```
 
-2. **重启 DSH 服务**让插件挂载：官方桌面用户**重启桌面应用**即可；网页版用户用
-   任务管理器结束 DSH 的后台服务进程（node，监听 3080 端口）后重新运行
-   `dsh --profile web`（或直接重启电脑）。首次安装时若 DSH 服务尚未运行过，先跑一次
+2. **重启 DSH 服务**让插件挂载：官方桌面用户**重启桌面应用**即可；网页版用户
+   结束 DSH 的后台服务进程（node，监听 3080 端口；Windows 用任务管理器，
+   macOS/Linux 用 `pkill -f dsh`）后重新运行 `dsh --profile web`（或直接重启电脑）。
+   首次安装时若 DSH 服务尚未运行过，先跑一次
    `dsh --profile web`（网页版）或打开官方桌面（桌面版）。浏览器 F5 即可看到鲸鱼。
 3. **验证安装**：右下角出现鲸鱼、控制台（F12）有
    `[dsh-whale-assistant] whale loaded from plugin routes` 即成功；一切正常时
@@ -251,9 +253,9 @@ localStorage 可留可删）：
 插件分两半：
 
 - **宿主半区** `whale-assistant/lib/index.js`：以 cordis 插件挂在 DSH 服务上，新增 8 条
-  仅本机回环的 HTTP 路由（状态 / 历史存取 / 事件轮询 / SSE 实时推送 / 静态资源，外加
-  开发诊断用的 `dev-say`），从 DSH 自身事件总线与投影订阅任务事件、镜像任务历史——
-  **不拦截、不修改任何任务行为**。
+  仅本机回环的 HTTP 路由（状态 / 历史存取 / 事件轮询 / SSE 实时推送 / 静态资源 /
+  调试取证，外加开发诊断用的 `dev-say`），从 DSH 自身事件总线与投影订阅任务事件、
+  镜像任务历史——**不拦截、不修改任何任务行为**。
 - **页面半区** `src/`（33 模块构建为 `whale.js`）：在 Web 页面里消费事件流（SSE 实时 +
   轮询兜底）并渲染鲸鱼 UI，DOM 只读采集用量数据；会话跳转经 DSH 官方 sessions 服务
   完成（0.4.0 起，见「组件关系」）。

@@ -226,6 +226,7 @@
 node build-whale.js     # 重建 whale.js + whale-map.md，并同步发布副本到 whale-assistant/lib/
 node test-whale.js      # 单元测试（vm 沙箱 701+ 断言）
 node test-host-store.js # 宿主半区账本测试（lib/store.js，临时目录驱动，20 断言）
+node test-chip-gate.js  # 芯片闸门纯函数测试（19 断言）
 node scripts/run-e2e.js # 端到端回归
 ```
 

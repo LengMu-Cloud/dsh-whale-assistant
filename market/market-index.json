@@ -56,6 +56,19 @@
       },
       "versions": [
         {
+          "version": "0.4.2",
+          "publishTimestamp": 1792923701,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/LengMu-Cloud/dsh-whale-assistant",
+            "commit": "7e96845e000f7da32a104e1817f9d6f601f8c7aa",
+            "path": "whale-assistant"
+          },
+          "engines": {
+            "dsh": ">=0.1.7"
+          }
+        },
+        {
           "version": "0.4.1",
           "publishTimestamp": 1790878661,
           "source": {

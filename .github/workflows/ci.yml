@@ -5,33 +5,41 @@
 # are committed": rebuilding from src/ must produce byte-identical files.
 name: CI
 
+# least privilege: this workflow only ever READS the repo (the diff gates
+# must not be writable by a compromised action)
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
+    tags: ['v*'] # release commits get the same gates (market step is main-only)
   pull_request:
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # actions are pinned to the commit SHA of their v4.4.0 tags (supply
+      # chain: a hijacked moving tag cannot swap code under this workflow)
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0 # full history + tags: build-market-index reads git describe
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
       - name: Unit tests (vm sandbox, 701+ asserts)
         run: node test-whale.js
       - name: Chip-gate contract tests
         run: node test-chip-gate.js
-      - name: Host-half ledger tests (lib/store.js)
+      - name: Host-half tests (ledger + route fence)
         run: node test-host-store.js
       - name: Static architecture audit (exit-code gated)
         run: node scripts/audit-deps.js
       - name: Built artifacts match src
         run: |
           node build-whale.js
-          git diff --exit-code -- whale.js whale-map.md whale-assistant/lib/whale.js || {
+          git diff --exit-code -- whale.js whale-map.md whale-assistant/lib/whale.js whale-assistant/lib/parts/style.css whale-assistant/whale-logo.svg || {
             echo "::error::committed artifacts drifted from src/ — run: node build-whale.js, commit the rebuilt files"
             exit 1
           }

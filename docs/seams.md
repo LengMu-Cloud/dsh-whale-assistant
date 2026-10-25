@@ -68,5 +68,5 @@
 | `GET /api/whale-assistant/whale.js` | 页面半区脚本（发布布局优先 `lib/whale.js`，构建时自动同步） |
 | `GET /api/whale-assistant/events` | 事件帧轮询（后台通知数据源） |
 | `GET /api/whale-assistant/events/stream` | SSE 实时推送（第三事件通道；20s 心跳计入服务存活判定） |
-| `POST /api/whale-assistant/dev-say` | 回环专用无人值守注入（`{sessionId, text}`，回归测试用） |
+| `POST /api/whale-assistant/dev-say` | 回环专用无人值守注入（`{sessionId, text}`，回归测试用；**默认不注册**——需以 `DSH_WHALE_DEV=1` 启动 DSH） |
 | `POST /api/whale-assistant/debug` | 调试模式取证数据写入 `_debug` |

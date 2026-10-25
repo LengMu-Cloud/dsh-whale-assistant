@@ -254,7 +254,7 @@ localStorage 可留可删）：
 
 - **宿主半区** `whale-assistant/lib/index.js`：以 cordis 插件挂在 DSH 服务上，新增 8 条
   仅本机回环的 HTTP 路由（状态 / 历史存取 / 事件轮询 / SSE 实时推送 / 静态资源 /
-  调试取证，外加开发诊断用的 `dev-say`），从 DSH 自身事件总线与投影订阅任务事件、
+  调试取证，外加开发诊断用的 `dev-say`——默认不注册，需以 `DSH_WHALE_DEV=1` 启动 DSH），从 DSH 自身事件总线与投影订阅任务事件、
   镜像任务历史——**不拦截、不修改任何任务行为**。
 - **页面半区** `src/`（33 模块构建为 `whale.js`）：在 Web 页面里消费事件流（SSE 实时 +
   轮询兜底）并渲染鲸鱼 UI，DOM 只读采集用量数据；会话跳转经 DSH 官方 sessions 服务
@@ -298,6 +298,12 @@ node scripts/run-e2e.js  # CDP 端到端四场景（调试口 9222 不可达时�
 
 ## 常见问题
 
+- **装完右下角什么都没有（鲸鱼不出现）** —— 按顺序查：① DSH 服务在跑吗（重启 DSH，
+  右下角仍无鲸鱼 = 插件没挂上）② F12 控制台有没有
+  `[dsh-whale-assistant] whale loaded from plugin routes`——有 = 已加载，
+  `[dsh-whale-assistant] whale load failed` = 页面拿不到插件路由：多半是注册三件套缺件，
+  跑 `ensure-whale-assistant.ps1 -Check` 体检（缺件会明确指出是哪一件）③ 修完注册后
+  **重启 DSH**，浏览器 Ctrl+F5 / 桌面端右键菜单 🔄 刷新页面。
 - **出现两只鲸鱼 / 通知双份** —— 插件被注册了两次：现行注册 = 包 manifest
   `dsh.bundle.patch` + profile `dsh.profile.bundles` 引用（一处即够）；若 profile
   `cordis.patch.yml` 里还有旧版手工 `insert: ui-whale-assistant` 行，删掉它
@@ -314,6 +320,9 @@ node scripts/run-e2e.js  # CDP 端到端四场景（调试口 9222 不可达时�
   FEATURES.md 音效系统一节。
 - **清空历史后对话名会丢吗** —— 不会：真名存在独立的"通讯录"（localStorage
   `dsh-whale:titles`，与历史分离），清空历史不影响鲸鱼认名。
+- **历史突然变空了** —— 0.4.2 起账本损坏会自动隔离重建：`~/.dsh/` 下会出现
+  `whale-assistant.json.corrupt-时间戳` 备份文件。想救回旧记录：关闭 DSH → 把该文件
+  名末尾的 `.corrupt-时间戳` 后缀删掉、恢复原名 → 再启动。
 
 ## 健康自检
 

@@ -25,10 +25,16 @@ const path = require('path');
 const ROOT = path.normalize(path.join(__dirname, '..'));
 const { MANIFEST } = require('../whale-manifest.js');
 
-/* CI gate: any of the four hard findings (depth PROBLEM / REAL COLLISION /
- * LINT FAIL / literal INTERFERENCE) sets a non-zero exit code — run-e2e's
- * "never block CI" spirit does not extend to architecture violations. */
+/* CI gate: any hard finding sets a non-zero exit code. Five gates: depth
+ * PROBLEM / REAL COLLISION / C-section direction growth (regression-guarded
+ * at the accepted count) / LINT FAIL / literal INTERFERENCE. B2 stays
+ * informational — it is a name-matching heuristic, not a hard finding. */
 let gateFail = 0;
+/* core→ui/input edges are an ACCEPTED architecture shape (architecture.md
+ * §3 push pipeline + composition roots). The gate fires when the count
+ * GROWS beyond the accepted number — bump it deliberately, together with
+ * the §3 table, when a new edge is a reviewed decision. */
+const EXPECTED_C_EDGES = 14;
 
 /* reads are whitelisted to manifest files with a root-boundary check */
 const content = {};
@@ -154,8 +160,11 @@ for (const c of Object.keys(edges).sort()) {
 }
 console.log('TOTAL module-level edges:', totalEdges);
 
-console.log('\n== B2) out-of-scope references to closure-private defs (should be seam calls; common local names may noise this up) ==');
-console.log(seamSuspects.length ? seamSuspects.join('\n') : '(none)');
+console.log('\n== B2) out-of-scope references to closure-private defs ==');
+/* informational only: this heuristic matches raw NAMES across files, so
+ * common locals (raw/parsed/v…) flood it with false positives — a real
+ * finding here shows up as an edge that section B refuses to count */
+console.log(seamSuspects.length ? seamSuspects.slice(0, 10).join('\n') + (seamSuspects.length > 10 ? '\n… (' + seamSuspects.length + ' total, name-collision noise expected)' : '') : '(none)');
 
 console.log('\n== C) DIRECTION CHECK: core consumes ui/input defs ==');
 let bad = 0;
@@ -163,6 +172,10 @@ for (const c of Object.keys(edges)) if (/^src\/core\//.test(c)) {
 	for (const d of Object.keys(edges[c])) if (/^src\/(ui|input)\//.test(d)) { bad++; console.log('EDGE:', c, '->', d, JSON.stringify(edges[c][d])); }
 }
 console.log(bad === 0 ? '(none)' : bad + ' edge(s)');
+if (bad > EXPECTED_C_EDGES) {
+	console.log('C GATE: core→ui/input grew to ' + bad + ' (accepted: ' + EXPECTED_C_EDGES + ') — new direction edges need a deliberate architecture.md §3 update');
+	gateFail++;
+}
 
 console.log('\n== D) shared depth-1 vars: readers and writers (seam export lines excluded) ==');
 for (const name of Object.keys(defs)) {

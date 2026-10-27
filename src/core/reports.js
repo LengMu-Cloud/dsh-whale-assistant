@@ -121,23 +121,31 @@
 	}
 
 	/** Compose the status-panel report: THIS task's burn, the conversation's
-	 * cumulative burn, and the context pressure — each its own line, joined
-	 * into ONE line when the panel has room (see applyStatusText). */
+	 * cumulative burn, and the context pressure. P1 2026-10-27 (K3): carries
+	 * structured `rows` (label/value) — the panel renders them as a two-column
+	 * grid (applyStatusText), so numbers never wrap mid-figure; `lines` stays
+	 * for the line-count bookkeeping (backfillEndPanel compares lengths). */
 	function statusReport(turnTokens, sessionTokens, pressure) {
 		var lines = [];
+		var rows = [];
 		if (typeof turnTokens === 'number' && turnTokens > 0) {
-			lines.push('此次任务消耗 ' + fmtTokens(turnTokens) + ' tokens');
+			var tv = fmtTokens(turnTokens) + ' tokens';
+			lines.push('此次任务消耗 ' + tv);
+			rows.push({ label: '此次任务消耗', value: tv });
 		}
 		if (typeof sessionTokens === 'number' && sessionTokens > 0) {
-			lines.push('全对话累计消耗 ' + fmtTokens(sessionTokens) + ' tokens');
+			var sv = fmtTokens(sessionTokens) + ' tokens';
+			lines.push('全对话累计消耗 ' + sv);
+			rows.push({ label: '全对话累计消耗', value: sv });
 		}
 		if (pressure) {
 			var pct = pressurePercentOf(pressure); /* null = no honest reading: skip the line */
 			if (pct !== null) {
 				lines.push('上下文已用 ' + pct + '%');
+				rows.push({ label: '上下文已用', value: pct + '%' });
 			}
 		}
-		return lines.length > 0 ? { prefix: '📊 ', lines: lines } : null;
+		return lines.length > 0 ? { prefix: '📊 ', lines: lines, rows: rows } : null;
 	}
 
 	/** The report currently displayed in the bubble (the latest push, or the

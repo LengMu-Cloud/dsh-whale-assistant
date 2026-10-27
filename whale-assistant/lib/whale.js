@@ -178,6 +178,9 @@
  * id extraction, shared by BOTH event channels — core/alpha-adapter.js (DOM
  * side) and core/server-events.js (poll side) previously carried byte-identical
  * copies that could drift silently. Resolution order:
+ *   0. per-window pin (sessionStorage 'dsh-whale:window-session', P1
+ *      2026-10-28) — see 多窗口归属 note below; absent for every fresh
+ *      window, so single-window behavior is byte-identical to pre-pin;
  *   1. localStorage 'dsh.sessions.current' (JSON {sessionId}) — authoritative
  *      across switches;
  *   2. insertion-ordered 'dsh.conversation[.chat].session-*' localStorage keys
@@ -185,11 +188,26 @@
  *      fallback only);
  *   3. FALLBACK_ID placeholder ('session-alpha-active') — the alpha adapter's
  *      synthetic active session when nothing resolvable is present.
+ *
+ * 多窗口归属（P1 2026-10-28）：'dsh.sessions.current' 是全部分区共享的单值键，
+ * 两个 DSH 窗口看不同会话时，后切换的窗口改写全局键，先窗口的芯片用量/完成
+ * 通知/历史记录就会记到别人的会话头上。修法 = 每窗口 sessionStorage pin：
+ * 本窗口出现「非鲸鱼自身的」DOM 活动（alpha-adapter 的 MutationObserver）或
+ * 本窗口主动打开会话（session-jump）时，把此刻的全局链结果快照进 pin；之后
+ * 别的窗口改写全局键不再影响本窗口。pin 只在首个活动信号后出现——单窗口
+ * 用户全程走原链路，行为零变化。
  */
 var FALLBACK_ID = 'session-alpha-active';
 var SESSION_KEY_RE = /^dsh\.conversation\.(?:chat\.)?(session-[0-9a-f-]{10,})$/;
+var WINDOW_PIN_KEY = 'dsh-whale:window-session';
 
-function resolveCurrentSessionId() {
+function isRealSessionId(sid) {
+	return typeof sid === 'string' && sid.indexOf('session-') === 0 && sid !== FALLBACK_ID;
+}
+
+/** The pre-pin chain (global key → conversation cache → fallback), kept
+ * separate so adoption can snapshot it WITHOUT the pin shadowing itself. */
+function resolveGlobalSessionId() {
 	try {
 		var raw = localStorage.getItem('dsh.sessions.current');
 		if (raw) {
@@ -205,6 +223,36 @@ function resolveCurrentSessionId() {
 		}
 	} catch (e) {}
 	return FALLBACK_ID;
+}
+
+function resolveCurrentSessionId() {
+	try {
+		if (typeof sessionStorage !== 'undefined') {
+			var pin = sessionStorage.getItem(WINDOW_PIN_KEY);
+			if (isRealSessionId(pin)) return pin;
+		}
+	} catch (e) {}
+	return resolveGlobalSessionId();
+}
+
+/** Pin THIS window to `sid` (sessionStorage survives per BrowserWindow;
+ * localStorage is shared across the whole partition). Non-real ids are
+ * rejected so the placeholder never gets pinned over a later real one. */
+function pinWindowSession(sid) {
+	try {
+		if (typeof sessionStorage === 'undefined' || !isRealSessionId(sid)) return;
+		sessionStorage.setItem(WINDOW_PIN_KEY, sid);
+	} catch (e) {}
+}
+
+/** Local-activity adoption: snapshot the GLOBAL chain result into the pin.
+ * Called by alpha-adapter when THIS window shows non-whale chat activity
+ * (the single-active-window flow: the last switch wrote the global key,
+ * and it was this window's). No-ops on the placeholder so a bare window
+ * never pins it over a later real session. */
+function adoptCurrentSessionPin() {
+	var sid = resolveGlobalSessionId();
+	if (isRealSessionId(sid)) pinWindowSession(sid);
 }
 /* ---- module: src/core/config.js ---- */
 /**
@@ -504,6 +552,7 @@ function resolveCurrentSessionId() {
 
 	var toolSlot = new Map(); /* callKey -> { at, sessionId } */
 	var STUCK_SCAN_MS = 2000;
+	var STUCK_FOLD_AT = 3; /* more than this many stuck sessions folds into a summary (P1 2026-10-27) */
 	var stuckActive = false; /* any stuck hint currently visible */
 
 	/** Garbage-independent lookup: is any known job for this session live? */
@@ -571,6 +620,17 @@ function resolveCurrentSessionId() {
 			var name = sessionTitles.get(sid) || bookTitle(sid) || '未命名任务';
 			return '⚠️ [' + capNameWidth(name, 110) + '] 工具已运行 ' + worstBySession[sid].seconds + 's';
 		});
+		/* P1 2026-10-27 (K3): 超过 STUCK_FOLD_AT 个会话同时卡住时折叠为一行摘要 +
+		 * 最严重一行——五条近同构告警行是告警疲劳不是信息（10 月截图实证）。
+		 * ≤3 仍逐行并列，保留 09-12 拍板的可归属语义。 */
+		if (sids.length > STUCK_FOLD_AT) {
+			var worstSid = sids[0];
+			var worstName = sessionTitles.get(worstSid) || bookTitle(worstSid) || '未命名任务';
+			rows = [
+				'⚠️ ' + sids.length + ' 个会话的工具卡住 · 最长 ' + worstBySession[worstSid].seconds + 's',
+				'最严重：[' + capNameWidth(worstName, 110) + ']，其余 ' + (sids.length - 1) + ' 个会话同卡住'
+			];
+		}
 		showStuckHint(rows);
 	}
 
@@ -1102,7 +1162,31 @@ if (typeof module !== 'undefined' && module.exports) {
 		}, 2500);
 	}
 
+	/** 每窗口归属（P1 2026-10-28）：从一批 DOM 变动里找「非鲸鱼自身的」新增
+	 * 元素——找到才把此刻的全局链会话快照进本窗口 pin（utils/session-key.js）。
+	 * 批内全是鲸鱼内部节点时不写：在 A 窗口开鲸鱼菜单/气泡不该把 B 窗口刚切
+	 * 的全局键钉进来。pin 只在值变化时落盘，流式 token 的高频批次零写入。 */
+	var whaleRootCache = null;
+	function adoptLocalChatActivity(mutations) {
+		try {
+			var whaleRoot = (whaleRootCache && whaleRootCache.parentNode)
+				? whaleRootCache
+				: (whaleRootCache = document.getElementById('dsh-whale'));
+			for (var i = 0; i < mutations.length; i++) {
+				var added = mutations[i].addedNodes;
+				for (var j = 0; j < added.length; j++) {
+					var node = added[j];
+					if (node.nodeType !== 1) continue;
+					if (whaleRoot && (node === whaleRoot || (whaleRoot.contains && whaleRoot.contains(node)))) continue;
+					adoptCurrentSessionPin();
+					return;
+				}
+			}
+		} catch (e) {}
+	}
+
 	var observer = new MutationObserver(function (mutations) {
+		adoptLocalChatActivity(mutations);
 		/* pass 1 — count elements FIRST (cheap refs only): text measurement
 		 * is skipped for huge batches (they are renders by definition and
 		 * their chips are ignored) — the whole subtree textContent read was
@@ -1966,6 +2050,10 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		 * not just the event branch — the projection active-session gate
 		 * lives in consume() and must be testable end to end */
 		window.__dshWhale._pollConsume = consume;
+		/* 每窗口归属（P1 2026-10-28）seams: pin/adopt/resolve 供测试直接驱动 */
+		window.__dshWhale._pinSession = pinWindowSession;
+		window.__dshWhale._adoptSessionPin = adoptCurrentSessionPin;
+		window.__dshWhale._resolveSessionId = resolveCurrentSessionId;
 	} catch (e) {}
 	})();
 /* ---- module: src/core/health.js ---- */
@@ -2269,23 +2357,31 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	}
 
 	/** Compose the status-panel report: THIS task's burn, the conversation's
-	 * cumulative burn, and the context pressure — each its own line, joined
-	 * into ONE line when the panel has room (see applyStatusText). */
+	 * cumulative burn, and the context pressure. P1 2026-10-27 (K3): carries
+	 * structured `rows` (label/value) — the panel renders them as a two-column
+	 * grid (applyStatusText), so numbers never wrap mid-figure; `lines` stays
+	 * for the line-count bookkeeping (backfillEndPanel compares lengths). */
 	function statusReport(turnTokens, sessionTokens, pressure) {
 		var lines = [];
+		var rows = [];
 		if (typeof turnTokens === 'number' && turnTokens > 0) {
-			lines.push('此次任务消耗 ' + fmtTokens(turnTokens) + ' tokens');
+			var tv = fmtTokens(turnTokens) + ' tokens';
+			lines.push('此次任务消耗 ' + tv);
+			rows.push({ label: '此次任务消耗', value: tv });
 		}
 		if (typeof sessionTokens === 'number' && sessionTokens > 0) {
-			lines.push('全对话累计消耗 ' + fmtTokens(sessionTokens) + ' tokens');
+			var sv = fmtTokens(sessionTokens) + ' tokens';
+			lines.push('全对话累计消耗 ' + sv);
+			rows.push({ label: '全对话累计消耗', value: sv });
 		}
 		if (pressure) {
 			var pct = pressurePercentOf(pressure); /* null = no honest reading: skip the line */
 			if (pct !== null) {
 				lines.push('上下文已用 ' + pct + '%');
+				rows.push({ label: '上下文已用', value: pct + '%' });
 			}
 		}
-		return lines.length > 0 ? { prefix: '📊 ', lines: lines } : null;
+		return lines.length > 0 ? { prefix: '📊 ', lines: lines, rows: rows } : null;
 	}
 
 	/** The report currently displayed in the bubble (the latest push, or the
@@ -2592,7 +2688,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		var maxW;
 		/* below needs (12px gap + content height) of real estate; a taller
 		 * panel than the viewport can take flips ABOVE the whale instead */
-		var estH = (statusCache ? statusCache.lines.length : 1) * 16 + 14;
+		var estH = (statusCache ? statusCache.lines.length : 1) * 17 + 14;
 		var above = below >= 80 && whale.offsetTop + whale.offsetHeight + 12 + estH > window.innerHeight;
 		el.classList.toggle('dsh-whale-status-above', above);
 		el.classList.toggle('dsh-whale-status-below', below >= 80 && !above);
@@ -2612,26 +2708,33 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		}
 		el.style.maxWidth = maxW + 'px';
 		applyStatusText();
+		/* 主框每看重排（扫秒增长文本/鲸鱼移动翻面），旁路框同步重算位置——
+		 * 一次性的 inline 坐标会随主框漂移（P1 2026-10-28 左缘对齐） */
+		placeReportBox();
 	}
 
 	/** Current panel content: { prefix, lines } — kept so the text can be
 	 * re-flowed live while the whale moves. */
 	var statusCache = null;
 
-	/** Rough pixel width of a text line at 11px (CJK ≈ 11px, ASCII ≈ 6px). */
+	/** Rough pixel width of a text line at 12px (CJK ≈ 12px, ASCII ≈ 6.5px).
+	 * Synced with parts/style.css .dsh-whale-status font-size (P0 2026-10-27:
+	 * was 11/6 at 11px — keep these in step with the stylesheet). */
 	function estWidth(s) {
 		var w = 0;
 		for (var i = 0; i < s.length; i++) {
 			var c = s.charCodeAt(i);
-			w += (c > 255 || (c >= 0x2e80 && c <= 0xffef)) ? 11 : 6;
+			w += (c > 255 || (c >= 0x2e80 && c <= 0xffef)) ? 12 : 6.5;
 		}
-		return w + 18; /* padding + border */
+		return w + 20; /* padding + border */
 	}
 
 	/** Fit the cached content: one compact line when it fits, otherwise
 	 * one line per item (narrow space wraps into more lines). A `_stacked`
 	 * cache (multi-session stuck hint) ALWAYS renders one line per row —
-	 * 用户拍板 09-12: 多会话并列显示不合并。 */
+	 * 用户拍板 09-12: 多会话并列显示不合并。A `rows` cache (P1 completion
+	 * reports) renders a two-column label/value GRID instead of wrapped text —
+	 * numbers can never split across lines ("22.9K / tokens" 折行事故). */
 	function applyStatusText(el, cache) {
 		var box = el || statusEl;
 		var data = cache || statusCache;
@@ -2639,6 +2742,26 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		var maxW = parseFloat(box.style.maxWidth) || 280;
 		if (data._stacked) {
 			box.textContent = data.prefix + data.lines.join('\n');
+			return;
+		}
+		if (data.rows) {
+			box.textContent = '';
+			for (var ri = 0; ri < data.rows.length; ri++) {
+				var kv = document.createElement('div');
+				kv.className = 'dsh-whale-status-kv';
+				var kEl = document.createElement('span');
+				kEl.className = 'k';
+				/* trailing space: keeps textContent as "label value" (tests and
+				 * screen readers read the old one-line format) without becoming
+				 * an anonymous flex item */
+				kEl.textContent = data.rows[ri].label + ' ';
+				var vEl = document.createElement('span');
+				vEl.className = 'v';
+				vEl.textContent = data.rows[ri].value;
+				kv.appendChild(kEl);
+				kv.appendChild(vEl);
+				box.appendChild(kv);
+			}
 			return;
 		}
 		var compact = data.prefix + data.lines.join(' · ');
@@ -2671,6 +2794,37 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		try {
 			return !!(window.__dshWhale && window.__dshWhale._stuckPending && window.__dshWhale._stuckPending());
 		} catch (e) { return false; }
+	}
+
+	/** Place the displaced report box relative to the main box: LEFT of it
+	 * first; above it when the left edge is hit; its right side as the last
+	 * resort. Variant classes mirror the main box so the CSS anchoring stays
+	 * coherent. Extracted (P1 2026-10-28 主框/旁路框堆叠左缘对齐): the main
+	 * box re-flows LIVE — the stuck hint's seconds grow its text every 2s
+	 * sweep and whale moves flip variants — so a one-shot inline position
+	 * went stale and the pair drifted apart; updateStatusPos re-places the
+	 * box on every main-box reflow. */
+	function placeReportBox() {
+		var main = statusEl;
+		var el = reportEl;
+		if (!main || !el || !el.classList.contains('show')) return;
+		el.classList.toggle('dsh-whale-status-below', main.classList.contains('dsh-whale-status-below'));
+		el.classList.toggle('dsh-whale-status-above', main.classList.contains('dsh-whale-status-above'));
+		el.classList.toggle('dsh-whale-status-leftflip', main.classList.contains('dsh-whale-status-leftflip'));
+		var left = main.offsetLeft - el.offsetWidth - 8;
+		var top = main.offsetTop;
+		if (left < 4) {
+			left = main.offsetLeft;
+			top = main.offsetTop - el.offsetHeight - 8;
+		}
+		if (top < 0) {
+			left = main.offsetLeft + main.offsetWidth + 8;
+			top = main.offsetTop;
+		}
+		el.style.left = left + 'px';
+		el.style.top = top + 'px';
+		el.style.right = 'auto';
+		el.style.bottom = 'auto';
 	}
 
 	function showStatusPanel(data, ms) {
@@ -2708,29 +2862,11 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		reportCache = typeof data === 'string'
 			? { prefix: '', lines: [data] }
 			: data;
-		el.classList.toggle('dsh-whale-status-below', main.classList.contains('dsh-whale-status-below'));
-		el.classList.toggle('dsh-whale-status-above', main.classList.contains('dsh-whale-status-above'));
-		el.classList.toggle('dsh-whale-status-leftflip', main.classList.contains('dsh-whale-status-leftflip'));
 		var maxW = parseFloat(main.style.maxWidth) || 280;
 		el.style.maxWidth = maxW + 'px';
 		applyStatusText(el, reportCache);
 		el.classList.add('show');
-		/* LEFT of the main box first; above it when the left edge is hit;
-		 * its right side as the last resort */
-		var left = main.offsetLeft - el.offsetWidth - 8;
-		var top = main.offsetTop;
-		if (left < 4) {
-			left = main.offsetLeft;
-			top = main.offsetTop - el.offsetHeight - 8;
-		}
-		if (top < 0) {
-			left = main.offsetLeft + main.offsetWidth + 8;
-			top = main.offsetTop;
-		}
-		el.style.left = left + 'px';
-		el.style.top = top + 'px';
-		el.style.right = 'auto';
-		el.style.bottom = 'auto';
+		placeReportBox();
 		clearTimeout(renderDisplaced.timer);
 		renderDisplaced.timer = setTimeout(hideReportBox, ms || 4000);
 	}
@@ -4667,6 +4803,90 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			closeCtxHistory();
 		}
 
+		/* ---- 内联 SVG 图标集（P1 2026-10-28）----
+		 * P0 用 20px 定宽槽解决了对齐，但 emoji 本体在各平台字形/配色仍不可控
+		 * （Segoe UI Emoji vs Apple Color Emoji）。P1 把字形换成 16×16 stroke
+		 * 风格的内联 SVG：stroke=currentColor 跟随面板文字色，跨平台一致。
+		 * emoji 原文保留在 0 尺寸 ghost span 里——textContent 逐字节不变，
+		 * 测试与读屏口径同 P0；未收录字形回落 P0 emoji 槽（新菜单项零成本）。 */
+		var ICON_SVG_NS = 'http://www.w3.org/2000/svg';
+		var ICON_PATHS = {
+			'⏰': [['circle', { cx: 8, cy: 8.7, r: 5.1 }], ['path', { d: 'M8 6.3v2.6l1.9 1.1' }], ['path', { d: 'M2.8 3.2l1.8-1.2M13.2 3.2l-1.8-1.2' }]],
+			'⏱️': [['circle', { cx: 8, cy: 9, r: 5 }], ['path', { d: 'M6.7 2.4h2.6M8 2.4v1.7M8 9l1.8-1.8' }]],
+			'⏳': [['path', { d: 'M4.7 2.5h6.6M4.7 13.5h6.6M5.7 2.5v1.8c0 1.3 2.3 2.2 2.3 3.7s-2.3 2.4-2.3 3.7v1.8M10.3 2.5v1.8c0 1.3-2.3 2.2-2.3 3.7s2.3 2.4 2.3 3.7v1.8' }]],
+			'➕': [['circle', { cx: 8, cy: 8, r: 5.7 }], ['path', { d: 'M8 5.4v5.2M5.4 8h5.2' }]],
+			'❌': [['circle', { cx: 8, cy: 8, r: 5.7 }], ['path', { d: 'M5.9 5.9l4.2 4.2M10.1 5.9l-4.2 4.2' }]],
+			'✅': [['circle', { cx: 8, cy: 8, r: 5.7 }], ['path', { d: 'M5.3 8.3l1.9 1.9 3.5-4.3' }]],
+			'❓': [['circle', { cx: 8, cy: 8, r: 5.7 }], ['path', { d: 'M6.3 6.4c.2-.9 1-1.5 1.8-1.5.9 0 1.6.6 1.6 1.5 0 1.1-1.6 1.3-1.6 2.4' }], ['circle', { cx: 8, cy: 11.1, r: 0.8, fill: 'currentColor' }]],
+			'🔔': [['path', { d: 'M8 2.4c-2.5 0-4 1.9-4 4.1v2.7L2.8 11.6h10.4L12 9.2V6.5c0-2.2-1.5-4.1-4-4.1z' }], ['path', { d: 'M6.7 13.5a1.3 1.3 0 0 0 2.6 0' }]],
+			'🔊': [['path', { d: 'M3.1 6.2h2.2L8.9 3.2v9.6L5.3 9.8H3.1z' }], ['path', { d: 'M11 5.9a3.2 3.2 0 0 1 0 4.2M13 3.9a6.1 6.1 0 0 1 0 8.2' }]],
+			'🔇': [['path', { d: 'M3.1 6.2h2.2L8.9 3.2v9.6L5.3 9.8H3.1z' }], ['path', { d: 'M10.9 6.3l3.3 3.3M14.2 6.3l-3.3 3.3' }]],
+			'📖': [['path', { d: 'M8 4.4C7.1 3.5 5.3 3.1 2.9 3.3v9.3c2.4-.2 4.2.2 5.1 1.1.9-.9 2.7-1.3 5.1-1.1V3.3C10.7 3.1 8.9 3.5 8 4.4z' }], ['path', { d: 'M8 4.4v9.3' }]],
+			'🎨': [['path', { d: 'M8 2.7a5.3 5.3 0 1 0 0 10.6c.9 0 1.4-.5 1.2-1.2-.3-.9.3-1.6 1.3-1.6h1.1c1.2 0 1.9-.9 1.9-2.3A5.6 5.6 0 0 0 8 2.7z' }], ['circle', { cx: 5.6, cy: 6, r: 0.9, fill: 'currentColor' }], ['circle', { cx: 8.4, cy: 4.9, r: 0.9, fill: 'currentColor' }], ['circle', { cx: 10.9, cy: 7, r: 0.9, fill: 'currentColor' }]],
+			'📜': [['rect', { x: 4.1, y: 2.7, width: 7.8, height: 10.6, rx: 1 }], ['path', { d: 'M6.3 5.7h3.4M6.3 8.1h3.4M6.3 10.5h2.3' }]],
+			'⚙️': [['circle', { cx: 8, cy: 8, r: 4.2 }], ['circle', { cx: 8, cy: 8, r: 1.6 }], ['path', { d: 'M8 1.9v1.7M8 12.4v1.7M1.9 8h1.7M12.4 8h1.7M3.7 3.7l1.2 1.2M11.1 11.1l1.2 1.2M12.3 3.7l-1.2 1.2M4.9 11.1l-1.2 1.2' }]],
+			'🔄': [['path', { d: 'M13.2 8A5.2 5.2 0 1 1 11.6 4.2' }], ['path', { d: 'M13.5 1.8v2.6h-2.6' }]],
+			'❤️': [['path', { d: 'M8 13.1S2.9 9.9 2.9 6.4c0-1.7 1.3-2.9 2.8-2.9 1 0 1.9.5 2.3 1.4.4-.9 1.3-1.4 2.3-1.4 1.5 0 2.8 1.2 2.8 2.9 0 3.5-5.1 6.7-5.1 6.7z', fill: 'currentColor' }]],
+			'🌙': [['path', { d: 'M13 9.7A5.4 5.4 0 0 1 6.3 3a5.4 5.4 0 1 0 6.7 6.7z' }]],
+			'🚨': [['path', { d: 'M8 3.1L2.7 12.4h10.6L8 3.1z' }], ['path', { d: 'M8 6.8v2.6' }], ['circle', { cx: 8, cy: 11.2, r: 0.8, fill: 'currentColor' }]],
+			'📊': [['path', { d: 'M3.2 12.8h9.6M5.2 12.8V8.8M8 12.8V5.2M10.8 12.8V7.2' }]],
+			'📤': [['path', { d: 'M3.1 9.4v3.2h9.8V9.4' }], ['path', { d: 'M8 2.8v6.3M5.9 7L8 9.1 10.1 7' }]],
+			'🩺': [['path', { d: 'M2.2 8.3h2.9l1.5-3.9 2.7 6.9 1.5-3h3' }]],
+			'🎵': [['path', { d: 'M6.3 11.9V4.3l5.1-1.1v7.5' }], ['circle', { cx: 4.8, cy: 11.9, r: 1.4, fill: 'currentColor' }], ['circle', { cx: 9.9, cy: 10.7, r: 1.4, fill: 'currentColor' }]],
+			'☕': [['path', { d: 'M3.5 5.9h8v3.4a3.1 3.1 0 0 1-3.1 3.1H6.6a3.1 3.1 0 0 1-3.1-3.1z' }], ['path', { d: 'M11.5 6.7h.8a1.6 1.6 0 0 1 0 3.2h-.9' }]],
+			'⛑️': [['path', { d: 'M3.6 10.3a4.4 4.4 0 0 1 8.8 0' }], ['path', { d: 'M2.4 10.3h11.2M8 5.9v4.4' }]]
+		};
+		/** Build the inline SVG for one icon spec: stroke defaults come from
+		 * here so specs carry geometry only (fill:'currentColor' opts in). */
+		function buildIconSvg(spec) {
+			var svg = document.createElementNS(ICON_SVG_NS, 'svg');
+			svg.setAttribute('viewBox', '0 0 16 16');
+			svg.setAttribute('class', 'dsh-whale-ico-svg');
+			svg.setAttribute('aria-hidden', 'true');
+			for (var i = 0; i < spec.length; i++) {
+				var node = document.createElementNS(ICON_SVG_NS, spec[i][0]);
+				var attrs = { fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' };
+				var over = spec[i][1];
+				for (var k in over) attrs[k] = over[k];
+				for (var k2 in attrs) node.setAttribute(k2, attrs[k2]);
+				svg.appendChild(node);
+			}
+			return svg;
+		}
+
+		/** Leading-icon wrapper (P0 UI polish 2026-10-27 / P1 SVG 2026-10-28):
+		 * emoji glyph width AND look vary by platform (Segoe UI Emoji vs Apple
+		 * Color Emoji), so the leading glyph is rendered as a 16×16 stroke SVG
+		 * inside the fixed 20px slot (.dsh-whale-ico) — all labels on one
+		 * straight left edge, identical glyphs everywhere. The emoji text
+		 * itself survives in a 0-size ghost span: textContent stays
+		 * byte-identical (tests and screen readers see no change). Glyphs not
+		 * in the icon table fall back to the P0 emoji slot. */
+		function setIconLabel(el, text) {
+			var sp = text.indexOf(' ');
+			var glyph = sp >= 1 && sp <= 4 ? text.slice(0, sp) : '';
+			var spec = glyph ? ICON_PATHS[glyph] : null;
+			el.textContent = '';
+			if (spec) {
+				var ic = document.createElement('span');
+				ic.className = 'dsh-whale-ico';
+				ic.appendChild(buildIconSvg(spec));
+				var ghost = document.createElement('span');
+				ghost.className = 'dsh-whale-ico-ghost';
+				ghost.textContent = glyph;
+				ic.appendChild(ghost);
+				el.appendChild(ic);
+				el.appendChild(document.createTextNode(text.slice(sp)));
+				return;
+			}
+			if (!glyph) { el.textContent = text; return; }
+			var ic0 = document.createElement('span');
+			ic0.className = 'dsh-whale-ico';
+			ic0.textContent = glyph;
+			el.appendChild(ic0);
+			el.appendChild(document.createTextNode(text.slice(sp)));
+		}
+
 		/** Sub-panel footer. Back follows the navigation hierarchy
 		 * 菜单 → 设置 → 子面板 (user request): panels entered from the
 		 * right-click menu (提醒我) return TO THE MENU; panels entered from
@@ -4829,7 +5049,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			remindItem.className = 'dsh-whale-menu-item';
 			var pendingReminders = 0;
 			try { pendingReminders = JSON.parse(localStorage.getItem('dsh-whale:reminders') || '[]').length; } catch (e) {}
-			remindItem.textContent = '⏰ 提醒我' + (pendingReminders > 0 ? '（' + pendingReminders + ' 个待响）' : '');
+			setIconLabel(remindItem, '⏰ 提醒我' + (pendingReminders > 0 ? '（' + pendingReminders + ' 个待响）' : ''));
 			remindItem.addEventListener('click', function (event) {
 				event.stopPropagation();
 				closeCtxMenu();
@@ -4839,7 +5059,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			/* sound toggle */
 			var soundItem = document.createElement('div');
 			soundItem.className = 'dsh-whale-menu-item';
-			soundItem.textContent = soundMuted ? '🔇 声音：关' : '🔊 声音：开';
+			setIconLabel(soundItem, soundMuted ? '🔇 声音：关' : '🔊 声音：开');
 			soundItem.addEventListener('click', function (event) {
 				event.stopPropagation();
 				setSoundMuted(!soundMuted);
@@ -4854,7 +5074,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			/* help */
 			var helpItem = document.createElement('div');
 			helpItem.className = 'dsh-whale-menu-item';
-			helpItem.textContent = '📖 使用说明';
+			setIconLabel(helpItem, '📖 使用说明');
 			helpItem.addEventListener('click', function (event) {
 				event.stopPropagation();
 				closeCtxMenu();
@@ -4864,7 +5084,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			/* wardrobe */
 			var dressItem = document.createElement('div');
 			dressItem.className = 'dsh-whale-menu-item';
-			dressItem.textContent = '🎨 我的装扮';
+			setIconLabel(dressItem, '🎨 我的装扮');
 			dressItem.addEventListener('click', function (event) {
 				event.stopPropagation();
 				closeCtxMenu();
@@ -4874,7 +5094,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			/* history */
 			var historyItem = document.createElement('div');
 			historyItem.className = 'dsh-whale-menu-item';
-			historyItem.textContent = '📜 历史任务';
+			setIconLabel(historyItem, '📜 历史任务');
 			historyItem.addEventListener('click', function (event) {
 				event.stopPropagation();
 				closeCtxMenu();
@@ -4884,7 +5104,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			/* settings */
 			var settingsItem = document.createElement('div');
 			settingsItem.className = 'dsh-whale-menu-item';
-			settingsItem.textContent = '⚙️ 设置';
+			setIconLabel(settingsItem, '⚙️ 设置');
 			settingsItem.addEventListener('click', function (event) {
 				event.stopPropagation();
 				closeCtxMenu();
@@ -4896,7 +5116,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			 * whale menu is the reachable way to get one */
 			var refreshItem = document.createElement('div');
 			refreshItem.className = 'dsh-whale-menu-item';
-			refreshItem.textContent = '🔄 刷新页面';
+			setIconLabel(refreshItem, '🔄 刷新页面');
 			refreshItem.addEventListener('click', function (event) {
 				event.stopPropagation();
 				closeCtxMenu();
@@ -4987,7 +5207,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				row.className = 'dsh-whale-wardrobe-row';
 				var unlocked = unlockedGear.has(def.id);
 				var leftTxt = document.createElement('span');
-				leftTxt.textContent = def.emoji + ' ' + def.name;
+				setIconLabel(leftTxt, def.emoji + ' ' + def.name);
 				var rightTxt = document.createElement('span');
 				if (unlocked) {
 					rightTxt.textContent = '✅ 已解锁';
@@ -5003,7 +5223,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			var affRow = document.createElement('div');
 			affRow.className = 'dsh-whale-wardrobe-row dsh-whale-wardrobe-aff';
 			var affL = document.createElement('span');
-			affL.textContent = '❤️ 好感度';
+			setIconLabel(affL, '❤️ 好感度');
 			var affR = document.createElement('span');
 			affR.textContent = '× ' + affection;
 			affRow.appendChild(affL);
@@ -5162,116 +5382,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			showSidePanel(panel, 380);
 		}
 
-		/** History drawer: recent finished tasks (newest first), each row can
-		 * jump back to its conversation via the session-opening hook. Uses a
-		 * separate panel slot so it can be wider and left-anchored. */
-		var ctxHistory = null;
-		/** icon glyph for a history record kind */
-		function historyIcon(kind) {
-			if (kind === 'done') return { text: '✓', cls: 'dsh-whale-history-icon-done' };
-			if (kind === 'fail') return { text: '✗', cls: 'dsh-whale-history-icon-fail' };
-			if (kind === 'approval') return { text: '?', cls: 'dsh-whale-history-icon-approval' };
-			if (kind === 'question') return { text: '?', cls: 'dsh-whale-history-icon-question' };
-			if (kind === 'killed') return { text: '⏹', cls: 'dsh-whale-history-icon-killed' }; /* blue: user-stopped, not a truncation */
-			return { text: '⏹', cls: 'dsh-whale-history-icon-cut' };
-		}
-		/** Case-insensitive indexOf（用户反馈）: 搜 step 必须命中 Step/STEP。 */
-		function indexOfCI(hay, needle) {
-			var n = (needle || '').toLowerCase();
-			if (!n) return -1;
-			return (hay || '').toLowerCase().indexOf(n);
-		}
-		/** Render `text` into `el` with the first `q` occurrence highlighted
-		 * (#7), windowed around the match so long titles stay compact. The
-		 * match is case-insensitive but the marked text keeps its ORIGINAL
-		 * casing (copied from `text`, not from `q`). */
-		function setHighlightText(el, text, q) {
-			var idx = indexOfCI(text, q);
-			if (idx < 0) { el.textContent = truncate(text, 16); return; }
-			var start = Math.max(0, idx - 4);
-			var end = Math.max(start + 24, idx + q.length + 8);
-			var frag = (start > 0 ? '…' : '') + text.slice(start, end);
-			var rel = idx - start;
-			el.textContent = '';
-			el.appendChild(document.createTextNode(frag.slice(0, rel)));
-			var hit = document.createElement('mark');
-			hit.textContent = frag.substr(rel, q.length);
-			el.appendChild(hit);
-			el.appendChild(document.createTextNode(frag.slice(rel + q.length)));
-		}
-
-		/* search result count line (#7) — created by openHistory, updated here */
-		var historyCountEl = null;
-
-		/** (Re)fill the history list element from the current `history`.
-		 * Called by openHistory AND after each cloud pull — the server merge
-		 * can bring records saved by other windows while the drawer is open. */
-		function fillHistoryList(list) {
-			list.textContent = '';
-			if (history.length === 0) {
-				var empty = document.createElement('div');
-				empty.className = 'dsh-whale-history-empty';
-				empty.textContent = '还没有任务记录哦 🐳';
-				list.appendChild(empty);
-				if (historyCountEl) historyCountEl.textContent = '';
-				return;
-			}
-			var shown = 0;
-			for (var i = 0; i < history.length; i++) {
-				var rec = history[i];
-				if (historySearch &&
-					indexOfCI(rec.title, historySearch) < 0 &&
-					indexOfCI(rec.sessionId, historySearch) < 0) continue;
-				shown++;
-				var row = document.createElement('div');
-				row.className = 'dsh-whale-history-row';
-				var icon = document.createElement('span');
-				var ic = historyIcon(rec.kind);
-				icon.className = 'dsh-whale-history-icon ' + ic.cls;
-				icon.textContent = ic.text;
-				var text = document.createElement('span');
-				text.className = 'dsh-whale-history-text';
-				var titleFull = rec.title || '（未命名）';
-				if (historySearch && indexOfCI(titleFull, historySearch) >= 0) setHighlightText(text, titleFull, historySearch);
-				else text.textContent = truncate(titleFull, 16);
-				var time = document.createElement('span');
-				time.className = 'dsh-whale-history-time';
-				var d = new Date(rec.at || 0);
-				/* date + time: tasks pile up across days, HH:MM alone is ambiguous */
-				time.textContent = (d.getMonth() + 1) + '月' + d.getDate() + '日 ' +
-					(d.getHours() < 10 ? '0' : '') + d.getHours() + ':' +
-					(d.getMinutes() < 10 ? '0' : '') + d.getMinutes();
-				row.appendChild(icon);
-				row.appendChild(text);
-				row.appendChild(time);
-				row.addEventListener('click', (function (sessionId, endTime, title) {
-					/* 0.4.0: in-house jump (client-module bridge, with moment
-					 * positioning) — the sidebar row click stays as the fallback
-					 * chain tail; the conversation-client hook is retired */
-					return function (event) {
-						event.stopPropagation();
-						closeCtxHistory();
-						if (openSessionAt(sessionId, endTime) || openViaSidebarById(sessionId) || openViaSidebarByTitle(title)) {
-							uiSay('正在跳转到该对话… 🐳', 1500, sessionId);
-							return;
-						}
-						uiSay('跳转失败：右键菜单 🔄 刷新页面后重试（浏览器可按 Ctrl+F5）🥲', 3000, sessionId);
-					};
-				})(rec.sessionId, rec.endTime || rec.at, rec.title));
-				list.appendChild(row);
-			}
-			if (historyCountEl) {
-				historyCountEl.textContent = historySearch ? ('找到 ' + shown + ' 条记录') : '';
-			}
-			if (shown === 0) {
-				var noMatch = document.createElement('div');
-				noMatch.className = 'dsh-whale-history-empty';
-				noMatch.textContent = '没有匹配的记录 🔍';
-				list.appendChild(noMatch);
-			}
-		}
-		/** History search text (drawer-local, not persisted). */
-		var historySearch = '';
+		/* ———— 历史抽屉群已拆至 ui/drawers.js（§7 触发线到达，2026-10-27 K3） ———— */
 
 		/** 🎵 音色: per-notification sound picker — 每种通知各选各的音效，
 		 * 点选即切换并现场试听。 */
@@ -5299,7 +5410,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				row.className = 'dsh-whale-settings-row';
 				var l = document.createElement('span');
 				l.className = 'dsh-whale-settings-label';
-				l.textContent = k.label;
+				setIconLabel(l, k.label);
 				row.appendChild(l);
 				var sel = document.createElement('select');
 				sel.className = 'dsh-whale-sound-sel';
@@ -5325,424 +5436,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			showFloatingPanel(panel, 220, 220);
 		}
 
-		/** ⏰ 提醒: presets in the right-click menu; persisted in
-		 * localStorage so they survive reloads; a 20s interval fires due
-		 * ones as bubble + attention chime + unread badge. */
-		function loadReminders() {
-			try { return JSON.parse(localStorage.getItem('dsh-whale:reminders') || '[]'); } catch (e) { return []; }
-		}
-		function saveReminders(list) {
-			try { localStorage.setItem('dsh-whale:reminders', JSON.stringify(list)); } catch (e) {}
-		}
-		function openReminders() {
-			closeCtxHistory(); /* drawers and floating panels never stack */
-			var panel = ctxPanel || document.createElement('div');
-			panel.className = 'dsh-whale-settings';
-			panel.textContent = '';
-			var title = document.createElement('div');
-			title.className = 'dsh-whale-wardrobe-title';
-			title.textContent = '⏰ 提醒我';
-			panel.appendChild(title);
-			var PRESETS = [5, 10, 25, 60];
-			var rmId = function () { return 'rm-' + Date.now() + '-' + Math.floor(Math.random() * 1e6); };
-			PRESETS.forEach(function (min) {
-				var row = document.createElement('div');
-				row.className = 'dsh-whale-settings-row';
-				row.textContent = '➕ ' + min + ' 分钟后提醒';
-				row.addEventListener('click', function (event) {
-					event.stopPropagation();
-					var list = loadReminders();
-					list.push({ id: rmId(), at: Date.now() + min * 60000, text: min + ' 分钟时间到了' });
-					saveReminders(list);
-					uiSay('好，' + min + ' 分钟后提醒你 ⏰', 2000);
-					openReminders();
-				});
-				panel.appendChild(row);
-			});
-			/* 指定时间提醒（用户需求）：时/分/秒三个紧凑步进器一行排开，
-			 * −/+ 点按加减、也可直接键入数字，越界环绕/夹紧；已过今天的
-			 * 时刻自动顺延到明天。存绝对时间戳，触发器零改动。 */
-			var absSec = document.createElement('div');
-			absSec.className = 'dsh-whale-settings-section';
-			absSec.textContent = '指定时间（时 / 分 / 秒）';
-			panel.appendChild(absSec);
-			var absRow = document.createElement('div');
-			absRow.className = 'dsh-whale-settings-row dsh-whale-remind-row';
-			/* 时/分/秒三个步进器（用户反馈：原生 select 展开一大列太占页面；
-			 * −/+ 点按加减、也可直接键入数字，越界环绕/夹紧） */
-			var mkStep = function (max, def, step) {
-				var wrap = document.createElement('span');
-				wrap.className = 'dsh-whale-step';
-				var inp = document.createElement('input');
-				inp.className = 'dsh-whale-step-val';
-				var pad = function (v) { return v < 10 ? '0' + v : '' + v; };
-				inp.value = pad(def);
-				var mkBtn = function (txt, delta) {
-					var b = document.createElement('span');
-					b.className = 'dsh-whale-step-btn';
-					b.textContent = txt;
-					b.addEventListener('click', function (event) {
-						event.stopPropagation();
-						var v = (parseInt(inp.value, 10) || 0) + delta;
-						if (v < 0) v = max; /* wrap around */
-						if (v > max) v = 0;
-						inp.value = pad(v);
-					});
-					return b;
-				};
-				wrap.appendChild(mkBtn('−', -step));
-				wrap.appendChild(inp);
-				wrap.appendChild(mkBtn('+', step));
-				inp.addEventListener('click', function (event) { event.stopPropagation(); });
-				inp.addEventListener('change', function () {
-					/* typed input: clamp into range, garbage falls back to 0 */
-					var v = parseInt(inp.value, 10);
-					if (isNaN(v) || v < 0) v = 0;
-					if (v > max) v = max;
-					inp.value = pad(v);
-				});
-				wrap._val = function () {
-					return Math.min(max, Math.max(0, parseInt(inp.value, 10) || 0));
-				};
-				return wrap;
-			};
-			/* sensible default: one hour from now, on the hour */
-			var stH = mkStep(23, (new Date(Date.now() + 3600000)).getHours(), 1);
-			var stM = mkStep(59, 0, 5);
-			var stS = mkStep(59, 0, 5);
-			absRow.appendChild(stH);
-			absRow.appendChild(stM);
-			absRow.appendChild(stS);
-			panel.appendChild(absRow);
-			/* 文字添加行（用户反馈：一个孤零零的 ➕ 图标没人看得懂） */
-			var addRow = document.createElement('div');
-			addRow.className = 'dsh-whale-settings-row dsh-whale-remind-addrow';
-			addRow.textContent = '➕ 添加提醒';
-			addRow.addEventListener('click', function (event) {
-				event.stopPropagation();
-				addAbsoluteReminder();
-			});
-			panel.appendChild(addRow);
-			var addAbsoluteReminder = function () {
-				var h = stH._val(), mi = stM._val(), s = stS._val();
-				var target = new Date();
-				target.setHours(h, mi, s, 0);
-				if (target.getTime() <= Date.now()) target.setDate(target.getDate() + 1); /* 已过 → 明天 */
-				var pad = function (v) { return v < 10 ? '0' + v : '' + v; };
-				var label = pad(h) + ':' + pad(mi) + ':' + pad(s);
-				var list = loadReminders();
-				list.push({ id: rmId(), at: target.getTime(), text: '定时提醒 ' + label });
-				saveReminders(list);
-				uiSay('好，' + (target.getDate() === new Date().getDate() ? '今天' : '明天') + ' ' + label + ' 提醒你 ⏰', 2600);
-				openReminders();
-			};
-			var list = loadReminders();
-			list.sort(function (a, b) { return a.at - b.at; });
-			/* hydrate ids onto legacy (pre-id) entries so cancel-by-id below
-			 * never has to fall back to a positional index */
-			var rmDirty = false;
-			for (var hi = 0; hi < list.length; hi++) {
-				if (!list[hi].id) { list[hi].id = 'rm-' + list[hi].at + '-' + hi + '-' + Math.floor(Math.random() * 1e6); rmDirty = true; }
-			}
-			if (rmDirty) saveReminders(list);
-			list.forEach(function (r, idx) {
-				var left = Math.max(0, Math.round((r.at - Date.now()) / 60000));
-				var d = new Date(r.at);
-				var pad2 = function (v) { return v < 10 ? '0' + v : '' + v; };
-				var row = document.createElement('div');
-				row.className = 'dsh-whale-settings-row';
-				row.textContent = '⏳ ' + (d.getMonth() + 1) + '月' + d.getDate() + '日 ' +
-					pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds()) +
-					'（还剩约 ' + left + ' 分钟，点按取消）';
-				row.addEventListener('click', function (event) {
-					event.stopPropagation();
-					var rest = loadReminders();
-					/* cancel by id, never by the render-time index: the 20s
-					 * trigger interval rewrites the list while the drawer is
-					 * open (due reminders drop out) and another window can
-					 * shrink it too — a stale index deletes the WRONG row */
-					var killAt = -1;
-					for (var ki = 0; ki < rest.length; ki++) {
-						if (rest[ki].id === r.id) { killAt = ki; break; }
-					}
-					if (killAt >= 0) rest.splice(killAt, 1);
-					saveReminders(rest);
-					openReminders();
-				});
-				panel.appendChild(row);
-			});
-			/* 提醒我 is entered from the RIGHT-CLICK MENU (no settings row):
-			 * back goes to the menu, not settings (user request) */
-			mkPanelFoot(panel, null, true);
-			if (!ctxPanel) document.body.appendChild(panel);
-			ctxPanel = panel;
-			showFloatingPanel(panel, 230, 200);
-		}
-		setInterval(function () {
-			var list = loadReminders();
-			var nowT = Date.now();
-			var due = [];
-			var keep = [];
-			for (var ri = 0; ri < list.length; ri++) {
-				if (list[ri].at <= nowT) due.push(list[ri]);
-				else keep.push(list[ri]);
-			}
-			if (due.length === 0) return;
-			saveReminders(keep);
-			for (var di = 0; di < due.length; di++) {
-				var msg = '⏰ ' + due[di].text;
-				say(msg, 6000);
-				/* snapshot=false: a reminder is NOT a task outcome — reading it
-				 * later must never resurrect a "此次任务消耗 X tokens" panel
-				 * from whatever turn happened to be last (user-reported bug) */
-				pushReport(msg, 6000, undefined, false);
-				playDing('remind'); /* 音色面板可选（soundRemind，默认铃铛） */
-			}
-		}, 20000);
-
-		/** 📊 任务周报: last-7-day buckets from the history records, drawn in
-		 * the same drawer style as the history list (fixed height, list
-		 * scrolls). Lives in the side-drawer slot: opening it CLOSES the
-		 * settings panel — both float next to the whale, and stacked they
-		 * hide each other (the drawer rendered "empty" for its whole life
-		 * because its list div was never appended to the panel — only the
-		 * title + close ever made it into the DOM). */
-		function openReport() {
-			closeCtxPanel();
-			pullCloudHistory(); /* warm: merge records saved by other windows */
-			var panel = ctxHistory || document.createElement('div');
-			panel.className = 'dsh-whale-history';
-			panel.textContent = '';
-			var title = document.createElement('div');
-			title.className = 'dsh-whale-wardrobe-title';
-			title.textContent = '📊 任务周报（近 7 天）';
-			panel.appendChild(title);
-			var list = document.createElement('div');
-			list.className = 'dsh-whale-history-list';
-			var days = {};
-			var order = [];
-			var weekAgo = Date.now() - 7 * 864e5;
-			for (var i = 0; i < history.length; i++) {
-				var rec = history[i];
-				var at = rec.at || 0;
-				if (at < weekAgo) continue;
-				var d = new Date(at);
-				var key = (d.getMonth() + 1) + '月' + d.getDate() + '日';
-				if (!days[key]) { days[key] = { done: 0, fail: 0, killed: 0, ask: 0, tokens: 0, titles: [] }; order.push({ key: key, at: at }); }
-				var b = days[key];
-				if (rec.kind === 'done') b.done++;
-				else if (rec.kind === 'fail') b.fail++;
-				else if (rec.kind === 'killed') b.killed++;
-				else if (rec.kind === 'question' || rec.kind === 'approval') b.ask++;
-				if (rec.turnTokens) b.tokens += rec.turnTokens;
-				if (rec.title && rec.title !== '未命名任务' && b.titles.indexOf(rec.title) < 0) b.titles.push(rec.title);
-			}
-			order.sort(function (a, b2) { return b2.at - a.at; });
-			var totals = { done: 0, fail: 0, killed: 0, ask: 0, tokens: 0 };
-			order.forEach(function (o) {
-				var b = days[o.key];
-				totals.done += b.done; totals.fail += b.fail; totals.killed += b.killed; totals.ask += b.ask; totals.tokens += b.tokens;
-			});
-			var fmtK = function (n) { return n >= 10000 ? (n / 1000).toFixed(1) + 'K' : n >= 1000 ? Math.round(n / 1000) + 'K' : n; };
-			var sumRow = document.createElement('div');
-			sumRow.className = 'dsh-whale-report-summary';
-			sumRow.textContent = '本周：✅' + totals.done + ' 失败' + totals.fail + ' ⏹' + totals.killed + ' ❓' + totals.ask + ' · ' + fmtK(totals.tokens) + ' tok';
-			list.appendChild(sumRow);
-			if (order.length === 0) {
-				var empty = document.createElement('div');
-				empty.className = 'dsh-whale-history-empty';
-				empty.textContent = '这 7 天还没有任务记录 🐳';
-				list.appendChild(empty);
-			}
-			order.forEach(function (o) {
-				var b = days[o.key];
-				var row = document.createElement('div');
-				row.className = 'dsh-whale-history-row';
-				row.title = b.titles.join('\n');
-				var text = document.createElement('span');
-				text.className = 'dsh-whale-history-text';
-				text.textContent = o.key;
-				var time = document.createElement('span');
-				time.className = 'dsh-whale-history-time';
-				var parts = [];
-				if (b.done) parts.push('✅' + b.done);
-				if (b.fail) parts.push('❌' + b.fail);
-				if (b.killed) parts.push('⏹' + b.killed);
-				if (b.ask) parts.push('❓' + b.ask);
-				time.textContent = parts.join(' ') + (b.tokens ? ' · ' + fmtK(b.tokens) : '');
-				row.appendChild(text);
-				row.appendChild(time);
-				list.appendChild(row);
-			});
-			panel.appendChild(list);
-			/* entered from settings too (任务周报 row): back/close footer */
-			mkPanelFoot(panel, closeCtxHistory);
-			if (!ctxHistory) document.body.appendChild(panel);
-			ctxHistory = panel;
-			showSidePanel(panel, 300);
-		}
-
-		/** 📤 导出历史: Markdown → clipboard; CSV → file download. */
-		function exportHistory(fmt) {
-			if (!history.length) { uiSay('还没有历史可导出哦 🐳', 2000); return; }
-			if (fmt === 'csv') {
-				var rows = ['time,kind,title,session,tokens'];
-				for (var i = history.length - 1; i >= 0; i--) {
-					var r = history[i];
-					var d = new Date(r.at || 0);
-					var ts = d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate() + ' ' + d.toTimeString().slice(0, 8);
-					rows.push([ts, r.kind || '', '"' + String(r.title || '').replace(/"/g, '""') + '"', r.sessionId || '', r.turnTokens == null ? '' : r.turnTokens].join(','));
-				}
-				var blob = new Blob(['\ufeff' + rows.join('\n')], { type: 'text/csv;charset=utf-8' });
-				var a = document.createElement('a');
-				a.href = URL.createObjectURL(blob);
-				a.download = 'whale-history.csv';
-				a.click();
-				uiSay('CSV 已下载 📤', 2000);
-				return;
-			}
-			var lines = ['# 小鲸鱼任务历史', ''];
-			for (var j = 0; j < history.length; j++) {
-				var rr = history[j];
-				var dd = new Date(rr.at || 0);
-				var icon = rr.kind === 'done' ? '✅' : rr.kind === 'fail' ? '❌' : rr.kind === 'killed' ? '⏹' : '❓';
-				lines.push('- ' + icon + ' ' + (rr.title || '（未命名）') + ' — ' + (dd.getMonth() + 1) + '月' + dd.getDate() + '日 ' + dd.toTimeString().slice(0, 5) + (rr.turnTokens ? ' · ' + rr.turnTokens + ' tok' : ''));
-			}
-			var md = lines.join('\n');
-			if (navigator.clipboard && navigator.clipboard.writeText) {
-				navigator.clipboard.writeText(md).then(function () { uiSay('Markdown 已复制 📋', 2200); }, function () { uiSay('复制失败 🥲', 2000); });
-			} else {
-				uiSay('剪贴板不可用 🥲', 2000);
-			}
-		}
-
-		function openHistory() {
-			closeCtxPanel(); /* drawers and floating panels never stack */
-			pullCloudHistory(function () {
-				/* the server merge may have brought records from other windows:
-				 * re-fill the list body when the pull settles */
-				if (ctxHistory && ctxHistory.isConnected) {
-					var liveList = ctxHistory.querySelector('.dsh-whale-history-list');
-					if (liveList) fillHistoryList(liveList);
-				}
-			});
-			var panel = ctxHistory || document.createElement('div');
-			panel.className = 'dsh-whale-history';
-			panel.textContent = '';
-			var title = document.createElement('div');
-			title.className = 'dsh-whale-wardrobe-title';
-			title.textContent = '📜 历史任务';
-			panel.appendChild(title);
-			var search = document.createElement('input');
-			search.className = 'dsh-whale-history-search';
-			search.placeholder = '🔍 搜标题 / 会话…';
-			search.value = historySearch;
-			search.addEventListener('input', function () {
-				historySearch = search.value;
-				fillHistoryList(list);
-			});
-			search.addEventListener('click', function (event) { event.stopPropagation(); });
-			panel.appendChild(search);
-			/* #7: "找到 N 条记录" line under the search box */
-			historyCountEl = document.createElement('div');
-			historyCountEl.className = 'dsh-whale-history-count';
-			panel.appendChild(historyCountEl);
-			var list = document.createElement('div');
-			list.className = 'dsh-whale-history-list';
-			fillHistoryList(list);
-			panel.appendChild(list);
-			var clearRow = document.createElement('div');
-			clearRow.className = 'dsh-whale-history-clear';
-			clearRow.textContent = '🗑 清空历史';
-			/* #8: ranged clear — clearAt compares `at < clearAt`, so a
-			 * back-dated generation marker drops only old records, both
-			 * locally and in the cloud merge (host needs no changes). */
-			var clearOpts = document.createElement('div');
-			clearOpts.className = 'dsh-whale-history-clear-opts';
-			var doClear = function (cutoff, label) {
-				var before = history.length;
-				if (cutoff === null) {
-					history.length = 0;
-				} else {
-					for (var i = history.length - 1; i >= 0; i--) {
-						if ((history[i].at || 0) < cutoff) history.splice(i, 1);
-					}
-				}
-				bumpClearAt(cutoff === null ? undefined : cutoff);
-				try { safeSet(HISTORY_KEY, history); } catch (e) {}
-				pushCloudHistory();
-				historySearch = '';
-				fillHistoryList(list);
-				clearRow.dataset.armed = '0';
-				clearOpts.classList.remove('show');
-				clearRow.textContent = '🗑 清空历史';
-				showSidePanel(panel, 280); /* drawer shrank: re-clamp */
-				uiSay(label + '，共 ' + (before - history.length) + ' 条 🧹', 2400);
-			};
-			var mkClearOpt = function (text, cutoff) {
-				var opt = document.createElement('div');
-				opt.className = 'dsh-whale-history-clear-opt';
-				opt.textContent = text;
-				opt.addEventListener('click', function (event) {
-					event.stopPropagation();
-					doClear(cutoff, text);
-				});
-				clearOpts.appendChild(opt);
-			};
-			mkClearOpt('清空全部', null);
-			mkClearOpt('仅清空 7 天前', Date.now() - 7 * 86400000);
-			mkClearOpt('仅清空 30 天前', Date.now() - 30 * 86400000);
-			clearRow.addEventListener('click', function (event) {
-				event.stopPropagation();
-				if (clearRow.dataset.armed !== '1') {
-					clearRow.dataset.armed = '1';
-					clearRow.textContent = '⚠️ 选择要清空的范围';
-					clearOpts.classList.add('show');
-					/* the drawer just grew: re-measure + re-clamp so the
-					 * options never run past the screen edge (same fix as
-					 * the settings (?) hints) */
-					showSidePanel(panel, 280);
-					return;
-				}
-				/* tapping the title row again = cancel */
-				clearRow.dataset.armed = '0';
-				clearOpts.classList.remove('show');
-				clearRow.textContent = '🗑 清空历史';
-				showSidePanel(panel, 280);
-			});
-			panel.appendChild(clearRow);
-			panel.appendChild(clearOpts);
-			/* 09-13 用户拍板: the missing "forget a conversation" entry.
-			 * Truly forgetting one conversation is TWO steps — 清历史 first
-			 * (drops the record snapshots), then this row (wipes the book +
-			 * the in-memory names); history snapshots re-seed names on the
-			 * next load otherwise. Semantics live in the manual row. */
-			var bookClearRow = document.createElement('div');
-			bookClearRow.className = 'dsh-whale-history-clear';
-			bookClearRow.textContent = '📇 清空通讯录';
-			bookClearRow.addEventListener('click', function (event) {
-				event.stopPropagation();
-				if (bookClearRow.dataset.armed !== '1') {
-					bookClearRow.dataset.armed = '1';
-					bookClearRow.textContent = '⚠️ 再点一次确认清空';
-					return;
-				}
-				bookClearRow.dataset.armed = '0';
-				bookClearRow.textContent = '📇 清空通讯录';
-				var wiped = clearTitleBook();
-				uiSay(wiped > 0 ? '通讯录已清空（' + wiped + ' 条），名字会重新学习 🧹' : '通讯录本来就是空的 🧹', 2400);
-			});
-			panel.appendChild(bookClearRow);
-			mkPanelFoot(panel, closeCtxHistory, true); /* ← 返回菜单 / ✕ 关闭 — 与其他子面板统一 */
-			if (!ctxHistory) document.body.appendChild(panel);
-			ctxHistory = panel;
-			/* fixed-height drawer with a scrollable list: long histories never
-			 * grow past the viewport — the LIST scrolls, not the drawer */
-			showSidePanel(panel, 280);
-		}
-		function closeCtxHistory() {
-			if (ctxHistory) ctxHistory.classList.remove('show');
-		}
+		/* ———— 历史抽屉群已拆至 ui/drawers.js（§7 触发线到达，2026-10-27 K3） ———— */
 
 		/** Settings panel: notify-on-start toggle, stuck threshold, volume.
 		 * Each row is a cycle; changes apply + persist immediately. Reuses the
@@ -5769,7 +5463,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				row.className = 'dsh-whale-settings-row';
 				var l = document.createElement('span');
 				l.className = 'dsh-whale-settings-label';
-				l.textContent = label;
+				setIconLabel(l, label);
 				var v = document.createElement('span');
 				v.className = 'dsh-whale-settings-value';
 				v.textContent = valueText;
@@ -6100,6 +5794,543 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			return summary;
 		}
 
+/* ---- module: src/ui/drawers.js ---- */
+/* ---- ui/drawers.js —— 历史抽屉群（architecture.md §7，2026-10-27 从 menu.js 拆出） ----
+ * 内容仍拼接在 uiInit 闭包体内（bootstrap.js 开、drag.js 合），本文件全部
+ * var/function 声明与 menu.js 共享同一函数作用域，跨文件引用靠提升，无 import。
+ * 成员：历史抽屉基建（ctxHistory/historyIcon/indexOfCI/setHighlightText/
+ *       fillHistoryList/historySearch）+ 提醒（loadReminders/saveReminders/
+ *       openReminders/20s 触发环）+ 周报 openReport + 导出 exportHistory +
+ *       历史抽屉 openHistory/closeCtxHistory。 */
+		/** History drawer: recent finished tasks (newest first), each row can
+		 * jump back to its conversation via the session-opening hook. Uses a
+		 * separate panel slot so it can be wider and left-anchored. */
+		var ctxHistory = null;
+		/** icon glyph for a history record kind */
+		function historyIcon(kind) {
+			if (kind === 'done') return { text: '✓', cls: 'dsh-whale-history-icon-done' };
+			if (kind === 'fail') return { text: '✗', cls: 'dsh-whale-history-icon-fail' };
+			if (kind === 'approval') return { text: '?', cls: 'dsh-whale-history-icon-approval' };
+			if (kind === 'question') return { text: '?', cls: 'dsh-whale-history-icon-question' };
+			if (kind === 'killed') return { text: '⏹', cls: 'dsh-whale-history-icon-killed' }; /* blue: user-stopped, not a truncation */
+			return { text: '⏹', cls: 'dsh-whale-history-icon-cut' };
+		}
+		/** Case-insensitive indexOf（用户反馈）: 搜 step 必须命中 Step/STEP。 */
+		function indexOfCI(hay, needle) {
+			var n = (needle || '').toLowerCase();
+			if (!n) return -1;
+			return (hay || '').toLowerCase().indexOf(n);
+		}
+		/** Render `text` into `el` with the first `q` occurrence highlighted
+		 * (#7), windowed around the match so long titles stay compact. The
+		 * match is case-insensitive but the marked text keeps its ORIGINAL
+		 * casing (copied from `text`, not from `q`). */
+		function setHighlightText(el, text, q) {
+			var idx = indexOfCI(text, q);
+			if (idx < 0) { el.textContent = truncate(text, 16); return; }
+			var start = Math.max(0, idx - 4);
+			var end = Math.max(start + 24, idx + q.length + 8);
+			var frag = (start > 0 ? '…' : '') + text.slice(start, end);
+			var rel = idx - start;
+			el.textContent = '';
+			el.appendChild(document.createTextNode(frag.slice(0, rel)));
+			var hit = document.createElement('mark');
+			hit.textContent = frag.substr(rel, q.length);
+			el.appendChild(hit);
+			el.appendChild(document.createTextNode(frag.slice(rel + q.length)));
+		}
+
+		/* search result count line (#7) — created by openHistory, updated here */
+		var historyCountEl = null;
+
+		/** (Re)fill the history list element from the current `history`.
+		 * Called by openHistory AND after each cloud pull — the server merge
+		 * can bring records saved by other windows while the drawer is open. */
+		function fillHistoryList(list) {
+			list.textContent = '';
+			if (history.length === 0) {
+				var empty = document.createElement('div');
+				empty.className = 'dsh-whale-history-empty';
+				empty.textContent = '还没有任务记录哦 🐳';
+				list.appendChild(empty);
+				if (historyCountEl) historyCountEl.textContent = '';
+				return;
+			}
+			var shown = 0;
+			for (var i = 0; i < history.length; i++) {
+				var rec = history[i];
+				if (historySearch &&
+					indexOfCI(rec.title, historySearch) < 0 &&
+					indexOfCI(rec.sessionId, historySearch) < 0) continue;
+				shown++;
+				var row = document.createElement('div');
+				row.className = 'dsh-whale-history-row';
+				var icon = document.createElement('span');
+				var ic = historyIcon(rec.kind);
+				icon.className = 'dsh-whale-history-icon ' + ic.cls;
+				icon.textContent = ic.text;
+				var text = document.createElement('span');
+				text.className = 'dsh-whale-history-text';
+				var titleFull = rec.title || '（未命名）';
+				if (historySearch && indexOfCI(titleFull, historySearch) >= 0) setHighlightText(text, titleFull, historySearch);
+				else text.textContent = truncate(titleFull, 16);
+				var time = document.createElement('span');
+				time.className = 'dsh-whale-history-time';
+				var d = new Date(rec.at || 0);
+				/* date + time: tasks pile up across days, HH:MM alone is ambiguous */
+				time.textContent = (d.getMonth() + 1) + '月' + d.getDate() + '日 ' +
+					(d.getHours() < 10 ? '0' : '') + d.getHours() + ':' +
+					(d.getMinutes() < 10 ? '0' : '') + d.getMinutes();
+				row.appendChild(icon);
+				row.appendChild(text);
+				row.appendChild(time);
+				row.addEventListener('click', (function (sessionId, endTime, title) {
+					/* 0.4.0: in-house jump (client-module bridge, with moment
+					 * positioning) — the sidebar row click stays as the fallback
+					 * chain tail; the conversation-client hook is retired */
+					return function (event) {
+						event.stopPropagation();
+						closeCtxHistory();
+						if (openSessionAt(sessionId, endTime) || openViaSidebarById(sessionId) || openViaSidebarByTitle(title)) {
+							uiSay('正在跳转到该对话… 🐳', 1500, sessionId);
+							return;
+						}
+						uiSay('跳转失败：右键菜单 🔄 刷新页面后重试（浏览器可按 Ctrl+F5）🥲', 3000, sessionId);
+					};
+				})(rec.sessionId, rec.endTime || rec.at, rec.title));
+				list.appendChild(row);
+			}
+			if (historyCountEl) {
+				historyCountEl.textContent = historySearch ? ('找到 ' + shown + ' 条记录') : '';
+			}
+			if (shown === 0) {
+				var noMatch = document.createElement('div');
+				noMatch.className = 'dsh-whale-history-empty';
+				noMatch.textContent = '没有匹配的记录 🔍';
+				list.appendChild(noMatch);
+			}
+		}
+		/** History search text (drawer-local, not persisted). */
+		var historySearch = '';
+
+		/** ⏰ 提醒: presets in the right-click menu; persisted in
+		 * localStorage so they survive reloads; a 20s interval fires due
+		 * ones as bubble + attention chime + unread badge. */
+		function loadReminders() {
+			try { return JSON.parse(localStorage.getItem('dsh-whale:reminders') || '[]'); } catch (e) { return []; }
+		}
+		function saveReminders(list) {
+			try { localStorage.setItem('dsh-whale:reminders', JSON.stringify(list)); } catch (e) {}
+		}
+		function openReminders() {
+			closeCtxHistory(); /* drawers and floating panels never stack */
+			var panel = ctxPanel || document.createElement('div');
+			panel.className = 'dsh-whale-settings';
+			panel.textContent = '';
+			var title = document.createElement('div');
+			title.className = 'dsh-whale-wardrobe-title';
+			title.textContent = '⏰ 提醒我';
+			panel.appendChild(title);
+			var PRESETS = [5, 10, 25, 60];
+			var rmId = function () { return 'rm-' + Date.now() + '-' + Math.floor(Math.random() * 1e6); };
+			PRESETS.forEach(function (min) {
+				var row = document.createElement('div');
+				row.className = 'dsh-whale-settings-row';
+				setIconLabel(row, '➕ ' + min + ' 分钟后提醒');
+				row.addEventListener('click', function (event) {
+					event.stopPropagation();
+					var list = loadReminders();
+					list.push({ id: rmId(), at: Date.now() + min * 60000, text: min + ' 分钟时间到了' });
+					saveReminders(list);
+					uiSay('好，' + min + ' 分钟后提醒你 ⏰', 2000);
+					openReminders();
+				});
+				panel.appendChild(row);
+			});
+			/* 指定时间提醒（用户需求）：时/分/秒三个紧凑步进器一行排开，
+			 * −/+ 点按加减、也可直接键入数字，越界环绕/夹紧；已过今天的
+			 * 时刻自动顺延到明天。存绝对时间戳，触发器零改动。 */
+			var absSec = document.createElement('div');
+			absSec.className = 'dsh-whale-settings-section';
+			absSec.textContent = '指定时间（时 / 分 / 秒）';
+			panel.appendChild(absSec);
+			var absRow = document.createElement('div');
+			absRow.className = 'dsh-whale-settings-row dsh-whale-remind-row';
+			/* 时/分/秒三个步进器（用户反馈：原生 select 展开一大列太占页面；
+			 * −/+ 点按加减、也可直接键入数字，越界环绕/夹紧） */
+			var mkStep = function (max, def, step) {
+				var wrap = document.createElement('span');
+				wrap.className = 'dsh-whale-step';
+				var inp = document.createElement('input');
+				inp.className = 'dsh-whale-step-val';
+				var pad = function (v) { return v < 10 ? '0' + v : '' + v; };
+				inp.value = pad(def);
+				var mkBtn = function (txt, delta) {
+					var b = document.createElement('span');
+					b.className = 'dsh-whale-step-btn';
+					b.textContent = txt;
+					b.addEventListener('click', function (event) {
+						event.stopPropagation();
+						var v = (parseInt(inp.value, 10) || 0) + delta;
+						if (v < 0) v = max; /* wrap around */
+						if (v > max) v = 0;
+						inp.value = pad(v);
+					});
+					return b;
+				};
+				wrap.appendChild(mkBtn('−', -step));
+				wrap.appendChild(inp);
+				wrap.appendChild(mkBtn('+', step));
+				inp.addEventListener('click', function (event) { event.stopPropagation(); });
+				inp.addEventListener('change', function () {
+					/* typed input: clamp into range, garbage falls back to 0 */
+					var v = parseInt(inp.value, 10);
+					if (isNaN(v) || v < 0) v = 0;
+					if (v > max) v = max;
+					inp.value = pad(v);
+				});
+				wrap._val = function () {
+					return Math.min(max, Math.max(0, parseInt(inp.value, 10) || 0));
+				};
+				return wrap;
+			};
+			/* sensible default: one hour from now, on the hour */
+			var stH = mkStep(23, (new Date(Date.now() + 3600000)).getHours(), 1);
+			var stM = mkStep(59, 0, 5);
+			var stS = mkStep(59, 0, 5);
+			absRow.appendChild(stH);
+			absRow.appendChild(stM);
+			absRow.appendChild(stS);
+			panel.appendChild(absRow);
+			/* 文字添加行（用户反馈：一个孤零零的 ➕ 图标没人看得懂） */
+			var addRow = document.createElement('div');
+			addRow.className = 'dsh-whale-settings-row dsh-whale-remind-addrow';
+			setIconLabel(addRow, '➕ 添加提醒');
+			addRow.addEventListener('click', function (event) {
+				event.stopPropagation();
+				addAbsoluteReminder();
+			});
+			panel.appendChild(addRow);
+			var addAbsoluteReminder = function () {
+				var h = stH._val(), mi = stM._val(), s = stS._val();
+				var target = new Date();
+				target.setHours(h, mi, s, 0);
+				if (target.getTime() <= Date.now()) target.setDate(target.getDate() + 1); /* 已过 → 明天 */
+				var pad = function (v) { return v < 10 ? '0' + v : '' + v; };
+				var label = pad(h) + ':' + pad(mi) + ':' + pad(s);
+				var list = loadReminders();
+				list.push({ id: rmId(), at: target.getTime(), text: '定时提醒 ' + label });
+				saveReminders(list);
+				uiSay('好，' + (target.getDate() === new Date().getDate() ? '今天' : '明天') + ' ' + label + ' 提醒你 ⏰', 2600);
+				openReminders();
+			};
+			var list = loadReminders();
+			list.sort(function (a, b) { return a.at - b.at; });
+			/* hydrate ids onto legacy (pre-id) entries so cancel-by-id below
+			 * never has to fall back to a positional index */
+			var rmDirty = false;
+			for (var hi = 0; hi < list.length; hi++) {
+				if (!list[hi].id) { list[hi].id = 'rm-' + list[hi].at + '-' + hi + '-' + Math.floor(Math.random() * 1e6); rmDirty = true; }
+			}
+			if (rmDirty) saveReminders(list);
+			list.forEach(function (r, idx) {
+				var left = Math.max(0, Math.round((r.at - Date.now()) / 60000));
+				var d = new Date(r.at);
+				var pad2 = function (v) { return v < 10 ? '0' + v : '' + v; };
+				var row = document.createElement('div');
+				row.className = 'dsh-whale-settings-row';
+				setIconLabel(row, '⏳ ' + (d.getMonth() + 1) + '月' + d.getDate() + '日 ' +
+					pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds()) +
+					'（还剩约 ' + left + ' 分钟，点按取消）');
+				row.addEventListener('click', function (event) {
+					event.stopPropagation();
+					var rest = loadReminders();
+					/* cancel by id, never by the render-time index: the 20s
+					 * trigger interval rewrites the list while the drawer is
+					 * open (due reminders drop out) and another window can
+					 * shrink it too — a stale index deletes the WRONG row */
+					var killAt = -1;
+					for (var ki = 0; ki < rest.length; ki++) {
+						if (rest[ki].id === r.id) { killAt = ki; break; }
+					}
+					if (killAt >= 0) rest.splice(killAt, 1);
+					saveReminders(rest);
+					openReminders();
+				});
+				panel.appendChild(row);
+			});
+			/* 提醒我 is entered from the RIGHT-CLICK MENU (no settings row):
+			 * back goes to the menu, not settings (user request) */
+			mkPanelFoot(panel, null, true);
+			if (!ctxPanel) document.body.appendChild(panel);
+			ctxPanel = panel;
+			showFloatingPanel(panel, 230, 200);
+		}
+		setInterval(function () {
+			var list = loadReminders();
+			var nowT = Date.now();
+			var due = [];
+			var keep = [];
+			for (var ri = 0; ri < list.length; ri++) {
+				if (list[ri].at <= nowT) due.push(list[ri]);
+				else keep.push(list[ri]);
+			}
+			if (due.length === 0) return;
+			saveReminders(keep);
+			for (var di = 0; di < due.length; di++) {
+				var msg = '⏰ ' + due[di].text;
+				say(msg, 6000);
+				/* snapshot=false: a reminder is NOT a task outcome — reading it
+				 * later must never resurrect a "此次任务消耗 X tokens" panel
+				 * from whatever turn happened to be last (user-reported bug) */
+				pushReport(msg, 6000, undefined, false);
+				playDing('remind'); /* 音色面板可选（soundRemind，默认铃铛） */
+			}
+		}, 20000);
+
+		/** 📊 任务周报: last-7-day buckets from the history records, drawn in
+		 * the same drawer style as the history list (fixed height, list
+		 * scrolls). Lives in the side-drawer slot: opening it CLOSES the
+		 * settings panel — both float next to the whale, and stacked they
+		 * hide each other (the drawer rendered "empty" for its whole life
+		 * because its list div was never appended to the panel — only the
+		 * title + close ever made it into the DOM). */
+		function openReport() {
+			closeCtxPanel();
+			pullCloudHistory(); /* warm: merge records saved by other windows */
+			var panel = ctxHistory || document.createElement('div');
+			panel.className = 'dsh-whale-history';
+			panel.textContent = '';
+			var title = document.createElement('div');
+			title.className = 'dsh-whale-wardrobe-title';
+			title.textContent = '📊 任务周报（近 7 天）';
+			panel.appendChild(title);
+			var list = document.createElement('div');
+			list.className = 'dsh-whale-history-list';
+			var days = {};
+			var order = [];
+			var weekAgo = Date.now() - 7 * 864e5;
+			for (var i = 0; i < history.length; i++) {
+				var rec = history[i];
+				var at = rec.at || 0;
+				if (at < weekAgo) continue;
+				var d = new Date(at);
+				var key = (d.getMonth() + 1) + '月' + d.getDate() + '日';
+				if (!days[key]) { days[key] = { done: 0, fail: 0, killed: 0, ask: 0, tokens: 0, titles: [] }; order.push({ key: key, at: at }); }
+				var b = days[key];
+				if (rec.kind === 'done') b.done++;
+				else if (rec.kind === 'fail') b.fail++;
+				else if (rec.kind === 'killed') b.killed++;
+				else if (rec.kind === 'question' || rec.kind === 'approval') b.ask++;
+				if (rec.turnTokens) b.tokens += rec.turnTokens;
+				if (rec.title && rec.title !== '未命名任务' && b.titles.indexOf(rec.title) < 0) b.titles.push(rec.title);
+			}
+			order.sort(function (a, b2) { return b2.at - a.at; });
+			var totals = { done: 0, fail: 0, killed: 0, ask: 0, tokens: 0 };
+			order.forEach(function (o) {
+				var b = days[o.key];
+				totals.done += b.done; totals.fail += b.fail; totals.killed += b.killed; totals.ask += b.ask; totals.tokens += b.tokens;
+			});
+			var fmtK = function (n) { return n >= 10000 ? (n / 1000).toFixed(1) + 'K' : n >= 1000 ? Math.round(n / 1000) + 'K' : n; };
+			var sumRow = document.createElement('div');
+			sumRow.className = 'dsh-whale-report-summary';
+			sumRow.textContent = '本周：✅' + totals.done + ' 失败' + totals.fail + ' ⏹' + totals.killed + ' ❓' + totals.ask + ' · ' + fmtK(totals.tokens) + ' tok';
+			list.appendChild(sumRow);
+			if (order.length === 0) {
+				var empty = document.createElement('div');
+				empty.className = 'dsh-whale-history-empty';
+				empty.textContent = '这 7 天还没有任务记录 🐳';
+				list.appendChild(empty);
+			}
+			order.forEach(function (o) {
+				var b = days[o.key];
+				var row = document.createElement('div');
+				row.className = 'dsh-whale-history-row';
+				row.title = b.titles.join('\n');
+				var text = document.createElement('span');
+				text.className = 'dsh-whale-history-text';
+				text.textContent = o.key;
+				var time = document.createElement('span');
+				time.className = 'dsh-whale-history-time';
+				var parts = [];
+				if (b.done) parts.push('✅' + b.done);
+				if (b.fail) parts.push('❌' + b.fail);
+				if (b.killed) parts.push('⏹' + b.killed);
+				if (b.ask) parts.push('❓' + b.ask);
+				time.textContent = parts.join(' ') + (b.tokens ? ' · ' + fmtK(b.tokens) : '');
+				row.appendChild(text);
+				row.appendChild(time);
+				list.appendChild(row);
+			});
+			panel.appendChild(list);
+			/* entered from settings too (任务周报 row): back/close footer */
+			mkPanelFoot(panel, closeCtxHistory);
+			if (!ctxHistory) document.body.appendChild(panel);
+			ctxHistory = panel;
+			showSidePanel(panel, 300);
+		}
+
+		/** 📤 导出历史: Markdown → clipboard; CSV → file download. */
+		function exportHistory(fmt) {
+			if (!history.length) { uiSay('还没有历史可导出哦 🐳', 2000); return; }
+			if (fmt === 'csv') {
+				var rows = ['time,kind,title,session,tokens'];
+				for (var i = history.length - 1; i >= 0; i--) {
+					var r = history[i];
+					var d = new Date(r.at || 0);
+					var ts = d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate() + ' ' + d.toTimeString().slice(0, 8);
+					rows.push([ts, r.kind || '', '"' + String(r.title || '').replace(/"/g, '""') + '"', r.sessionId || '', r.turnTokens == null ? '' : r.turnTokens].join(','));
+				}
+				var blob = new Blob(['\ufeff' + rows.join('\n')], { type: 'text/csv;charset=utf-8' });
+				var a = document.createElement('a');
+				a.href = URL.createObjectURL(blob);
+				a.download = 'whale-history.csv';
+				a.click();
+				uiSay('CSV 已下载 📤', 2000);
+				return;
+			}
+			var lines = ['# 小鲸鱼任务历史', ''];
+			for (var j = 0; j < history.length; j++) {
+				var rr = history[j];
+				var dd = new Date(rr.at || 0);
+				var icon = rr.kind === 'done' ? '✅' : rr.kind === 'fail' ? '❌' : rr.kind === 'killed' ? '⏹' : '❓';
+				lines.push('- ' + icon + ' ' + (rr.title || '（未命名）') + ' — ' + (dd.getMonth() + 1) + '月' + dd.getDate() + '日 ' + dd.toTimeString().slice(0, 5) + (rr.turnTokens ? ' · ' + rr.turnTokens + ' tok' : ''));
+			}
+			var md = lines.join('\n');
+			if (navigator.clipboard && navigator.clipboard.writeText) {
+				navigator.clipboard.writeText(md).then(function () { uiSay('Markdown 已复制 📋', 2200); }, function () { uiSay('复制失败 🥲', 2000); });
+			} else {
+				uiSay('剪贴板不可用 🥲', 2000);
+			}
+		}
+
+		function openHistory() {
+			closeCtxPanel(); /* drawers and floating panels never stack */
+			pullCloudHistory(function () {
+				/* the server merge may have brought records from other windows:
+				 * re-fill the list body when the pull settles */
+				if (ctxHistory && ctxHistory.isConnected) {
+					var liveList = ctxHistory.querySelector('.dsh-whale-history-list');
+					if (liveList) fillHistoryList(liveList);
+				}
+			});
+			var panel = ctxHistory || document.createElement('div');
+			panel.className = 'dsh-whale-history';
+			panel.textContent = '';
+			var title = document.createElement('div');
+			title.className = 'dsh-whale-wardrobe-title';
+			title.textContent = '📜 历史任务';
+			panel.appendChild(title);
+			var search = document.createElement('input');
+			search.className = 'dsh-whale-history-search';
+			search.placeholder = '🔍 搜标题 / 会话…';
+			search.value = historySearch;
+			search.addEventListener('input', function () {
+				historySearch = search.value;
+				fillHistoryList(list);
+			});
+			search.addEventListener('click', function (event) { event.stopPropagation(); });
+			panel.appendChild(search);
+			/* #7: "找到 N 条记录" line under the search box */
+			historyCountEl = document.createElement('div');
+			historyCountEl.className = 'dsh-whale-history-count';
+			panel.appendChild(historyCountEl);
+			var list = document.createElement('div');
+			list.className = 'dsh-whale-history-list';
+			fillHistoryList(list);
+			panel.appendChild(list);
+			var clearRow = document.createElement('div');
+			clearRow.className = 'dsh-whale-history-clear';
+			clearRow.textContent = '🗑 清空历史';
+			/* #8: ranged clear — clearAt compares `at < clearAt`, so a
+			 * back-dated generation marker drops only old records, both
+			 * locally and in the cloud merge (host needs no changes). */
+			var clearOpts = document.createElement('div');
+			clearOpts.className = 'dsh-whale-history-clear-opts';
+			var doClear = function (cutoff, label) {
+				var before = history.length;
+				if (cutoff === null) {
+					history.length = 0;
+				} else {
+					for (var i = history.length - 1; i >= 0; i--) {
+						if ((history[i].at || 0) < cutoff) history.splice(i, 1);
+					}
+				}
+				bumpClearAt(cutoff === null ? undefined : cutoff);
+				try { safeSet(HISTORY_KEY, history); } catch (e) {}
+				pushCloudHistory();
+				historySearch = '';
+				fillHistoryList(list);
+				clearRow.dataset.armed = '0';
+				clearOpts.classList.remove('show');
+				clearRow.textContent = '🗑 清空历史';
+				showSidePanel(panel, 280); /* drawer shrank: re-clamp */
+				uiSay(label + '，共 ' + (before - history.length) + ' 条 🧹', 2400);
+			};
+			var mkClearOpt = function (text, cutoff) {
+				var opt = document.createElement('div');
+				opt.className = 'dsh-whale-history-clear-opt';
+				opt.textContent = text;
+				opt.addEventListener('click', function (event) {
+					event.stopPropagation();
+					doClear(cutoff, text);
+				});
+				clearOpts.appendChild(opt);
+			};
+			mkClearOpt('清空全部', null);
+			mkClearOpt('仅清空 7 天前', Date.now() - 7 * 86400000);
+			mkClearOpt('仅清空 30 天前', Date.now() - 30 * 86400000);
+			clearRow.addEventListener('click', function (event) {
+				event.stopPropagation();
+				if (clearRow.dataset.armed !== '1') {
+					clearRow.dataset.armed = '1';
+					clearRow.textContent = '⚠️ 选择要清空的范围';
+					clearOpts.classList.add('show');
+					/* the drawer just grew: re-measure + re-clamp so the
+					 * options never run past the screen edge (same fix as
+					 * the settings (?) hints) */
+					showSidePanel(panel, 280);
+					return;
+				}
+				/* tapping the title row again = cancel */
+				clearRow.dataset.armed = '0';
+				clearOpts.classList.remove('show');
+				clearRow.textContent = '🗑 清空历史';
+				showSidePanel(panel, 280);
+			});
+			panel.appendChild(clearRow);
+			panel.appendChild(clearOpts);
+			/* 09-13 用户拍板: the missing "forget a conversation" entry.
+			 * Truly forgetting one conversation is TWO steps — 清历史 first
+			 * (drops the record snapshots), then this row (wipes the book +
+			 * the in-memory names); history snapshots re-seed names on the
+			 * next load otherwise. Semantics live in the manual row. */
+			var bookClearRow = document.createElement('div');
+			bookClearRow.className = 'dsh-whale-history-clear';
+			bookClearRow.textContent = '📇 清空通讯录';
+			bookClearRow.addEventListener('click', function (event) {
+				event.stopPropagation();
+				if (bookClearRow.dataset.armed !== '1') {
+					bookClearRow.dataset.armed = '1';
+					bookClearRow.textContent = '⚠️ 再点一次确认清空';
+					return;
+				}
+				bookClearRow.dataset.armed = '0';
+				bookClearRow.textContent = '📇 清空通讯录';
+				var wiped = clearTitleBook();
+				uiSay(wiped > 0 ? '通讯录已清空（' + wiped + ' 条），名字会重新学习 🧹' : '通讯录本来就是空的 🧹', 2400);
+			});
+			panel.appendChild(bookClearRow);
+			mkPanelFoot(panel, closeCtxHistory, true); /* ← 返回菜单 / ✕ 关闭 — 与其他子面板统一 */
+			if (!ctxHistory) document.body.appendChild(panel);
+			ctxHistory = panel;
+			/* fixed-height drawer with a scrollable list: long histories never
+			 * grow past the viewport — the LIST scrolls, not the drawer */
+			showSidePanel(panel, 280);
+		}
+		function closeCtxHistory() {
+			if (ctxHistory) ctxHistory.classList.remove('show');
+		}
 /* ---- module: src/input/swim.js ---- */
 		/* --- swim-back animation (directional, with ripple trail) --- */
 		var swim = null;
@@ -6513,6 +6744,9 @@ function openSessionAt(sessionId, atMs) {
 	} else {
 		return false; /* no bridge bound */
 	}
+	/* 每窗口归属（P1 2026-10-28）：本窗口主动打开的会话直接钉进本窗口 pin
+	 * （utils/session-key.js）——跳转是归属最确定的一手信号 */
+	pinWindowSession(sessionId);
 	if (!atMs) return true;
 	var run = (jumpRunSeq = jumpRunSeq + 1);
 	var pages = 0, paged = false, done = false, stampMode = "";

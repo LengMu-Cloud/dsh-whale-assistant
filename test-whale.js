@@ -92,6 +92,14 @@ function makeEnv(initStore) {
 			addEventListener(type, fn) {
 				(el._listeners[type] = el._listeners[type] || []).push(fn);
 			},
+			/* P1 2026-10-28: the inline SVG icon set builds real attribute
+			 * trees via createElementNS — the stub stores them for walks */
+			setAttribute(k, v) {
+				(el._attrs = el._attrs || {})[k] = String(v);
+			},
+			getAttribute(k) {
+				return (el._attrs && el._attrs[k] != null) ? el._attrs[k] : null;
+			},
 			_fire(type, event) {
 				(el._listeners[type] || []).forEach((fn) => fn(event));
 			},
@@ -162,9 +170,21 @@ function makeEnv(initStore) {
 	const store = new Map(initStore || []);
 	const localStorage = {
 		getItem: (k) => (store.has(k) ? store.get(k) : null),
-		setItem: (k, v) => store.set(k, String(v)),
-		removeItem: (k) => store.delete(k),
+		setItem: (k, v) => {
+			store.set(k, String(v));
+			/* faithful to the browser: Object.keys(localStorage) must see the
+			 * stored keys — utils/session-key.js scans them as the fallback
+			 * chain (P1 2026-10-28 made that path testable) */
+			try {
+				Object.defineProperty(localStorage, k, { value: String(v), enumerable: true, configurable: true, writable: true });
+			} catch (e) {}
+		},
+		removeItem: (k) => {
+			store.delete(k);
+			try { delete localStorage[k]; } catch (e) {}
+		},
 	};
+	for (const [k, v] of store) localStorage.setItem(k, v);
 
 	let readyCb = null;
 	const docListeners = {};
@@ -193,6 +213,11 @@ function makeEnv(initStore) {
 			return null;
 		},
 		createElement(tag) {
+			return makeEl(tag);
+		},
+		/* P1 2026-10-28: SVG namespace builder for the inline icon set —
+		 * the stub treats NS tags like plain elements (attrs via setAttribute) */
+		createElementNS(ns, tag) {
 			return makeEl(tag);
 		},
 		createTextNode(text) {
@@ -253,6 +278,14 @@ function makeEnv(initStore) {
 		window: null,
 		document,
 		localStorage,
+		/* P1 2026-10-28: per-window session pin lives in sessionStorage
+		 * (per-BrowserWindow in the real page); Map-backed stub same shape */
+		sessionStorage: {
+			_store: new Map(),
+			getItem(k) { return this._store.has(k) ? this._store.get(k) : null; },
+			setItem(k, v) { this._store.set(k, String(v)); },
+			removeItem(k) { this._store.delete(k); },
+		},
 		WebSocket: FakeWebSocket,
 		AudioContext: EnvAudioContext,
 		location: { protocol: 'http:', host: '127.0.0.1:3080' },
@@ -1355,9 +1388,11 @@ async function main() {
 	assert.ok(statusTok() && statusTok().textContent.includes('此次任务消耗 3.5M tokens'), `task line: ${statusTok() && statusTok().textContent}`);
 	assert.ok(statusTok().textContent.includes('全对话累计消耗 38.2M tokens'), `session line: ${statusTok().textContent}`);
 	assert.ok(statusTok().textContent.includes('上下文已用 80%'), `pressure line: ${statusTok().textContent}`);
-	/* with room to spare the report is ONE line per item (3 lines) */
-	const tokLines = statusTok().textContent.split('\n');
-	assert.strictEqual(tokLines.length, 3, 'three lines (one per item) when space allows');
+	/* P1 2026-10-27 (K3): the report is a label/value GRID — three kv rows,
+	 * one per item (textContent keeps "label value" pairs for the includes
+	 * assertions above) */
+	const tokRows = statusTok().children.filter((c) => String(c.className).indexOf('dsh-whale-status-kv') >= 0);
+	assert.strictEqual(tokRows.length, 3, 'three kv rows (one per item) when space allows');
 	assert.ok(envTok.bubble().textContent.includes('完成了'), 'notification bubble still shows the completion');
 	/* click 1 reads the END report: panel shows its snapshot */
 	envTok.whale._fire('pointerdown', { pointerId: 1, pointerType: 'mouse', button: 0, clientX: 100, clientY: 100 });
@@ -1837,7 +1872,7 @@ async function main() {
 	muxpFl({ type: 'session/event', sessionId: 'session-fl1', event: { type: 'turn/start', seq: 1, time: 0, data: {} } });
 	muxpFl({ type: 'session/event', sessionId: 'session-fl1', event: { type: 'assistant/message', seq: 2, time: 1, data: { turn: 1, step: 1, message: { role: 'assistant', content: [], id: 'm1' }, usage: { inputTokens: 1000000, outputTokens: 500000, cacheReadTokens: 2000000, reasoningTokens: 0 } } } });
 	muxpFl({ type: 'session/event', sessionId: 'session-fl1', event: { type: 'turn/end', seq: 5, time: 5, data: {} } });
-	assert.strictEqual(statusFl().textContent.split('\n').length, 3, 'one line per item mid-screen');
+	assert.strictEqual(statusFl().children.filter((c) => String(c.className).indexOf('dsh-whale-status-kv') >= 0).length, 3, 'three kv rows mid-screen (P1 grid)');
 	/* drag to the right edge: the open report's panel shrinks live (60px
 	 * min, 16px margin from the edge) */
 	envFlow.whale._fire('pointerdown', { pointerId: 9, pointerType: 'mouse', button: 0, clientX: 100, clientY: 100 });
@@ -2504,6 +2539,35 @@ async function main() {
 		"late say's paired hide must NOT blink the hint off the main box");
 	SK2.toolSlot.delete("zz-pair");
 	SK2.scanStuckTools();
+
+	/* 40d. P1 2026-10-27 (K3): MORE than 3 stuck sessions fold into one
+	 * summary line + the worst offender — a wall of near-identical alarm
+	 * rows is fatigue, not information. ≤3 keep per-session rows (09-12
+	 * 拍板 untouched: the 40b two-session assertions above still hold). */
+	SK2.handleMuxPayload({ type: "session/projection", sessionId: "session-fA", key: "title", value: "折叠甲", seq: 20 });
+	SK2.handleMuxPayload({ type: "session/projection", sessionId: "session-fB", key: "title", value: "折叠乙", seq: 21 });
+	SK2.handleMuxPayload({ type: "session/projection", sessionId: "session-fC", key: "title", value: "折叠丙", seq: 22 });
+	SK2.handleMuxPayload({ type: "session/projection", sessionId: "session-fD", key: "title", value: "折叠丁", seq: 23 });
+	SK2._trackTool("fd-a", "session-fA"); SK2.toolSlot.get("fd-a").at = Date.now() - 30000;
+	SK2._trackTool("fd-b", "session-fB"); SK2.toolSlot.get("fd-b").at = Date.now() - 40000;
+	SK2._trackTool("fd-c", "session-fC"); SK2.toolSlot.get("fd-c").at = Date.now() - 50000;
+	SK2._trackTool("fd-d", "session-fD"); SK2.toolSlot.get("fd-d").at = Date.now() - 60000;
+	SK2.scanStuckTools();
+	const foldText = st2el().textContent;
+	assert.ok(foldText.includes("4 个会话的工具卡住"), "folded summary line carries the count: " + foldText);
+	assert.ok(foldText.includes("最长 60s"), "summary carries the worst elapsed: " + foldText);
+	assert.ok(foldText.includes("最严重：[折叠丁]"), "worst session stays named: " + foldText);
+	assert.ok(!foldText.includes("折叠甲"), "the other three sessions fold away: " + foldText);
+	/* exactly 3 sessions do NOT fold */
+	SK2.toolSlot.delete("fd-a");
+	SK2.scanStuckTools();
+	const threeText = st2el().textContent;
+	assert.ok(threeText.includes("[折叠丁]") && threeText.includes("[折叠丙]") && threeText.includes("[折叠乙]"),
+		"3 sessions keep per-session rows: " + threeText);
+	assert.ok(!threeText.includes("个会话的工具卡住"), "no summary line at 3 sessions: " + threeText);
+	SK2.toolSlot.delete("fd-b"); SK2.toolSlot.delete("fd-c"); SK2.toolSlot.delete("fd-d");
+	SK2.scanStuckTools();
+	assert.ok(!st2el().classList.contains("dsh-whale-status-stuck"), "fold test slots cleared");
 
 	/* 41. settings: default values locked; toggling notify-on-start silences
 	 * only the start report (end still reports); threshold/volume cycles
@@ -3324,6 +3388,58 @@ async function main() {
 		U._feedSessionUsage('session-u3');
 		await dance('session-u3', '会话U3');
 		assert.strictEqual(lastReport().sessionTokens || 0, 0, 'per-turn chip never feeds the cumulative');
+	}
+
+	/* ============ 54 · P1 2026-10-28：内联 SVG 图标 + 每窗口会话归属 pin ============ */
+	{
+		/* --- 54a. setIconLabel：字形换内联 SVG，textContent 逐字节不变 --- */
+		const envI = makeEnv();
+		envI.ready();
+		await sleep(450);
+		envI.whale._fire('contextmenu', { clientX: 40, clientY: 40, preventDefault() {}, stopPropagation() {} });
+		const menuElI = envI.sandbox.document.body.children.find((c) => c.className === 'dsh-whale-menu');
+		assert.ok(menuElI, 'menu opened for the icon pass');
+		const itemsI = menuElI.children.filter((c) => c.className === 'dsh-whale-menu-item');
+		const svgCount = itemsI.filter((it) => {
+			const slot = it.children.find((k) => k.className === 'dsh-whale-ico');
+			return !!(slot && slot.children.some((k) => k.tag === 'svg' && k._attrs && k._attrs.class === 'dsh-whale-ico-svg'));
+		}).length;
+		assert.ok(svgCount >= 5, `menu leading icons render as inline SVG (${svgCount} items)`);
+		const remindI = itemsI.find((it) => it.textContent.indexOf('提醒我') >= 0);
+		assert.ok(remindI, '提醒 item present');
+		assert.ok(remindI.textContent.startsWith('⏰ 提醒我'), `glyph kept in text: ${remindI.textContent}`);
+		const icoI = remindI.children.find((k) => k.className === 'dsh-whale-ico');
+		assert.ok(icoI && icoI.children.some((k) => k.tag === 'svg'), 'icon slot carries the svg');
+		const svgI = icoI.children.find((k) => k.tag === 'svg');
+		assert.strictEqual(svgI._attrs.viewBox, '0 0 16 16', 'svg viewBox set');
+		assert.ok(svgI.children.length >= 2 && svgI.children.every((p) => p._attrs && p._attrs['stroke-width'] === '1.6'), 'svg paths carry the stroke defaults');
+		const ghostI = icoI.children.find((k) => k.className === 'dsh-whale-ico-ghost');
+		assert.ok(ghostI && ghostI.textContent === '⏰', 'emoji ghost keeps the glyph in the DOM text');
+		const setI = itemsI.find((it) => it.textContent.indexOf('设置') >= 0);
+		assert.ok(setI && setI.textContent.includes('⚙️ 设置'), 'settings text byte-identical (includes passes as before)');
+
+		/* --- 54b. 每窗口归属 pin：pin 优先 / 全局改写不串户 / 活动快照自愈 --- */
+		const envP = makeEnv(new Map([['dsh.sessions.current', JSON.stringify({ sessionId: 'session-globalA' })]]));
+		envP.ready();
+		const PP = envP.sandbox.__dshWhale;
+		assert.strictEqual(PP._resolveSessionId(), 'session-globalA', 'no pin: global chain as before (single-window unchanged)');
+		PP._pinSession('session-pinB');
+		assert.strictEqual(PP._resolveSessionId(), 'session-pinB', 'pin wins over the shared global key');
+		envP.sandbox.localStorage.setItem('dsh.sessions.current', JSON.stringify({ sessionId: 'session-otherC' }));
+		assert.strictEqual(PP._resolveSessionId(), 'session-pinB', 'another window rewriting the global key no longer re-attributes this window');
+		PP._adoptSessionPin();
+		assert.strictEqual(PP._resolveSessionId(), 'session-otherC', 'local activity re-adopts the global chain (self-heal on real switches)');
+		PP._pinSession('session-alpha-active');
+		PP._pinSession('garbage');
+		assert.strictEqual(PP._resolveSessionId(), 'session-otherC', 'placeholder/garbage ids never pinned');
+
+		/* --- 54c. 无 pin 新窗口走原链路：缓存扫描与回退 id 不变 --- */
+		const envP2 = makeEnv(new Map([['dsh.conversation.chat.session-abc123def4', '{}']]));
+		envP2.ready();
+		assert.strictEqual(envP2.sandbox.__dshWhale._resolveSessionId(), 'session-abc123def4', 'conversation-cache scan fallback unchanged');
+		const envP3 = makeEnv();
+		envP3.ready();
+		assert.strictEqual(envP3.sandbox.__dshWhale._resolveSessionId(), 'session-alpha-active', 'fallback id unchanged on a bare window');
 	}
 
 	console.log(`ALL TESTS PASSED (${Math.round(performance.now() - t)}ms)`);

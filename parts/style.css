@@ -1,3 +1,28 @@
+/* ——— 设计变量（P0 · 2026-10-27）：面板体系的唯一事实来源。
+ * 面板在任何主题下都是深夜蓝（用户决策 2026-09），故这组 token 不随
+ * prefers-color-scheme 翻转；浅色模式只换气泡的既有 --dsh-whale-bubble-* 变量。
+ * 未来 P2 浅色面板变体只需再写一套 token 值，不用再找散落的字面量。 ——— */
+:root {
+	--dsw-panel-bg: rgba(15, 23, 42, 0.82);
+	--dsw-panel-border: rgba(99, 150, 255, 0.45);
+	--dsw-panel-text: #cfe0ff;
+	--dsw-panel-muted: #8fa3c8;
+	--dsw-panel-head: #9db8f0;
+	--dsw-panel-hover: rgba(99, 150, 255, 0.22);
+	--dsw-panel-active: rgba(99, 150, 255, 0.32);
+	--dsw-panel-divider: rgba(99, 150, 255, 0.25);
+	--dsw-accent: #4c8dff;
+	--dsw-warn: #f0b429;
+	--dsw-danger: #ef4444;
+	--dsw-radius-s: 8px;
+	--dsw-radius-m: 12px;
+	--dsw-radius-full: 999px;
+	/* 毛玻璃 + 双层阴影 + 顶部内高光：半透明面板的质感三件套。
+	 * 有了 blur，底色不透明度才敢从 0.92 降到 0.82（底层文字不再透上来） */
+	--dsw-glass: blur(14px) saturate(1.5);
+	--dsw-shadow-panel: 0 1px 2px rgba(5, 10, 25, 0.3), 0 8px 24px rgba(10, 20, 50, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
 #dsh-whale {
 	position: fixed;
 	right: 18px;
@@ -115,16 +140,20 @@
 	max-width: min(340px, 72vw);
 	box-sizing: border-box;
 	padding: 8px 12px;
-	border-radius: 10px;
+	border-radius: var(--dsw-radius-m);
 	background: var(--dsh-whale-bubble-bg, #ffffff);
 	color: var(--dsh-whale-bubble-fg, #1f2a44);
-	box-shadow: 0 4px 16px rgba(20, 40, 90, 0.18);
+	box-shadow: 0 1px 2px rgba(20, 40, 90, 0.1), 0 6px 20px rgba(20, 40, 90, 0.16);
+	-webkit-backdrop-filter: blur(10px);
+	backdrop-filter: blur(10px);
 	font-size: 12px;
 	line-height: 18px;
 	font-family: var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
 	white-space: pre-wrap;
-	overflow-wrap: anywhere;
-	word-break: break-word;
+	/* CJK 断词（P0）：keep-all 只在空格/标点处断行，"工具"这类词不再被劈开；
+	 * break-word 兜底超长英文串/URL（原 anywhere+break-word 组合会任意劈字） */
+	overflow-wrap: break-word;
+	word-break: keep-all;
 	pointer-events: none;
 	opacity: 0;
 	transform: translateY(6px) scale(0.96);
@@ -160,7 +189,7 @@
 	height: 18px;
 	padding: 0 5px;
 	box-sizing: border-box;
-	border-radius: 9px;
+	border-radius: var(--dsw-radius-full, 999px);
 	background: #f43f5e;
 	color: #ffffff;
 	font-size: 11px;
@@ -207,17 +236,20 @@
 	max-width: min(280px, 60vw); /* JS narrows this further near viewport edges */
 	box-sizing: border-box;
 	padding: 6px 10px;
-	border-radius: 8px;
-	background: rgba(15, 23, 42, 0.85);
-	color: #cfe0ff;
-	border: 1px solid rgba(99, 150, 255, 0.45);
-	box-shadow: 0 3px 10px rgba(10, 20, 50, 0.35);
-	font-size: 11px;
-	line-height: 16px;
+	border-radius: var(--dsw-radius-s);
+	background: var(--dsw-panel-bg);
+	color: var(--dsw-panel-text);
+	border: 1px solid var(--dsw-panel-border);
+	box-shadow: var(--dsw-shadow-panel);
+	-webkit-backdrop-filter: var(--dsw-glass);
+	backdrop-filter: var(--dsw-glass);
+	font-size: 12px;
+	line-height: 17px;
 	font-family: var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
 	white-space: pre-wrap;
-	overflow-wrap: anywhere;
-	word-break: break-word;
+	/* CJK 断词（P0）：同气泡——按空格/标点断行，不劈词 */
+	overflow-wrap: break-word;
+	word-break: keep-all;
 	pointer-events: none;
 	opacity: 0;
 	transform: translateX(-6px);
@@ -256,11 +288,21 @@
 	left: calc(100% + 12px);
 	right: auto;
 }
-@media (prefers-color-scheme: dark) {
-	.dsh-whale-status {
-		background: rgba(10, 16, 32, 0.9);
-		border-color: rgba(110, 160, 255, 0.4);
-	}
+/* （P0）深色媒体查询里的 status 覆写已删：面板统一走 :root token，
+ * 深夜色板即默认色板，不再两套相近但不相同的深夜蓝 */
+/* 完成报告两列栅格（P1 2026-10-27）：标签左 / 数值右、单行 nowrap——
+ * 数值不再从中间折行（"22.9K / tokens" 事故），列对齐也比纯文本堆叠易扫读 */
+.dsh-whale-status-kv {
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+	white-space: nowrap;
+}
+.dsh-whale-status-kv .k {
+	color: var(--dsw-panel-muted);
+}
+.dsh-whale-status-kv .v {
+	font-variant-numeric: tabular-nums;
 }
 /* little pop whenever the unread count changes */
 .dsh-whale-badge.pop {
@@ -314,11 +356,15 @@
 	overflow-y: auto;
 	overflow-x: hidden;
 	padding: 6px;
-	border-radius: 10px;
-	background: rgba(15, 23, 42, 0.92);
-	color: #cfe0ff;
-	border: 1px solid rgba(99, 150, 255, 0.45);
-	box-shadow: 0 6px 20px rgba(10, 20, 50, 0.45);
+	border-radius: var(--dsw-radius-m);
+	background: var(--dsw-panel-bg);
+	color: var(--dsw-panel-text);
+	border: 1px solid var(--dsw-panel-border);
+	box-shadow: var(--dsw-shadow-panel);
+	/* 毛玻璃（P0）：半透明但不模糊时底层文字会透上来干扰阅读，
+	 * 这是 0.92 高不透明度的历史成因；blur 之后降到 0.82 仍清晰 */
+	-webkit-backdrop-filter: var(--dsw-glass);
+	backdrop-filter: var(--dsw-glass);
 	font-size: 12px;
 	line-height: 20px;
 	font-family: var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
@@ -341,27 +387,51 @@
 .dsh-whale-menu-head {
 	padding: 4px 10px 6px;
 	font-size: 11px;
-	color: #9db8f0;
-	border-bottom: 1px solid rgba(99, 150, 255, 0.25);
+	color: var(--dsw-panel-head);
+	border-bottom: 1px solid var(--dsw-panel-divider);
 	margin-bottom: 4px;
 	white-space: nowrap;
 }
 .dsh-whale-menu-item {
 	padding: 6px 10px;
-	border-radius: 6px;
+	border-radius: var(--dsw-radius-s);
 	cursor: pointer;
 	white-space: nowrap;
 }
+/* 行首图标定宽（P0）：各平台 emoji 字形宽度不一，纯文本拼排会让每行
+ * 文字左缘参差不齐；固定 20px 图标位后标签对齐成一条直线 */
+.dsh-whale-ico {
+	display: inline-block;
+	width: 20px;
+	text-align: center;
+	flex: none;
+}
+/* 行首图标 P1（2026-10-28）：字形本体换成内联 SVG——stroke 随
+ * currentColor 跟随面板文字色，跨平台字形/配色一致；emoji 原文留在
+ * 0 尺寸 ghost span 里，textContent 与读屏口径不变 */
+.dsh-whale-ico svg {
+	width: 14px;
+	height: 14px;
+	vertical-align: middle;
+}
+.dsh-whale-ico-ghost {
+	display: inline-block;
+	width: 0;
+	height: 0;
+	overflow: hidden;
+	font-size: 0;
+	opacity: 0;
+}
 .dsh-whale-menu-item:hover {
-	background: rgba(99, 150, 255, 0.22);
+	background: var(--dsw-panel-hover);
 }
 .dsh-whale-menu-item:active {
-	background: rgba(99, 150, 255, 0.32);
+	background: var(--dsw-panel-active);
 }
 .dsh-whale-wardrobe-title {
 	padding: 4px 10px 6px;
 	font-weight: 600;
-	border-bottom: 1px solid rgba(99, 150, 255, 0.25);
+	border-bottom: 1px solid var(--dsw-panel-divider);
 	margin-bottom: 4px;
 }
 .dsh-whale-wardrobe-row {
@@ -372,28 +442,29 @@
 	white-space: nowrap;
 }
 .dsh-whale-wardrobe-locked {
-	color: #8fa3c8;
+	color: var(--dsw-panel-muted);
 }
 .dsh-whale-wardrobe-aff {
-	border-top: 1px solid rgba(99, 150, 255, 0.22);
+	border-top: 1px solid var(--dsw-panel-divider);
 	margin-top: 4px;
 	padding-top: 7px;
 }
 .dsh-whale-wardrobe-close {
 	padding: 5px 10px 3px;
 	text-align: right;
-	color: #9db8f0;
+	color: var(--dsw-panel-head);
 	cursor: pointer;
 }
 .dsh-whale-wardrobe-close:hover {
-	color: #cfe0ff;
+	color: var(--dsw-panel-text);
 }
 /* health check ⚠️ chip: hidden while everything works; appears near the
-   whale when a dependency degrades (click = detail panel) */
+   whale when a dependency degrades (click = detail panel). P0: 移到左上——
+   右上角是未读红标的位置，99+ 变宽时两者会相碰 */
 .dsh-whale-health-chip {
 	position: absolute;
 	top: -12px;
-	right: -4px;
+	left: -4px;
 	font-size: 15px;
 	line-height: 1;
 	cursor: pointer;
@@ -421,7 +492,7 @@
 	flex: none;
 	width: 18px;
 	height: 18px;
-	border-radius: 5px;
+	border-radius: var(--dsw-radius-s);
 	background: #3b82f6;
 	color: #ffffff;
 	font-size: 11px;
@@ -446,12 +517,12 @@
 	align-items: center;
 	gap: 8px;
 	padding: 5px 10px;
-	border-radius: 6px;
+	border-radius: var(--dsw-radius-s);
 	cursor: pointer;
 	white-space: nowrap;
 }
 .dsh-whale-history-row:hover {
-	background: rgba(99, 150, 255, 0.22);
+	background: var(--dsw-panel-hover);
 }
 .dsh-whale-history-icon {
 	flex: none;
@@ -494,14 +565,14 @@
 }
 .dsh-whale-history-time {
 	flex: none;
-	font-size: 10px;
-	color: #8fa3c8;
+	font-size: 11px;
+	color: var(--dsw-panel-muted);
 	font-variant-numeric: tabular-nums;
 }
 .dsh-whale-history-empty {
 	padding: 14px 10px;
 	text-align: center;
-	color: #8fa3c8;
+	color: var(--dsw-panel-muted);
 	font-size: 12px;
 }
 /* settings panel rows */
@@ -511,26 +582,31 @@
 	justify-content: space-between;
 	gap: 12px;
 	padding: 6px 10px;
-	border-radius: 6px;
+	border-radius: var(--dsw-radius-s);
 	cursor: pointer;
 	white-space: nowrap;
 }
 .dsh-whale-settings-row:hover {
-	background: rgba(99, 150, 255, 0.22);
+	background: var(--dsw-panel-hover);
 }
 .dsh-whale-settings-label {
 	font-size: 12px;
 }
 .dsh-whale-settings-value {
 	font-size: 12px;
-	color: #9db8f0;
+	color: var(--dsw-panel-head);
 	font-variant-numeric: tabular-nums;
 }
-/* stuck-tool hint: red border on the status panel while a tool hangs.
+/* stuck-tool hint: AMBER left bar on the status panel while a tool hangs
+ * (P0 2026-10-27: was a full #ef4444 red frame — but a stuck tool is an
+ * ATTENTION-level event that usually recovers on its own; red is now
+ * reserved for real failures/destructive actions, killing the red flood
+ * when several sessions hang at once).
  * (No ::before ⚠️ decoration — the hint text already carries its own ⚠️;
  * the two used to stack into "⚠️⚠️" and nobody had ever seen it fire.) */
 .dsh-whale-status-stuck {
-	border-color: #ef4444 !important;
+	border-color: rgba(240, 180, 41, 0.4) !important;
+	border-left: 3px solid var(--dsw-warn) !important;
 }
 /* busy pulse while a turn is running — opacity is scoped to .show so the
  * bare busy flag can NEVER un-hide the panel (it must not surface stale
@@ -550,7 +626,7 @@
 .dsh-whale-status {
 	border-color: color-mix(in srgb,
 		#ef4444 calc(var(--dsh-whale-pressure, 0) * 1%),
-		rgba(99, 150, 255, 0.45));
+		var(--dsw-panel-border));
 	transition: border-color 0.3s ease;
 }
 /* happy bounce when petted (replaces the idle bob for a moment) */
@@ -577,10 +653,10 @@
 .dsh-whale-history-search {
 	margin: 6px 10px 4px;
 	padding: 5px 8px;
-	border: 1px solid rgba(99, 150, 255, 0.35);
-	border-radius: 6px;
+	border: 1px solid var(--dsw-panel-border);
+	border-radius: var(--dsw-radius-s);
 	background: rgba(10, 14, 24, 0.8);
-	color: #dbe6ff;
+	color: var(--dsw-panel-text);
 	font-size: 12px;
 	outline: none;
 	width: calc(100% - 20px);
@@ -592,7 +668,7 @@
 .dsh-whale-history-clear {
 	margin: 4px 10px 8px;
 	padding: 5px 8px;
-	border-radius: 6px;
+	border-radius: var(--dsw-radius-s);
 	text-align: center;
 	font-size: 11px;
 	color: #ff9d9d;
@@ -606,10 +682,10 @@
 .dsh-whale-report-summary {
 	margin: 2px 10px 6px;
 	padding: 6px 8px;
-	border-radius: 6px;
+	border-radius: var(--dsw-radius-s);
 	background: rgba(99, 150, 255, 0.14);
 	font-size: 12px;
-	color: #cfe0ff;
+	color: var(--dsw-panel-text);
 }
 
 /* settings section headers (通知/声音/监控/数据/诊断) */
@@ -618,9 +694,9 @@
 	 * 组与组、组与行一眼可分 */
 	margin: 9px 8px 3px;
 	padding: 3px 6px;
-	font-size: 10px;
+	font-size: 11px;
 	letter-spacing: 3px;
-	color: #8fa3c8;
+	color: var(--dsw-panel-muted);
 	border-top: 1px solid rgba(148, 163, 184, 0.18);
 }
 .dsh-whale-settings-section:first-of-type {
@@ -637,7 +713,7 @@
 	padding: 2px 4px;
 	font-size: 11px;
 	font-weight: 600;
-	color: #9db8f0;
+	color: var(--dsw-panel-head);
 	border-bottom: 1px solid rgba(99, 150, 255, 0.18);
 }
 .dsh-whale-manual-item {
@@ -645,16 +721,18 @@
 }
 .dsh-whale-manual-t {
 	font-size: 12px;
-	color: #cfe0ff;
+	color: var(--dsw-panel-text);
 	white-space: normal;
 	line-height: 17px;
+	word-break: keep-all;
 }
 .dsh-whale-manual-d {
 	font-size: 11px;
-	color: #8fa3c8;
+	color: var(--dsw-panel-muted);
 	white-space: normal;
 	line-height: 16px;
 	margin-top: 1px;
+	word-break: keep-all;
 }
 
 /* faint transient note above the whale (clear-all feedback #10) */
@@ -663,13 +741,15 @@
 	bottom: calc(100% + 58px);
 	right: 0;
 	padding: 3px 9px;
-	border-radius: 8px;
+	border-radius: var(--dsw-radius-s);
 	background: rgba(255, 255, 255, 0.88);
 	color: #7c869c;
 	font-size: 11px;
 	line-height: 1.4;
 	white-space: nowrap;
-	box-shadow: 0 2px 8px rgba(30, 41, 59, 0.10);
+	box-shadow: 0 1px 2px rgba(30, 41, 59, 0.08), 0 4px 12px rgba(30, 41, 59, 0.1);
+	-webkit-backdrop-filter: blur(8px);
+	backdrop-filter: blur(8px);
 	opacity: 0.85;
 	transition: opacity 0.4s ease;
 	pointer-events: none;
@@ -694,9 +774,9 @@
 	width: 14px;
 	height: 14px;
 	line-height: 14px;
-	border-radius: 50%;
-	background: rgba(100, 116, 139, 0.14);
-	color: #64748b;
+	border-radius: var(--dsw-radius-full);
+	background: rgba(148, 163, 184, 0.18);
+	color: var(--dsw-panel-muted);
 	font-size: 10px;
 	text-align: center;
 	cursor: pointer;
@@ -712,9 +792,10 @@
 	flex-basis: 100%;
 	margin-top: 2px;
 	padding: 4px 8px;
-	border-radius: 6px;
-	background: rgba(100, 116, 139, 0.08);
-	color: #6b7280;
+	border-radius: var(--dsw-radius-s);
+	background: rgba(148, 163, 184, 0.12);
+	/* P0: #6b7280 在深蓝海面板上对比度不足（~2.5:1），换 muted token */
+	color: var(--dsw-panel-muted);
 	font-size: 11px;
 	line-height: 1.5;
 	white-space: normal;
@@ -730,7 +811,7 @@
 }
 .dsh-whale-settings-hint-x {
 	flex: none;
-	color: #3b82f6;
+	color: var(--dsw-accent);
 	cursor: pointer;
 	font-size: 10px;
 	white-space: nowrap;
@@ -754,7 +835,7 @@
 .dsh-whale-manual-status {
 	flex: none;
 	padding: 2px 14px 4px;
-	color: #8fa3c8;
+	color: var(--dsw-panel-muted);
 	font-size: 11px;
 	min-height: 0;
 }
@@ -763,7 +844,7 @@
 }
 .dsh-whale-help-hit {
 	background: rgba(255, 199, 0, 0.12);
-	border-radius: 6px;
+	border-radius: var(--dsw-radius-s);
 }
 
 /* history search highlight (#7) */
@@ -777,7 +858,7 @@
 .dsh-whale-history-count {
 	flex: none;
 	padding: 0 14px 4px;
-	color: #8fa3c8;
+	color: var(--dsw-panel-muted);
 	font-size: 11px;
 }
 
@@ -791,12 +872,13 @@
 .dsh-whale-history-clear-opt {
 	padding: 6px 14px;
 	font-size: 11px;
-	color: #7c2d2d;
+	/* P0: 深红 #7c2d2d 在深夜蓝面板上几乎不可读，换浅红（同 clear 按钮族） */
+	color: #ff9d9d;
 	cursor: pointer;
 	white-space: nowrap;
 }
 .dsh-whale-history-clear-opt:hover {
-	background: rgba(124, 45, 45, 0.08);
+	background: rgba(239, 68, 68, 0.12);
 }
 
 /* absolute-time reminder: three COMPACT steppers in ONE row (时/分/秒) */
@@ -817,7 +899,7 @@
 	height: 20px;
 	line-height: 18px;
 	text-align: center;
-	border-radius: 4px;
+	border-radius: var(--dsw-radius-s);
 	background: rgba(148, 163, 184, 0.10);
 	color: #9fb3d1;
 	cursor: pointer;
@@ -839,7 +921,7 @@
 	background: rgba(148, 163, 184, 0.08);
 	color: inherit;
 	border: 1px solid rgba(148, 163, 184, 0.25);
-	border-radius: 5px;
+	border-radius: var(--dsw-radius-s);
 }
 .dsh-whale-remind-addrow {
 	justify-content: center;
@@ -862,7 +944,7 @@
 	background: rgba(148, 163, 184, 0.08);
 	color: inherit;
 	border: 1px solid rgba(148, 163, 184, 0.25);
-	border-radius: 6px;
+	border-radius: var(--dsw-radius-s);
 	cursor: pointer;
 	color-scheme: dark; /* native popup renders dark instead of blinding white */
 }
@@ -887,6 +969,6 @@
 }
 .dsh-whale-panel-back {
 	margin-top: 0;
-	color: #3b82f6;
+	color: var(--dsw-accent);
 }
 

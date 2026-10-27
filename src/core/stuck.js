@@ -13,6 +13,7 @@
 
 	var toolSlot = new Map(); /* callKey -> { at, sessionId } */
 	var STUCK_SCAN_MS = 2000;
+	var STUCK_FOLD_AT = 3; /* more than this many stuck sessions folds into a summary (P1 2026-10-27) */
 	var stuckActive = false; /* any stuck hint currently visible */
 
 	/** Garbage-independent lookup: is any known job for this session live? */
@@ -80,6 +81,17 @@
 			var name = sessionTitles.get(sid) || bookTitle(sid) || '未命名任务';
 			return '⚠️ [' + capNameWidth(name, 110) + '] 工具已运行 ' + worstBySession[sid].seconds + 's';
 		});
+		/* P1 2026-10-27 (K3): 超过 STUCK_FOLD_AT 个会话同时卡住时折叠为一行摘要 +
+		 * 最严重一行——五条近同构告警行是告警疲劳不是信息（10 月截图实证）。
+		 * ≤3 仍逐行并列，保留 09-12 拍板的可归属语义。 */
+		if (sids.length > STUCK_FOLD_AT) {
+			var worstSid = sids[0];
+			var worstName = sessionTitles.get(worstSid) || bookTitle(worstSid) || '未命名任务';
+			rows = [
+				'⚠️ ' + sids.length + ' 个会话的工具卡住 · 最长 ' + worstBySession[worstSid].seconds + 's',
+				'最严重：[' + capNameWidth(worstName, 110) + ']，其余 ' + (sids.length - 1) + ' 个会话同卡住'
+			];
+		}
 		showStuckHint(rows);
 	}
 

@@ -33,7 +33,7 @@
 		var maxW;
 		/* below needs (12px gap + content height) of real estate; a taller
 		 * panel than the viewport can take flips ABOVE the whale instead */
-		var estH = (statusCache ? statusCache.lines.length : 1) * 16 + 14;
+		var estH = (statusCache ? statusCache.lines.length : 1) * 17 + 14;
 		var above = below >= 80 && whale.offsetTop + whale.offsetHeight + 12 + estH > window.innerHeight;
 		el.classList.toggle('dsh-whale-status-above', above);
 		el.classList.toggle('dsh-whale-status-below', below >= 80 && !above);
@@ -53,26 +53,33 @@
 		}
 		el.style.maxWidth = maxW + 'px';
 		applyStatusText();
+		/* 主框每看重排（扫秒增长文本/鲸鱼移动翻面），旁路框同步重算位置——
+		 * 一次性的 inline 坐标会随主框漂移（P1 2026-10-28 左缘对齐） */
+		placeReportBox();
 	}
 
 	/** Current panel content: { prefix, lines } — kept so the text can be
 	 * re-flowed live while the whale moves. */
 	var statusCache = null;
 
-	/** Rough pixel width of a text line at 11px (CJK ≈ 11px, ASCII ≈ 6px). */
+	/** Rough pixel width of a text line at 12px (CJK ≈ 12px, ASCII ≈ 6.5px).
+	 * Synced with parts/style.css .dsh-whale-status font-size (P0 2026-10-27:
+	 * was 11/6 at 11px — keep these in step with the stylesheet). */
 	function estWidth(s) {
 		var w = 0;
 		for (var i = 0; i < s.length; i++) {
 			var c = s.charCodeAt(i);
-			w += (c > 255 || (c >= 0x2e80 && c <= 0xffef)) ? 11 : 6;
+			w += (c > 255 || (c >= 0x2e80 && c <= 0xffef)) ? 12 : 6.5;
 		}
-		return w + 18; /* padding + border */
+		return w + 20; /* padding + border */
 	}
 
 	/** Fit the cached content: one compact line when it fits, otherwise
 	 * one line per item (narrow space wraps into more lines). A `_stacked`
 	 * cache (multi-session stuck hint) ALWAYS renders one line per row —
-	 * 用户拍板 09-12: 多会话并列显示不合并。 */
+	 * 用户拍板 09-12: 多会话并列显示不合并。A `rows` cache (P1 completion
+	 * reports) renders a two-column label/value GRID instead of wrapped text —
+	 * numbers can never split across lines ("22.9K / tokens" 折行事故). */
 	function applyStatusText(el, cache) {
 		var box = el || statusEl;
 		var data = cache || statusCache;
@@ -80,6 +87,26 @@
 		var maxW = parseFloat(box.style.maxWidth) || 280;
 		if (data._stacked) {
 			box.textContent = data.prefix + data.lines.join('\n');
+			return;
+		}
+		if (data.rows) {
+			box.textContent = '';
+			for (var ri = 0; ri < data.rows.length; ri++) {
+				var kv = document.createElement('div');
+				kv.className = 'dsh-whale-status-kv';
+				var kEl = document.createElement('span');
+				kEl.className = 'k';
+				/* trailing space: keeps textContent as "label value" (tests and
+				 * screen readers read the old one-line format) without becoming
+				 * an anonymous flex item */
+				kEl.textContent = data.rows[ri].label + ' ';
+				var vEl = document.createElement('span');
+				vEl.className = 'v';
+				vEl.textContent = data.rows[ri].value;
+				kv.appendChild(kEl);
+				kv.appendChild(vEl);
+				box.appendChild(kv);
+			}
 			return;
 		}
 		var compact = data.prefix + data.lines.join(' · ');
@@ -112,6 +139,37 @@
 		try {
 			return !!(window.__dshWhale && window.__dshWhale._stuckPending && window.__dshWhale._stuckPending());
 		} catch (e) { return false; }
+	}
+
+	/** Place the displaced report box relative to the main box: LEFT of it
+	 * first; above it when the left edge is hit; its right side as the last
+	 * resort. Variant classes mirror the main box so the CSS anchoring stays
+	 * coherent. Extracted (P1 2026-10-28 主框/旁路框堆叠左缘对齐): the main
+	 * box re-flows LIVE — the stuck hint's seconds grow its text every 2s
+	 * sweep and whale moves flip variants — so a one-shot inline position
+	 * went stale and the pair drifted apart; updateStatusPos re-places the
+	 * box on every main-box reflow. */
+	function placeReportBox() {
+		var main = statusEl;
+		var el = reportEl;
+		if (!main || !el || !el.classList.contains('show')) return;
+		el.classList.toggle('dsh-whale-status-below', main.classList.contains('dsh-whale-status-below'));
+		el.classList.toggle('dsh-whale-status-above', main.classList.contains('dsh-whale-status-above'));
+		el.classList.toggle('dsh-whale-status-leftflip', main.classList.contains('dsh-whale-status-leftflip'));
+		var left = main.offsetLeft - el.offsetWidth - 8;
+		var top = main.offsetTop;
+		if (left < 4) {
+			left = main.offsetLeft;
+			top = main.offsetTop - el.offsetHeight - 8;
+		}
+		if (top < 0) {
+			left = main.offsetLeft + main.offsetWidth + 8;
+			top = main.offsetTop;
+		}
+		el.style.left = left + 'px';
+		el.style.top = top + 'px';
+		el.style.right = 'auto';
+		el.style.bottom = 'auto';
 	}
 
 	function showStatusPanel(data, ms) {
@@ -149,29 +207,11 @@
 		reportCache = typeof data === 'string'
 			? { prefix: '', lines: [data] }
 			: data;
-		el.classList.toggle('dsh-whale-status-below', main.classList.contains('dsh-whale-status-below'));
-		el.classList.toggle('dsh-whale-status-above', main.classList.contains('dsh-whale-status-above'));
-		el.classList.toggle('dsh-whale-status-leftflip', main.classList.contains('dsh-whale-status-leftflip'));
 		var maxW = parseFloat(main.style.maxWidth) || 280;
 		el.style.maxWidth = maxW + 'px';
 		applyStatusText(el, reportCache);
 		el.classList.add('show');
-		/* LEFT of the main box first; above it when the left edge is hit;
-		 * its right side as the last resort */
-		var left = main.offsetLeft - el.offsetWidth - 8;
-		var top = main.offsetTop;
-		if (left < 4) {
-			left = main.offsetLeft;
-			top = main.offsetTop - el.offsetHeight - 8;
-		}
-		if (top < 0) {
-			left = main.offsetLeft + main.offsetWidth + 8;
-			top = main.offsetTop;
-		}
-		el.style.left = left + 'px';
-		el.style.top = top + 'px';
-		el.style.right = 'auto';
-		el.style.bottom = 'auto';
+		placeReportBox();
 		clearTimeout(renderDisplaced.timer);
 		renderDisplaced.timer = setTimeout(hideReportBox, ms || 4000);
 	}

@@ -90,6 +90,9 @@ function openSessionAt(sessionId, atMs) {
 	} else {
 		return false; /* no bridge bound */
 	}
+	/* 每窗口归属（P1 2026-10-28）：本窗口主动打开的会话直接钉进本窗口 pin
+	 * （utils/session-key.js）——跳转是归属最确定的一手信号 */
+	pinWindowSession(sessionId);
 	if (!atMs) return true;
 	var run = (jumpRunSeq = jumpRunSeq + 1);
 	var pages = 0, paged = false, done = false, stampMode = "";

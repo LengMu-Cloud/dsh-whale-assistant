@@ -3,7 +3,7 @@
 > 由 node build-whale.js 产出：每个模块的职责（取文件头注释首段）与顶层函数清单。
 > 改代码前先在这里定位模块，再进 src/ 对应文件；改完重新构建本表自动更新。
 
-共 33 个模块（构建产物为单文件 IIFE，全部模块共享同一作用域）。
+共 34 个模块（构建产物为单文件 IIFE，全部模块共享同一作用域）。
 
 ## **src/index.js**（行切片）
 
@@ -24,6 +24,8 @@
 **safeGet()** · **safeSet()** · **safeRemove()**
 
 ## **src/utils/session-key.js**
+
+> The pre-pin chain (global key → conversation cache → fallback), kept separate so adoption can snapshot it WITHOUT the pin shadowing itself.
 
 ## **src/core/config.js**
 
@@ -51,7 +53,7 @@
 
 > Alpha adapter (inline module, M5 alpha-compat): synthesizes mux-equivalent event frames from DOM observations. dsh 0.1.2-alpha removed the WebSocket event mux; the web UI is per-request streaming + DOM rendering.  The gate POLICY lives in core/chip-gate.js as a pure function (unit tested); this file
 
-**ensureRegistered()** · **parseTokNum()** · **readTurnUsage()** · **applyPageTitleFallback()** · **seedActiveTitle()** · **synthOn()** · **synth()** · **feedSessionUsage()** · **chipStampMs()** · **chipAgeMinutes()** · **batchInFlow()** · **debugOn()** · **debugInject()** · **dumpComposer()** · **describeEl()** · **ensureToolSweep()** · **attach()**
+**ensureRegistered()** · **parseTokNum()** · **readTurnUsage()** · **applyPageTitleFallback()** · **seedActiveTitle()** · **synthOn()** · **synth()** · **feedSessionUsage()** · **chipStampMs()** · **chipAgeMinutes()** · **batchInFlow()** · **debugOn()** · **debugInject()** · **dumpComposer()** · **describeEl()** · **ensureToolSweep()** · **adoptLocalChatActivity()** · **attach()**
 
 ## **src/core/dedup.js**
 
@@ -89,7 +91,7 @@
 
 > Status panel: an independent surface placed LEFT or BELOW the whale (whichever side has room), so live tool status and the per-task token/pressure report NEVER collide with the speech bubble (notifications) or the click summary.
 
-**ensureStatusEl()** · **updateStatusPos()** · **estWidth()** · **applyStatusText()** · **ensureReportEl()** · **hideReportBox()** · **stuckPendingNow()** · **showStatusPanel()** · **renderDisplaced()** · **hideStatusPanel()** · **markStatusBusy()** · **showStatus()** · **fmtTokens()** · **pressurePercentOf()** · **pressurePct()** · **maybeWarnPressure()** · **pressureColor()** · **applyPressureHue()** · **runTimerLine()** · **capNameWidth()** · **timerRowText()** · **runningSessionCount()** · **multiRunTag()** · **ensureTimerEl()** · **hideTimerBox()** · **runTimerTick()** · **startRunTimer()** · **stopRunTimer()**
+**ensureStatusEl()** · **updateStatusPos()** · **estWidth()** · **applyStatusText()** · **ensureReportEl()** · **hideReportBox()** · **stuckPendingNow()** · **placeReportBox()** · **showStatusPanel()** · **renderDisplaced()** · **hideStatusPanel()** · **markStatusBusy()** · **showStatus()** · **fmtTokens()** · **pressurePercentOf()** · **pressurePct()** · **maybeWarnPressure()** · **pressureColor()** · **applyPressureHue()** · **runTimerLine()** · **capNameWidth()** · **timerRowText()** · **runningSessionCount()** · **multiRunTag()** · **ensureTimerEl()** · **hideTimerBox()** · **runTimerTick()** · **startRunTimer()** · **stopRunTimer()**
 
 ## **src/core/sleep.js**（行切片）
 
@@ -157,7 +159,11 @@
 
 ## **src/ui/menu.js**（行切片）
 
-> Sub-panel footer. Back follows the navigation hierarchy 菜单 → 设置 → 子面板 (user request): panels entered from the right-click menu (提醒我) return TO THE MENU; panels entered from settings (音色/周报/运行状态) return to settings.
+> Build the inline SVG for one icon spec: stroke defaults come from here so specs carry geometry only (fill:'currentColor' opts in).
+
+## **src/ui/drawers.js**
+
+> History drawer: recent finished tasks (newest first), each row can jump back to its conversation via the session-opening hook. Uses a separate panel slot so it can be wider and left-anchored.
 
 ## **src/input/swim.js**（行切片）
 

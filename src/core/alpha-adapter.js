@@ -374,7 +374,31 @@
 		}, 2500);
 	}
 
+	/** 每窗口归属（P1 2026-10-28）：从一批 DOM 变动里找「非鲸鱼自身的」新增
+	 * 元素——找到才把此刻的全局链会话快照进本窗口 pin（utils/session-key.js）。
+	 * 批内全是鲸鱼内部节点时不写：在 A 窗口开鲸鱼菜单/气泡不该把 B 窗口刚切
+	 * 的全局键钉进来。pin 只在值变化时落盘，流式 token 的高频批次零写入。 */
+	var whaleRootCache = null;
+	function adoptLocalChatActivity(mutations) {
+		try {
+			var whaleRoot = (whaleRootCache && whaleRootCache.parentNode)
+				? whaleRootCache
+				: (whaleRootCache = document.getElementById('dsh-whale'));
+			for (var i = 0; i < mutations.length; i++) {
+				var added = mutations[i].addedNodes;
+				for (var j = 0; j < added.length; j++) {
+					var node = added[j];
+					if (node.nodeType !== 1) continue;
+					if (whaleRoot && (node === whaleRoot || (whaleRoot.contains && whaleRoot.contains(node)))) continue;
+					adoptCurrentSessionPin();
+					return;
+				}
+			}
+		} catch (e) {}
+	}
+
 	var observer = new MutationObserver(function (mutations) {
+		adoptLocalChatActivity(mutations);
 		/* pass 1 — count elements FIRST (cheap refs only): text measurement
 		 * is skipped for huge batches (they are renders by definition and
 		 * their chips are ignored) — the whole subtree textContent read was

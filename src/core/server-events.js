@@ -464,5 +464,9 @@
 		 * not just the event branch — the projection active-session gate
 		 * lives in consume() and must be testable end to end */
 		window.__dshWhale._pollConsume = consume;
+		/* 每窗口归属（P1 2026-10-28）seams: pin/adopt/resolve 供测试直接驱动 */
+		window.__dshWhale._pinSession = pinWindowSession;
+		window.__dshWhale._adoptSessionPin = adoptCurrentSessionPin;
+		window.__dshWhale._resolveSessionId = resolveCurrentSessionId;
 	} catch (e) {}
 	})();

@@ -75,6 +75,24 @@ export function saveStoreAtomic(dir, doc) {
 	saveFileAtomic(storePath(dir), JSON.stringify(doc));
 }
 
+/* Serialized read-modify-write: page saves (history pushes) and pet-host
+ * config writes both load → mutate → save the SAME file. Two interleaved
+ * RMWs lose whichever wrote first (whole-file rename). Everything on this
+ * Node process funnels through one promise chain, so mutations apply in
+ * arrival order; cross-process races remain possible but the desktop runs
+ * one engine per ledger. */
+let writeChain = Promise.resolve();
+
+/** Queue `mutator` (sync fn: load → mutate → save) on the write chain.
+ * Returns a promise for the mutator's return value; a failed mutation is
+ * swallowed by the chain (the NEXT writer must not inherit a rejection)
+ * but propagated to the caller. */
+export function queueStoreWrite(dir, mutator) {
+	const run = writeChain.then(() => mutator());
+	writeChain = run.then(() => undefined, () => undefined);
+	return run;
+}
+
 /**
  * Merge the incoming full-document history with the stored one — every
  * window pushes a full replace, so a plain "last write wins" would let two
@@ -93,8 +111,15 @@ export function saveStoreAtomic(dir, doc) {
  *    incoming) is dropped — a 清空历史 bumps clearAt, and merge-only sync
  *    can never propagate a deletion on its own;
  * 4. newest-first, capped at HISTORY_LIMIT.
+ * Host-owned keys survive the replace: `pet` (桌宠开关/形态) is written by
+ * lib/pet.js only — windows never author it, so a page save that omits it
+ * inherits the stored value instead of wiping the pet switch.
  */
 export function mergeHistory(existing, incoming) {
+	if (!incoming || typeof incoming !== 'object') return incoming;
+	if (incoming.pet === undefined && existing && typeof existing === 'object' && existing.pet !== undefined) {
+		incoming.pet = existing.pet;
+	}
 	if (!Array.isArray(incoming.history)) return incoming;
 	const clearAt = Math.max((existing && existing.clearAt) || 0, incoming.clearAt || 0);
 	incoming.clearAt = clearAt;

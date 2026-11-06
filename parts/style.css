@@ -61,6 +61,8 @@
 	/* motion is JS-driven (position + heading + ripple trail); pause the idle bob */
 	animation: none;
 }
+/* 桌宠接力冻结类已随「进入/退出交接」一并退役（第九轮常驻定稿：桌宠是
+ * 唯一的鲸鱼，没有跨窗口交接=不需要交接冻结）。 */
 @keyframes dsh-whale-bob {
 	0%, 100% { transform: translateY(0) rotate(-1.5deg); }
 	50% { transform: translateY(-8px) rotate(1.5deg); }
@@ -181,6 +183,31 @@
 	border: 6px solid transparent;
 	border-top-color: var(--dsh-whale-bubble-bg, #ffffff);
 }
+/* 气泡动态边界（2026-11-04 用户实报「动态边界」）：气泡原生只向上弹
+ * （bottom: calc(100% + 12px)），鲸鱼被拖到屏幕顶部时气泡 2/3 出屏被窗口
+ * 裁掉（实机取证 rect.top=-67）。状态面板 09-12 起就有 above/leftflip 翻面，
+ * 气泡一直没有——桌宠常驻后鲸鱼到处跑，缺口暴露。flip 变体=翻到鲸鱼下方，
+ * 箭头随之上移，pop 动画镜像（起始向下偏移）。clampBubble 在 uiSay 与
+ * 拖动重排链里测量后决定是否挂这个类。 */
+.dsh-whale-bubble.dsh-whale-bubble-flip {
+	bottom: auto;
+	top: calc(100% + 12px);
+	transform-origin: top right;
+}
+.dsh-whale-bubble.dsh-whale-bubble-flip.show {
+	animation: dsh-whale-bubble-pop-flip 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes dsh-whale-bubble-pop-flip {
+	0% { opacity: 0; transform: translateY(-10px) scale(0.6); }
+	60% { opacity: 1; transform: translateY(3px) scale(1.05); }
+	100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+.dsh-whale-bubble.dsh-whale-bubble-flip::after {
+	top: auto;
+	bottom: 100%;
+	border-top-color: transparent;
+	border-bottom-color: var(--dsh-whale-bubble-bg, #ffffff);
+}
 .dsh-whale-badge {
 	position: absolute;
 	top: 2px;
@@ -219,6 +246,9 @@
 }
 #dsh-whale.dsh-whale-asleep .dsh-whale-zzz {
 	display: block;
+	/* 纯装饰的 💤 悬浮在鲸鱼头部=恰好盖住红标徽章——不穿透会把睡着时的
+	 * 徽章点击整个吃掉（真机 11-02 全功能测试实锤：红标无法消费） */
+	pointer-events: none;
 	animation: dsh-whale-zzz 2.2s ease-in-out infinite;
 }
 @keyframes dsh-whale-zzz {
@@ -297,12 +327,26 @@
 	justify-content: space-between;
 	gap: 12px;
 	white-space: nowrap;
+	/* 11-05（用户实报「用量通知的文字会越过框」）：面板 max-width 随鲸鱼
+	 * 贴边收窄时，nowrap 行的文本绘制宽度不随框变（真机实测框 59px 时行
+	 * 文本绘制 170px=溢出 111px）。修法=flex 项允许收缩 + 省略号截断，
+	 * 文本永不越过框边；标签让位更快（shrink 2:1），数字最后截断。 */
+	min-width: 0;
+	overflow: hidden;
 }
 .dsh-whale-status-kv .k {
 	color: var(--dsw-panel-muted);
+	flex-shrink: 2;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 .dsh-whale-status-kv .v {
 	font-variant-numeric: tabular-nums;
+	flex-shrink: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 /* little pop whenever the unread count changes */
 .dsh-whale-badge.pop {

@@ -2,6 +2,19 @@
 		var whaleEl = document.getElementById('dsh-whale');
 		if (!whaleEl) return;
 		whale = whaleEl;
+		/* 开机防双鲸（11-05 第三层，用户实报「一打开 DSH 就两只小金鱼，DSH
+		 * 的闪一下才消失」）：非桌宠页**元素创建即隐藏**——不信任缓存 0
+		 * （每次关 DSH 桌宠跟随死亡都会把缓存写成 0，冷开必踩 spawn 窗口
+		 * =这不是罕见路径，是每次冷开的必经路径）。唤醒只走两条正路：
+		 * ①权威状态（hello/轮询/pet/state 帧，force 破幂等）——宿主活着
+		 * 时 <1s；②6s 兜底 reveal（仅「从未见过权威状态且内存态非休眠」
+		 * ——宿主死/无桌宠宿主的降级场景）。缓存 1 的开机不踩兜底。 */
+		if (!PET_MODE) {
+			whaleEl.style.display = 'none';
+			setTimeout(function () {
+				if (!petStateEverSeen() && !petDormant) applyPetDormant(false, true);
+			}, 6000);
+		}
 		uiReady = true;
 
 		var bubble = document.createElement('div');
@@ -28,6 +41,54 @@
 		 * on the bubble, or on a spot that overlaps it). Idle summaries
 		 * carry no session and only get a hint. */
 		function jumpToBubbleSession() {
+			/* 桌宠（11-03 真跳转）：通知挂着枚举化合成会话（session-pet-sN），
+			 * 桌宠页没有跳转桥也没有 DSH DOM——但宿主持有 编号→真实会话 的
+			 * 反查表。POST /pet/ctrl jump 让宿主广播 pet/jump（页鲸用自己的
+			 * 跳转桥执行切换），同时请桌宠宿主把 DSH 窗口拉到前台——用户在
+			 * 桌宠上双击通知，落地就是「DSH 到眼前+停在目标对话」。 */
+			if (PET_MODE) {
+				var sid = currentSaySession || '';
+				var m = sid.match(/^session-pet-s(\d+)$/);
+				if (!m) {
+					uiSay('这条消息没有对应的对话哦 🐳', 2000);
+					return;
+				}
+				var code = parseInt(m[1], 10);
+				/* 时间锚点（11-06，用户实报「跳的是对话不是任务节点」）：与页鲸
+				 * 分支同源——当前通知报告的 endTime（这条报告所指的那次任务完
+				 * 成时刻）。宿主原样回传 pet/jump，页鲸 openSessionAt(sid, atMs)
+				 * 的翻页回溯把那条消息滚进视野。 */
+				var repAt = reading || lastShownReport;
+				var atMs = repAt && typeof repAt.endTime === 'number' ? repAt.endTime : undefined;
+				uiSay('正在打开对话… 🐳', 1800);
+				try {
+					if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+						/* the pet shell raises the DSH window (jump 落点必须可见） */
+						window.chrome.webview.postMessage({ c: 'jump' });
+					}
+				} catch (e) { /* non-pet shell: window switch is best-effort */ }
+				fetch('/api/whale-assistant/pet/ctrl', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ action: 'jump', code: code, atMs: atMs })
+				}).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (out) {
+					if (out && out.ok === true && out.delivered === false) {
+						/* 常驻语义（11-06）：关窗≠退出——DSH 窗口关着时页鲸不在场
+						 * （宿主广播 pet/jump 无人消费），跳转落不了地。通知**保留
+						 * 未读**（红标不掉），用户重开 DSH 后再双击还能定位到任务
+						 * 节点——比默默标已读丢了通知诚实得多。 */
+						uiSay('DSH 窗口已关闭——打开 DSH 后再点我跳转吧 🐳', 3500);
+					} else if (out && out.ok === true) {
+						/* jumping counts as reading the report (same contract as
+						 * the page whale): the badge drops and the notification
+						 * leaves the queue */
+						markBubbleRead();
+					} else {
+						uiSay('通知已过期，回 DSH 看看吧 🐳', 2500);
+					}
+				}).catch(function () { /* network hiccup: the shell switch already happened */ });
+				return;
+			}
 			var sessionId = currentSaySession;
 			if (!sessionId) {
 				uiSay('这条消息没有对应的对话哦 🐳', 2000);

@@ -62,7 +62,7 @@ class FakeAudioContext {
 	}
 }
 
-function makeEnv(initStore) {
+function makeEnv(initStore, opts) {
 	function makeEl(tag) {
 		const el = {
 			tag,
@@ -72,6 +72,7 @@ function makeEnv(initStore) {
 			children: [],
 			offsetWidth: 88,
 			offsetHeight: 88,
+			isConnected: true, /* stub elements are always attached (real-DOM semantic for created+appended) */
 			_listeners: {},
 			classSet: new Set(),
 			classList: {
@@ -321,6 +322,9 @@ function makeEnv(initStore) {
 	sandbox.dispatchEvent = (ev) => { (winListeners[ev.type] || []).forEach((fn) => fn(ev)); return true; };
 
 	vm.createContext(sandbox);
+	/* 桌宠模式 env：PET_MODE 在 constants.js 求值时读取 window.__dshPetHost，
+	 * 必须在脚本执行前预置（opts.petMode） */
+	if (opts && opts.petMode) sandbox.__dshPetHost = {};
 	vm.runInContext(SCRIPT, sandbox, { filename: 'whale.js' });
 
 	const bubble = () => whale.children.find((c) => c.className === 'dsh-whale-bubble');
@@ -338,7 +342,13 @@ function makeEnv(initStore) {
 		rippleLayer,
 		audioStarts: () => (myAudioCtxs.length ? myAudioCtxs[myAudioCtxs.length - 1].starts : []),
 		audioCtxs: () => myAudioCtxs,
-		ready: () => readyCb && readyCb(),
+		ready: () => {
+			if (readyCb) readyCb();
+			/* 11-05 开机防双鲸：ready() 同步触发兜底 reveal（模拟真实页的
+			 * 6s 超时——测试不需要等 6s；缓存 1 的开机它自己不出手） */
+			const R = sandbox.__dshWhale;
+			if (R && typeof R._bootReveal === 'function') R._bootReveal();
+		},
 		docFire: (type, event) => document._fire(type, event),
 		docListeners: (type) => docListeners[type] || [],
 		stepRaf: (ts) => {
@@ -588,6 +598,116 @@ async function main() {
 	whale._fire('pointermove', pt(5, 200, 250));
 	whale._fire('pointerup', pt(5, 200, 250));
 	assert.strictEqual(parseInt(whale.style.left, 10), grabbedX - 100, 'draggable after catch');
+
+	/* 8.5 桌宠常驻（第九轮用户定稿）：PET_MODE 开机即在家里——loadPos 落位、
+	 * entranceReady 立起（页面从此才发首帧区域+ready），**没有任何入场游动/
+	 * 跨窗口交接**（进入/退出已随常驻架构取消，闪现无从谈起） */
+	{
+		const envPet = makeEnv(null, { petMode: true });
+		envPet.ready(); /* fire DOMContentLoaded -> uiInit -> loadPos + petEntranceSwim */
+		await sleep(120);
+		assert.strictEqual(envPet.sandbox.__dshPetHost.entranceReady, true, 'boot raises entranceReady (page may push region + ready)');
+		assert.strictEqual(envPet.sandbox.__dshWhale.swimState(), null, 'no entrance swim (the whale starts at home)');
+		assert.strictEqual(envPet.whale.style.opacity, '1', 'entrance restores opacity (soft fade-in alive)');
+	}
+
+	/* 8.5d 躲猫猫（11-02 用户定稿）：peekHide 游到桌面右下角（petPeek 标志、
+	 * 不说话不 POST——没有退出语义，只有躲猫猫），到达才回调页面（收鲸鱼显
+	 * 小气泡） */
+	{
+		const envP = makeEnv(null, { petMode: true });
+		envP.ready();
+		let peekDone = 0;
+		envP.sandbox.__dshWhale.peekHide(function () { peekDone++; });
+		const pSw = () => envP.sandbox.__dshWhale.swimState();
+		assert.ok(pSw() && pSw().petPeek === true, 'peekHide swims to the corner with the petPeek flag');
+		assert.ok(pSw().x1 === 1094 && pSw().y1 === 694, 'peek dives to the desktop bottom-right corner');
+		let tsP2 = pSw().start;
+		let gP2 = 0;
+		while (pSw() && gP2++ < 5000) {
+			tsP2 += 16;
+			envP.stepRaf(tsP2);
+		}
+		assert.ok(gP2 < 5000, 'peek dive finished');
+		assert.strictEqual(peekDone, 1, 'peekHide fires the done callback exactly once on arrival');
+		assert.strictEqual(envP.whale.style.left, '1094px', 'peek landed at the corner x (eye anchor spot)');
+		assert.ok(!envP.bubble() || !envP.bubble().textContent.includes('躲'), 'peek arrival stays silent (body is about to fold into the eye)');
+	}
+
+	/* 8.6 桌宠仲裁（第一批）：pet/state 帧 + SSE hello 双通道驱动页内休眠
+	 * （2026-10-31 真机洞：SSE 在线的页面不跑轮询，缺帧通道=页内鲸鱼在
+	 * 退出桌宠后永久隐藏）。form 语义（11-01 真机取证修正）：休眠与形态
+	 * 无关——隐藏形态下桌宠进程健在（托盘可召回），唤醒页鲸会把「隐藏」
+	 * 变成事实上的「退出」（用户看到鲸鱼跳回 DSH 右下角=语义混淆） */
+	{
+		const envD = makeEnv();
+		envD.ready();
+		const dorm = () => envD.sandbox.__dshWhale._petDormant.get();
+		assert.strictEqual(dorm(), false, 'page whale starts awake');
+		envD.sandbox.__dshWhale._pollConsume([{ seq: 1, type: 'pet/state', enabled: true }], 'boot-pet-a');
+		assert.strictEqual(dorm(), true, 'pet/state frame via poll consume -> dormant');
+		envD.sandbox.__dshWhale._pollConsume([{ seq: 2, type: 'pet/state', enabled: true, form: 'hidden' }], 'boot-pet-a');
+		assert.strictEqual(dorm(), true, 'HIDDEN form keeps the page dormant (hide != exit; recall = tray)');
+		envD.sandbox.__dshWhale._pollConsume([{ seq: 3, type: 'pet/state', enabled: true, form: 'bubble' }], 'boot-pet-a');
+		assert.strictEqual(dorm(), true, 'bubble form keeps the page dormant');
+		/* up 语义（11-05 修订）：桌宠真阵亡（up:false 且非 spawning）→ 页鲸
+		 * 苏醒顶班；spawn 窗口期（up:false + spawning）页鲸保持休眠——
+		 * 「窗口期也顶班」是交接时代语义，就是开机双鲸同屏 2s 的根修 */
+		envD.sandbox.__dshWhale._pollConsume([{ seq: 4, type: 'pet/state', enabled: true, form: 'full', up: false }], 'boot-pet-a');
+		assert.strictEqual(dorm(), false, 'up:false (pet died) keeps the page whale awake');
+		envD.sandbox.__dshWhale._pollConsume([{ seq: 5, type: 'pet/state', enabled: true, form: 'full', up: true }], 'boot-pet-a');
+		assert.strictEqual(dorm(), true, 'up:true (pet ready) -> dormant');
+		/* spawning 仲裁（11-05，用户实报「两个同时出现，过会 DSH 里的消失」） */
+		envD.sandbox.__dshWhale._pollConsume([{ seq: 6, type: 'pet/state', enabled: true, form: 'full', up: false, spawning: true }], 'boot-pet-a');
+		assert.strictEqual(dorm(), true, 'spawn window (up:false + spawning) keeps the page whale asleep — no boot double-whale');
+		envD.sandbox.__dshWhale._pollConsume([{ seq: 7, type: 'pet/state', enabled: true, form: 'full', up: false, spawning: false }], 'boot-pet-a');
+		assert.strictEqual(dorm(), false, 'spawn failed (up:false, spawning over) wakes the page whale — fallback preserved');
+		envD.sandbox.__dshWhale._sseFrame(JSON.stringify({ type: 'hello', bootId: 'boot-pet-b', pet: { enabled: false } }));
+		assert.strictEqual(dorm(), false, 'SSE hello pet flag -> awake again');
+		envD.sandbox.__dshWhale._sseFrame(JSON.stringify({ type: 'pet/state', enabled: true, up: true }));
+		assert.strictEqual(dorm(), true, 'pet/state frame via SSE -> dormant');
+		envD.sandbox.__dshWhale._sseFrame(JSON.stringify({ type: 'hello', bootId: 'boot-pet-c', pet: { enabled: true, up: false, spawning: true } }));
+		assert.strictEqual(dorm(), true, 'SSE hello spawn window -> dormant (no boot flash)');
+		envD.sandbox.__dshWhale._sseFrame(JSON.stringify({ type: 'hello', bootId: 'boot-pet-c', pet: { enabled: true, up: false, spawning: false } }));
+		assert.strictEqual(dorm(), false, 'SSE hello real death -> awake (fallback)');
+	}
+
+	/* 8.7 桌宠仲裁开机同步（2026-10-31 真机洞）：client.js 开机按缓存把
+	 * 鲸鱼 display:none，内存态必须从同一份缓存起步——否则 hello 送来
+	 * pet.enabled=false 会撞上幂等闸门早退，页内鲸鱼永久隐藏 */
+	{
+		const envC = makeEnv([['dsh-whale:petDormant', '1']]);
+		envC.ready();
+		assert.strictEqual(envC.sandbox.__dshWhale._petDormant.get(), true, 'boot adopts the persisted dormancy cache into memory');
+		envC.sandbox.__dshWhale._sseFrame(JSON.stringify({ type: 'hello', bootId: 'boot-cache-wake', pet: { enabled: false } }));
+		assert.strictEqual(envC.sandbox.__dshWhale._petDormant.get(), false, 'hello pet=false wakes a cache-dormant page');
+		assert.strictEqual(envC.whale.style.display, '', 'wake clears the display');
+		assert.strictEqual(envC.sandbox.localStorage.getItem('dsh-whale:petDormant'), '0', 'wake rewrites the cache to 0');
+	}
+
+	/* 8.8 开机防双鲸第三层（11-05 用户实报「一打开 DSH 就两只小金鱼」）：
+	 * 非桌宠页 uiInit（DOMContentLoaded=首帧渲染前）即隐藏——不信任缓存 0
+	 * （每次关 DSH 桌宠跟随死亡都会把缓存写成 0，冷开必踩 spawn 窗口）；
+	 * 唤醒=权威状态 force 应用（幂等闸门不拦权威状态）或兜底 reveal
+	 * （ready() 同步模拟 6s 超时）。桩的 readyState='loading' → uiInit 与
+	 * reveal 都在 ready() 内按序发生：先藏（uiInit）→ 普通 env 再揭。 */
+	{
+		const envH = makeEnv();
+		envH.ready();
+		assert.strictEqual(envH.sandbox.__dshWhale._petDormant.seen(), true, 'boot reveal counts as an authoritative state');
+		assert.strictEqual(envH.whale.style.display, '', 'no-pet env: fallback reveal shows the whale after boot');
+		/* spawn window re-hides via authoritative frame (force path) */
+		envH.sandbox.__dshWhale._pollConsume([{ seq: 1, type: 'pet/state', enabled: true, up: false, spawning: true }], 'boot-h8');
+		assert.strictEqual(envH.whale.style.display, 'none', 'spawn window re-hides via authoritative frame');
+		envH.sandbox.__dshWhale._pollConsume([{ seq: 2, type: 'pet/state', enabled: true, up: false, spawning: false }], 'boot-h8');
+		assert.strictEqual(envH.whale.style.display, '', 'spawn failed re-reveals (force, no churn)');
+	}
+	{
+		const envH2 = makeEnv([['dsh-whale:petDormant', '1']]);
+		envH2.ready();
+		assert.strictEqual(envH2.sandbox.__dshWhale._petDormant.get(), true, 'cache-1 boot NOT woken by the fallback reveal');
+		assert.strictEqual(envH2.whale.style.display, 'none', 'cache-1 boot stays hidden after ready');
+	}
 
 	/* 9. session/subscribed resets that session's job mirror */
 	env.frame({
@@ -1713,18 +1833,31 @@ async function main() {
 	assert.ok(!statusDir().classList.contains('dsh-whale-status-right'), 'left-aligned when more room to the right');
 	assert.strictEqual(statusDir().style.maxWidth, '280px', 'full width mid-screen');
 	/* whale hugging the RIGHT edge (real clamp max 1112): the BELOW panel
-	 * stays left-aligned but SHRINKS (60px min) keeping a 16px margin
-	 * from the viewport's right edge */
+	 * right-anchors and expands LEFTWARD at full width（11-05 用户二次实报：
+	 * 旧「原地收缩到 86px」让用量报告整列省略号「此... 27.0K t...」不可读
+	 * ——哪边宽朝哪边展开），keeping a 16px margin from the viewport's
+	 * right edge */
 	await sleep(2100);
 	envDir.whale.style.top = '400px';
 	envDir.whale.style.left = '1112px';
 	muxpDir({ type: 'session/event', sessionId: 'session-d1', event: { type: 'tool/call', seq: 3, time: 3, data: { name: 'node', arguments: '{}' } } });
 	assert.ok(statusDir().classList.contains('dsh-whale-status-below'), 'still below');
-	assert.ok(!statusDir().classList.contains('dsh-whale-status-right'), 'stays left-aligned');
-	const narrowW = parseInt(statusDir().style.maxWidth, 10);
-	assert.ok(narrowW > 0 && narrowW < 280, `panel shrinks near the right edge: ${statusDir().style.maxWidth}`);
-	/* panel right edge = 1112 + 4 + 68 = 1184 <= 1200 - 16 (margin) */
-	assert.ok(1112 + 4 + narrowW <= 1200 - 16, 'keeps a margin from the right edge');
+	assert.strictEqual(statusDir().style.maxWidth, '280px', `right-anchor expands to full width: ${statusDir().style.maxWidth}`);
+	assert.strictEqual(statusDir().style.left, 'auto', 'right-anchor clears the left anchor');
+	const rightPx = parseInt(statusDir().style.right, 10);
+	assert.ok(Number.isFinite(rightPx) && rightPx >= 0, `inline right anchor set: ${statusDir().style.right}`);
+	/* box right edge = whale right (1112+88) - rightPx <= 1200 - 16 (margin) */
+	assert.ok(1112 + 88 - rightPx <= 1200 - 16, `box right edge keeps the viewport margin (${1112 + 88 - rightPx})`);
+	/* whale near the left edge mid-screen: side panel picks the ROOMIER
+	 * side (right of the whale) instead of squeezing into 130px */
+	await sleep(2100);
+	envDir.whale.style.top = '694px';
+	envDir.whale.style.left = '150px';
+	muxpDir({ type: 'session/event', sessionId: 'session-d2', event: { type: 'tool/call', seq: 1, time: 5, data: { name: 'curl', arguments: '{}' } } });
+	assert.ok(!statusDir().classList.contains('dsh-whale-status-below'), 'bottom edge -> side panel');
+	assert.ok(statusDir().classList.contains('dsh-whale-status-leftflip'), `roomier side wins near the left edge (maxWidth ${statusDir().style.maxWidth})`);
+	assert.strictEqual(statusDir().style.maxWidth, '280px', 'side panel full width on the roomier side');
+	assert.strictEqual(statusDir().style.right, '', 'side panel uses the CSS class anchor, no stale inline');
 	/* whale hugging the LEFT edge at the bottom: the side panel flips to
 	 * the RIGHT of the whale (no room on the left) */
 	await sleep(2100);
@@ -1840,13 +1973,15 @@ async function main() {
 	assert.ok(statusDg() && statusDg().classList.contains('dsh-whale-status-below'), 'panel below mid-screen');
 	assert.ok(!statusDg().classList.contains('dsh-whale-status-right'), 'left-aligned mid-screen');
 	assert.strictEqual(statusDg().style.maxWidth, '280px', 'full width mid-screen');
-	/* drag the whale toward the right edge: the open panel shrinks live
-	 * (never touching the screen edge) */
+	/* drag the whale toward the right edge: the open panel right-anchors
+	 * live and keeps FULL width expanding leftward（11-05 二次实报修正：
+	 * 旧「原地收缩」把报告挤成省略号粥）——right edge keeps the margin */
 	envDrag.whale._fire('pointerdown', { pointerId: 7, pointerType: 'mouse', button: 0, clientX: 100, clientY: 100 });
 	envDrag.whale._fire('pointermove', { pointerId: 7, pointerType: 'mouse', button: 0, clientX: 1200, clientY: 130 });
-	const midW = parseInt(statusDg().style.maxWidth, 10);
-	assert.ok(midW > 0 && midW < 280, `panel shrinks WHILE dragging: ${statusDg().style.maxWidth}`);
-	assert.ok(!statusDg().classList.contains('dsh-whale-status-right'), 'stays left-aligned while shrinking');
+	assert.strictEqual(statusDg().style.maxWidth, '280px', `panel keeps full width while dragging: ${statusDg().style.maxWidth}`);
+	const dragRight = parseInt(statusDg().style.right, 10);
+	assert.ok(Number.isFinite(dragRight) && dragRight >= 0, `right-anchor applied while dragging: ${statusDg().style.right}`);
+	assert.ok(statusDg().classList.contains('dsh-whale-status-below'), 'still below while dragging');
 	envDrag.whale._fire('pointerup', { pointerId: 7, pointerType: 'mouse', button: 0, clientX: 1200, clientY: 130 });
 	/* dragging to the bottom edge flips the panel side live too */
 	envDrag.whale._fire('pointerdown', { pointerId: 8, pointerType: 'mouse', button: 0, clientX: 200, clientY: 100 });
@@ -1873,15 +2008,17 @@ async function main() {
 	muxpFl({ type: 'session/event', sessionId: 'session-fl1', event: { type: 'assistant/message', seq: 2, time: 1, data: { turn: 1, step: 1, message: { role: 'assistant', content: [], id: 'm1' }, usage: { inputTokens: 1000000, outputTokens: 500000, cacheReadTokens: 2000000, reasoningTokens: 0 } } } });
 	muxpFl({ type: 'session/event', sessionId: 'session-fl1', event: { type: 'turn/end', seq: 5, time: 5, data: {} } });
 	assert.strictEqual(statusFl().children.filter((c) => String(c.className).indexOf('dsh-whale-status-kv') >= 0).length, 3, 'three kv rows mid-screen (P1 grid)');
-	/* drag to the right edge: the open report's panel shrinks live (60px
-	 * min, 16px margin from the edge) */
+	/* drag to the right edge: the open report's panel right-anchors live
+	 * and keeps full width expanding leftward（11-05 二次实报修正）；
+	 * the inline right anchor clears when back mid-screen */
 	envFlow.whale._fire('pointerdown', { pointerId: 9, pointerType: 'mouse', button: 0, clientX: 100, clientY: 100 });
 	envFlow.whale._fire('pointermove', { pointerId: 9, pointerType: 'mouse', button: 0, clientX: 1200, clientY: 130 });
-	const edgeW = parseInt(statusFl().style.maxWidth, 10);
-	assert.ok(edgeW > 0 && edgeW < 280, `panel shrinks near the edge: ${statusFl().style.maxWidth}`);
-	/* drag back to the middle: full width again */
+	assert.strictEqual(statusFl().style.maxWidth, '280px', `panel keeps full width near the edge: ${statusFl().style.maxWidth}`);
+	assert.ok(parseInt(statusFl().style.right, 10) >= 0, 'right anchor live during drag');
+	/* drag back to the middle: full width again, inline anchor cleared */
 	envFlow.whale._fire('pointermove', { pointerId: 9, pointerType: 'mouse', button: 0, clientX: 100, clientY: 140 });
 	assert.strictEqual(statusFl().style.maxWidth, '280px', 'full width back mid-screen');
+	assert.strictEqual(statusFl().style.right, '', 'inline anchor cleared back mid-screen');
 	envFlow.whale._fire('pointerup', { pointerId: 9, pointerType: 'mouse', button: 0, clientX: 600, clientY: 140 });
 	FL._setHoldMs(null);
 
@@ -2012,6 +2149,22 @@ async function main() {
 	assert.ok(edgeTop < 790, `flipped up: ${edgeTop}`);
 	envCtx.docFire('pointerdown', { button: 0, target: envCtx.sandbox.document.body });
 	assert.ok(!CTX.ctxMenuOpen(), 'menu closed after the edge test');
+	/* 11-05 用户实报「右键菜单会挡住小鲸鱼」：菜单锚在光标上而光标就在鲸鱼
+	 * 身上——翻转后与鲸鱼布局盒求交，从右/左/上/下挑第一个零重叠且入屏的位。
+	 * 场景=鲸鱼右下角（用户截图场景）：老代码翻转后菜单右下角=光标=鲸鱼身 */
+	envCtx.whale.style.left = '1104px';
+	envCtx.whale.style.top = '704px';
+	await singleRClick(1148, 748); /* whale center: the old code put the menu ON it */
+	const mAnti = ctxMenuEl();
+	const aLeft = parseInt(mAnti.style.left, 10);
+	const aTop = parseInt(mAnti.style.top, 10);
+	const menuW = 180; /* CTX_MENU_W */
+	const hitsWhale = aLeft < 1104 + 88 && aLeft + menuW > 1104 && aTop < 704 + 88 && aTop + 88 > 704;
+	assert.ok(!hitsWhale, `menu cleared of the whale (left=${aLeft}, top=${aTop}, whale=1104,704,88x88)`);
+	assert.ok(aLeft >= 8 && aLeft + menuW <= 1200 - 8 && aTop >= 8 && aTop + 88 <= 800 - 8,
+		`anti-overlap placement stays in the viewport (left=${aLeft}, top=${aTop})`);
+	envCtx.docFire('pointerdown', { button: 0, target: envCtx.sandbox.document.body });
+	assert.ok(!CTX.ctxMenuOpen(), 'menu closed after the anti-overlap test');
 	CTX.setSoundMuted(false);
 
 	/* 35b. persisted state survives a reload: mute + affection are read
@@ -2056,8 +2209,14 @@ async function main() {
 	muxpJp({ type: 'session/event', sessionId: 'session-jp1', event: { type: 'turn/end', seq: 2, time: 1, data: {} } });
 	assert.ok(envJump.bubble().textContent.includes('完成了'), 'completion bubble showing');
 	assert.strictEqual(JP.unreadCount(), 1, 'one unread before the jump (end only; start stays out)');
+	JP._pinSession('session-jp1');
 	envJump.bubble()._fire('dblclick', { stopPropagation() {} });
-	assert.deepStrictEqual(opened, ['session-jp1'], 'double-click jumps to the report session');
+	/* 11-06 同会话跳过 open（竞态根修）：report 会话=当前会话时不再调
+	 * openSession——open 的异步 replaceMain 重渲染会把翻页点击整个覆盖
+	 * （真机实拍：dispatch 后 ~30 次翻页点击全丢、页面静止后手工同款
+	 * onClick 一次生效）；翻页循环直接在稳定视图上定位。显式 pin 到
+	 * session-jp1 → same-session 分支生效 → opened 恒空 */
+	assert.deepStrictEqual(opened, [], 'same-session double-click skips open (paging lands directly, 11-06 race fix)');
 	assert.strictEqual(JP.unreadCount(), 0, 'badge drops to zero after the jump');
 	assert.strictEqual(JP.reportQueue().length, 0, 'the jumped report left the queue');
 	assert.ok(!JP.swimState(), 'whale double-click (swim) NOT triggered by the bubble');
@@ -2068,7 +2227,7 @@ async function main() {
 	envJump.whale.style.left = '100px';
 	/* bubble rect estimate: left 108..196, top 0..88 (inBubbleRect fallback) */
 	envJump.whale._fire('dblclick', { target: envJump.whale, clientX: 150, clientY: 40 });
-	assert.deepStrictEqual(opened, ['session-jp1', 'session-jp1'], 'drifted double-click still jumps');
+	assert.deepStrictEqual(opened, [], 'drifted double-click still jumps (same-session: no re-open, 11-06)');
 	assert.ok(!JP.swimState(), 'drifted double-click does NOT swim');
 	assert.strictEqual(JP.unreadCount(), 0, 'a second jump has nothing new to read');
 	/* the queue is empty (starts stay out): a click replays nothing */
@@ -2256,6 +2415,16 @@ async function main() {
 	assert.ok(hp.textContent.includes('历史任务A'), 'row shows the task title');
 	assert.ok(hp.children.some((c) => c.className === 'dsh-whale-panel-foot'), 'history drawer has the shared footer');
 	assert.ok(hp.textContent.includes('← 返回菜单'), 'history back goes to the MENU (09-05 用户反馈)');
+	/* 11-05 用户实报「历史任务不能实时同步」：数据链实测秒级通畅，缺的是
+	 * 打开着的抽屉=静态快照——现在开着期间 5s re-pull+重渲染。落一条新
+	 * 记录，不重开抽屉，下一个 live tick 必须出现 */
+	envHist.sandbox.__dshWhale.pushHistory({ title: '实时刷新测试', sessionId: 'session-live1', kind: 'done', at: 1, endTime: 1, turnTokens: 5 }); /* at=1 sorts OLDEST — the six Date.now() records stay on top */
+	await sleep(5600);
+	assert.strictEqual(rows().length, 7, `open drawer live-refreshes within ~5s (got ${rows().length})`);
+	assert.ok(hp.textContent.includes('实时刷新测试'), 'new record visible WITHOUT reopening the drawer');
+	/* 关抽屉（返回菜单）= live 定时器随 closeCtxHistory 停止 */
+	hp.children.find((c) => c.className === 'dsh-whale-panel-foot').children.find((c) => c.className.indexOf('dsh-whale-panel-back') >= 0)._fire('click', { stopPropagation() {} });
+	await sleep(30);
 	/* row time carries the DATE, not just HH:MM — tasks pile up across days */
 	assert.ok(/\d{1,2}月\d{1,2}日 \d{2}:\d{2}/.test(hp.textContent), `row time shows M月D日 HH:MM: ${rows()[0].textContent}`);
 	/* search with no matches shows the empty hint (a `shown` hoist bug used
@@ -2267,10 +2436,13 @@ async function main() {
 	assert.ok(hList.children.some((c) => c.textContent === '没有匹配的记录 🔍'), 'no-match hint shown');
 	searchEl.value = '';
 	searchEl._fire('input', {});
-	assert.strictEqual(rows().length, 6, 'clearing the search restores all rows');
-	rows()[0]._fire('click', { stopPropagation() {} });
+	assert.strictEqual(rows().length, 7, 'clearing the search restores all rows (6 + the live-refresh record)');
+	/* click the QUESTION row specifically (sort order no longer depends on
+	 * which record is newest — the live-refresh record rides along) */
+	const qRow2 = rows().filter((r) => String(r.children[0].className).indexOf('history-icon-question') >= 0)[0];
+	qRow2._fire('click', { stopPropagation() {} });
 	assert.deepStrictEqual(histOpened, [['session-h1', 5555]],
-		'row click jumps to that session passing endTime as the back-page anchor');
+		`row click jumps to that session passing endTime as the back-page anchor (got ${JSON.stringify(histOpened)})`);
 	assert.ok(!hp.classList.contains('show') || !hPanel(), 'drawer closed after the jump');
 	/* cap 50: pushing 60 keeps only the newest 50 */
 	for (let i = 0; i < 60; i++) HS.pushHistory({ title: 'x', sessionId: 's-' + i, kind: 'done', at: i });
@@ -3440,6 +3612,101 @@ async function main() {
 		const envP3 = makeEnv();
 		envP3.ready();
 		assert.strictEqual(envP3.sandbox.__dshWhale._resolveSessionId(), 'session-alpha-active', 'fallback id unchanged on a bare window');
+	}
+
+	/* 62. 气泡动态边界 clampBubble（2026-11-04 第十四轮，审计 GAP-1）：
+	 * 贴顶 flip / 左右裁切 margin 方向 / 幂等。经真 poll 循环驱动（48b
+	 * 模式）：setFetch 喂完成帧 → uiSay → clampBubble(true)。桩 offsetLeft
+	 * 镜像 style.left；气泡 CSS 锚定用 style.left/top 直接模拟。 */
+	{
+		const envC = makeEnv();
+		envC.ready();
+		await sleep(30);
+		envC.whale.style.left = '600px';
+		envC.whale.style.top = '0px';
+		let cbCall = 0;
+		envC.setFetch((url) => {
+			if (String(url).indexOf('/events') === -1) return Promise.resolve({ ok: false, json: () => Promise.resolve({}) }); /* /save 等：不占拍 */
+			cbCall++;
+			if (cbCall === 1) {
+				return Promise.resolve({ ok: true, json: () => Promise.resolve({ bootId: 'boot-cb', events: [
+					{ type: 'session/event', sessionId: 'session-cb', seq: 1, event: { type: 'session/title', time: Date.now(), data: { title: '动态边界' } } },
+					{ type: 'session/event', sessionId: 'session-cb', seq: 2, event: { type: 'turn/end', time: Date.now(), data: { reason: { kind: 'completed' } } } }
+				] }) });
+			}
+			return Promise.resolve({ ok: true, json: () => Promise.resolve({ bootId: 'boot-cb', events: [] }) });
+		});
+		await sleep(2300); /* first poll ~1.5s after ready */
+		assert.ok(envC.bubble().classList.contains('show'), 'cb: completion bubble shown');
+		assert.ok(envC.bubble().classList.contains('dsh-whale-bubble-flip'), 'cb: bubble at the TOP edge flips BELOW the whale');
+		/* b) 左裁：鲸鱼贴左 → margin-left 负值（右锚定下负 margin = 右移） */
+		const envL = makeEnv();
+		envL.ready();
+		await sleep(30);
+		envL.whale.style.left = '0px';
+		let lCall = 0;
+		envL.setFetch((url) => {
+			if (String(url).indexOf('/events') === -1) return Promise.resolve({ ok: false, json: () => Promise.resolve({}) });
+			lCall++;
+			if (lCall === 1) {
+				return Promise.resolve({ ok: true, json: () => Promise.resolve({ bootId: 'boot-cb2', events: [
+					{ type: 'session/event', sessionId: 'session-cb2', seq: 1, event: { type: 'session/title', time: Date.now(), data: { title: '左裁' } } },
+					{ type: 'session/event', sessionId: 'session-cb2', seq: 2, event: { type: 'turn/end', time: Date.now(), data: { reason: { kind: 'completed' } } } }
+				] }) });
+			}
+			return Promise.resolve({ ok: true, json: () => Promise.resolve({ bootId: 'boot-cb2', events: [] }) });
+		});
+		await sleep(2300);
+		assert.ok(envL.bubble().classList.contains('show'), 'cb2: bubble shown');
+		const ml = envL.bubble().style.marginLeft;
+		assert.ok(typeof ml === 'string' && ml !== '' && parseFloat(ml) < 0, 'cb2: left-clipped bubble gets a NEGATIVE margin (pulls right), got ' + ml);
+		/* d) 幂等：下一拍 poll 重放空 events 不改夹紧值（清零重测收敛同值） */
+		await sleep(3000);
+		assert.strictEqual(envL.bubble().style.marginLeft, ml, 'cb4: idempotent clamp (re-measure lands on the same margin)');
+	}
+
+	/* 63. 重放批「照记」契约（审计 B1/GAP-13）：bootId 换代 + boot 前完成帧 →
+	 * say/音效/面板全跳（不重播），红标/历史照记（「页面后到」补记语义锁定；
+	 * 「页面在场二次重放」的重复记账为已知问题，攒 v0.4.3）。 */
+	{
+		const envR2 = makeEnv();
+		envR2.ready();
+		await sleep(30);
+		const nowRp = Date.now();
+		let rpCall = 0;
+		let rpAudioBaseline = 0;
+		envR2.setFetch((url) => {
+			if (String(url).indexOf('/events') === -1) return Promise.resolve({ ok: false, json: () => Promise.resolve({}) }); /* /save（pushCloudHistory 写穿）不占拍 */
+			rpCall++;
+			if (rpCall === 1) {
+				/* boot-rp-1: normal completion announces + records */
+				return Promise.resolve({ ok: true, json: () => Promise.resolve({ bootId: 'boot-rp-1', events: [
+					{ type: 'session/event', sessionId: 'session-rp', seq: 1, event: { type: 'session/title', time: nowRp, data: { title: '重放契约' } } },
+					{ type: 'session/event', sessionId: 'session-rp', seq: 2, event: { type: 'turn/end', time: nowRp, data: { reason: { kind: 'completed' } } } }
+				] }) });
+			}
+			if (rpCall === 2) {
+				/* boot-rp-2: NEW bootId replays the SAME frames (fTime < bootAt) —
+				 * replayBatch marks them: silent re-record, no re-announce */
+				rpAudioBaseline = envR2.audioStarts().length;
+				return Promise.resolve({ ok: true, json: () => Promise.resolve({ bootId: 'boot-rp-2', events: [
+					{ type: 'session/event', sessionId: 'session-rp', seq: 1, event: { type: 'session/title', time: nowRp, data: { title: '重放契约' } } },
+					{ type: 'session/event', sessionId: 'session-rp', seq: 2, event: { type: 'turn/end', time: nowRp - 1000, data: { reason: { kind: 'completed' } } } }
+				] }) });
+			}
+			return Promise.resolve({ ok: true, json: () => Promise.resolve({ bootId: 'boot-rp-2', events: [] }) });
+		});
+		await sleep(2300); /* boot-rp-1 consumed */
+		assert.ok(envR2.bubble().textContent.includes('重放契约') && envR2.bubble().textContent.includes('完成了'), 'rp: normal completion announces with the real name');
+		const hist1 = JSON.parse(envR2.sandbox.localStorage.getItem('dsh-whale:history')).data.length;
+		assert.strictEqual(hist1, 1, 'rp: history has 1 row after boot-1');
+		await sleep(4000); /* boot-rp-2 consumed (second poll at ~4.5s) */
+		if (envR2.audioStarts().length !== rpAudioBaseline) {
+			console.error('[diag] audio baseline=' + rpAudioBaseline + ' now=' + envR2.audioStarts().length + ' bubble=' + envR2.bubble().textContent.slice(0, 40) + ' hist=' + JSON.parse(envR2.sandbox.localStorage.getItem('dsh-whale:history')).data.length);
+		}
+		assert.ok(envR2.audioStarts().length === rpAudioBaseline, 'rp: replayed completion does NOT re-ding');
+		const hist2 = JSON.parse(envR2.sandbox.localStorage.getItem('dsh-whale:history')).data;
+		assert.strictEqual(hist2.length, 2, 'rp: replay re-records history (照记 contract; double-row dedup is a known v0.4.3 item)');
 	}
 
 	console.log(`ALL TESTS PASSED (${Math.round(performance.now() - t)}ms)`);

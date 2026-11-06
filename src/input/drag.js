@@ -154,6 +154,13 @@
 
 		loadPos();
 
+		/* 桌宠入场（第一批）：PET_MODE 下落位后同步执行——首帧即画在「落点
+		 * 向屏幕中心回拉」的拉入位，随后游向最近边缘（弧线+涟漪+到达水花+
+		 * 引导台词），uiInit 同步无跳变。见 swim.js petEntranceSwim。 */
+		if (PET_MODE) {
+			try { petEntranceSwim(); } catch (e) {}
+		}
+
 		/* nap timer starts at page load: 5 idle minutes -> sleep
 		 * (defensive clear: drag.js must never leave a stale timer around —
 		 * the shared sleepTimer var belongs to core/sleep.js) */

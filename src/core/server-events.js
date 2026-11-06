@@ -62,8 +62,41 @@
 		try { localStorage.setItem('dsh-whale:evseq', JSON.stringify({ bootId: knownBootId, seq: n })); } catch (e) {}
 	}
 
+	/* 桌宠仲裁判定（第一批；11-01 语义修正）：页内休眠 = 桌宠开启且**已就绪**
+	 * ——与形态无关。隐藏形态下桌宠窗口仍在（进程活着、托盘可召回），页鲸
+	 * 必须保持休眠：唤醒页鲸会把「隐藏桌宠」变成事实上的「退出桌宠」（真机
+	 * 取证 11-01：用户看到鲸鱼跳回 DSH 右下角=语义混淆）。召回入口=托盘
+	 * （点击/右键菜单「🐋 显示小鲸鱼」）+首次隐藏的气球提示。up=false =
+	 * 桌宠还在 spawn 窗口期/已阵亡——页鲸原地不动（接力式交接）：等桌宠
+	 * 窗口真出现了（ready 握手）才潜水让位。 */
+	function petDormantOf(enabled, form, up, spawning) {
+		void form;
+		/* 常驻架构修订（11-05，用户实报「下午打开时桌宠和 DSH 里的小金鱼同时
+		 * 出现，过一会 DSH 里面的才消失」）：spawn 窗口期（up=false 且
+		 * spawning=true）页鲸也休眠——桌宠马上要出现，页鲸先顶班再潜水就是
+		 * 双鲸同屏（真机抓包 t2.9→t4.3 两鲸重叠 2s；「up=false 页鲸顶班」是
+		 * 交接时代语义，交接已随第九轮常驻架构退役）。spawn 失败（up=false
+		 * 且 spawning=false）页鲸照旧苏醒兜底，永不无鱼可看。 */
+		return !!(enabled && (up !== false || spawning));
+	}
+
 	function feedEventFrame(frame) {
 		var sid = frame.sessionId;
+	/* 桌宠（第一批）：feed 会话是宿主编码的合成 id（PET_SID_PREFIX =
+	 * 'session-pet-sN'，带主会话前缀才能过子代理静默闸门——冒烟实测）。
+	 * 这里就地给合成会话一个稳定名字「任务 N」，通知读起来是
+	 * 「任务 3 完成了 ✅」；rememberTitle 写 pet profile 的 localStorage
+	 * ——只有合成名，没有真实标题。 */
+		if (PET_MODE && sid && sid.indexOf(PET_SID_PREFIX) === 0) {
+			try {
+				var existingPetName = sessionTitles.get(sid) || '';
+				if (!existingPetName) {
+					var petName = '任务 ' + (parseInt(String(sid).slice(PET_SID_PREFIX.length), 10) || '?');
+					sessionTitles.set(sid, petName);
+					rememberTitle(sid, petName);
+				}
+			} catch (e) {}
+		}
 		var event = frame.event || {};
 		var active = resolveCurrentSessionId();
 		var isActive = sid === active;
@@ -103,14 +136,19 @@
 				 * history row and the 被中止了 announcement all hang on it.
 				 * It must also skip endFiredRecently: that 30s fail window
 				 * would swallow a legitimate stop → restart → stop. */
-				if (reason !== 'aborted' && endFiredRecently(sid)) return;
+				if (reason !== 'aborted' && !frame.replaySuppress && endFiredRecently(sid)) return;
 			}
+			/* 审计 B1（2026-11-04）：重放批帧豁免活页面竞态短路——dedup/
+			 * endFiredRecently 是为「同代活页面双通道竞态」设计的（同一次
+			 * 完成两条通道各报一次）；重启恢复流的语义是**只记账**（suppress
+			 * 已由 consume 标定），不该被这些窗口整个丢弃——丢弃=照记契约
+			 * 失效（红标/历史全丢）。 */
 			/* cross-channel completion dedup (09-06): the active-session
 			 * check above can race (chip gate / session tracking) and the
 			 * DOM chip adapter may have JUST announced this same end —
 			 * same physical end = same wall clock within seconds; a real
 			 * new completion carries its own endTime and still announces */
-			if (reason === 'completed' && endFiredFor(sid, 'success', frame.time || Date.now(), 8000)) return;
+			if (reason === 'completed' && !frame.replaySuppress && endFiredFor(sid, 'success', frame.time || Date.now(), 8000)) return;
 			try { registerBackground(sid); } catch (e) {}
 			handleMuxPayload({
 				type: 'session/event',
@@ -121,9 +159,32 @@
 					 * the newest completed turn of a flood session announce
 					 * NOTHING; the newest announces for the whole batch */
 					foldSuppress: event.foldSuppress || undefined,
-					foldCount: event.foldCount || undefined
+					foldCount: event.foldCount || undefined,
+					/* 重放批标记（审计 B1，2026-11-04）：consume 在**外层信封**
+					 * 上标 replaySuppress（bootId 换代+boot 前帧），这里构造
+					 * 内层 event 时必须带上——此前丢失=frames 的四条通知路径
+					 * 永远看不到标记，「重放批静默」从未真正生效（第十三轮
+					 * 夜间验证被免打扰+autoplay 掩盖，真机从未听到） */
+					replaySuppress: event.replaySuppress || frame.replaySuppress || undefined
 				}
 			});
+			return;
+		}
+		if (type === 'approval/asked') {
+			/* 审核请求（11-06，用户实报「提问能通知，审核通知不了」）：
+			 * approval/requested 在鲸鱼里只有消费壳（frames.js 的 ⚠️ 分支）
+			 * 而零生产者——审核通知从未被实现。DSH 0.2.1 的审批事件类型
+			 * approval/asked {id, toolName, callId?, reason?}（asar 类型表
+			 * 实证）。若它流经 session 事件总线，这里转成注意帧（⚠️
+			 * [会话名]需要你审核，reportAttention 现成）；active+后台都走
+			 * （页鲸休眠期间 DOM 不可见=桌宠/页鲸唯一通知源），seeAttention
+			 * 共享去重（SSE/轮询双通道 race + 未来 DOM 检测同 key 合流）。 */
+			var aData = event.data || {};
+			var aKey = aData.callId || aData.id || ('a:' + (frame.time || ''));
+			if (seeAttention(aKey)) {
+				try { registerBackground(sid); } catch (e) {}
+				handleMuxPayload({ type: 'approval/requested', sessionId: sid, time: frame.time || Date.now() });
+			}
 			return;
 		}
 		if (type === 'session/title') {
@@ -138,6 +199,16 @@
 			var t = event.data && event.data.title;
 			if (t && typeof t === 'string') {
 				handleMuxPayload({ type: 'session/projection', sessionId: sid, key: 'title', value: t });
+			}
+			return;
+		}
+		if (type === 'approval/asked' && PET_MODE) {
+			/* 桌宠（11-06）：枚举 feed/SSE 里的审核请求（宿主白名单只放行
+			 * toolName）→ ⚠️ 注意帧。去重键带 frame.seq——feed 轮询整环重放
+			 * 靠 consume 的 lastSeq 闸门，这里再兜 SSE/poll 双通道 race。 */
+			if (seeAttention('pet-a:' + (frame.seq || event.time || ''))) {
+				try { registerBackground(sid); } catch (e) {}
+				handleMuxPayload({ type: 'approval/requested', sessionId: sid, time: frame.time || Date.now() });
 			}
 			return;
 		}
@@ -265,6 +336,8 @@
 	 * at startup AND on the first background registration. */
 	var titlesLookedUp = false;
 	function lookupTitlesFromHistory(force) {
+		/* 桌宠：不取真实标题（枚举化边界），命名由 feedEventFrame 的合成名负责 */
+		if (PET_MODE) return;
 		if (titlesLookedUp && !force) return;
 		titlesLookedUp = true;
 		if (typeof fetch !== 'function') return;
@@ -297,12 +370,26 @@
 	lookupTitlesFromHistory(true);
 
 	function consume(events, bootId) {
+		var replayBatch = false;
 		if (bootId && bootId !== knownBootId) {
 			/* new host generation: its seq starts over — reset and only take
 			 * frames newer than the swap */
 			knownBootId = bootId;
 			lastSeq = 0;
 			rememberSeq(0);
+			/* 桌宠重放批（11-03）：DSH 重启后整环重放——重启前 60s 内的完成
+			 * 帧会**再响一次**（用户实报「任务提示音出现两次」）。历史恢复只
+			 * 应**记账**（红标/历史），不应**重播**（say/音效/面板）。
+			 * 审计 B1（2026-11-04）语义修正：**「上一代 bootId」必须取持久化
+			 * 记录**——内存态 knownBootId 初始 null，首次连接（页面刚打开/
+			 * 页面关闭期间的补达帧）也被判成「换代」→ 48b 的「补达要响」被
+			 * 误杀。真重启的判据=**localStorage 里存过上一代 bootId 且 !=
+			 * 本次**（页面重载后仍在=真的换宿主代了）；首次打开无记录=补达
+			 * 场景，照常播报。 */
+			var prevBoot = null;
+			try { prevBoot = localStorage.getItem('dsh-whale:lastBootId'); } catch (e0) {}
+			if (prevBoot && prevBoot !== bootId) replayBatch = true;
+			try { localStorage.setItem('dsh-whale:lastBootId', bootId); } catch (e1) {}
 		}
 		/* --- batch-fold pre-scan ---: count each session's completed
 		 * turn/ends that will actually feed this batch (same freshness and
@@ -328,6 +415,35 @@
 		}
 		for (var i = 0; i < events.length; i++) {
 			var f = events[i];
+			/* 桌宠仲裁（第一批）：pet/state 在 seq 闸门之前处理——它是绝对态
+			 * （幂等，重放无害），SSE 在线的页面不跑轮询，任何 seq 陈旧/缺失
+			 * 都不能错过休眠/唤醒（2026-10-31 真机洞）。
+			 * PET_MODE 短路（11-06 SSE 枚举流）：桌宠页现在也订 /events/stream，
+			 * pet/state 帧会到达桌宠页——桌宠页自己就是桌宠，绝不能把
+			 * #dsh-whale（桌宠鲸本体）休眠掉；休眠机器只属于 DSH 页内鲸。 */
+			if (f && f.type === 'pet/state') {
+				if (!PET_MODE && typeof f.enabled === 'boolean') {
+					/* force（11-05）：权威状态即使值未变也要走 DOM 应用——
+					 * 开机先藏的页鲸靠它唤醒（幂等闸门不许拦权威状态） */
+					try { applyPetDormant(petDormantOf(f.enabled, f.form, f.up, f.spawning), true); } catch (e) {}
+				}
+				continue;
+			}
+			/* 桌宠通知双击跳转（11-03）：宿主把合成码反查回真实 sessionId 后
+			 * 广播 pet/jump——页鲸是唯一持有跳转桥的一方（桌宠页没有桥也没有
+			 * DSH DOM）。core 不直接引用 ui 的跳转函数（方向闸门）：派发自定义
+			 * 事件，session-jump.js 自行监听执行。跳转是即时动作：只认 10s 内
+			 * 的新帧，重放缓冲里的旧 jump 一律忽略（刷新页面/新窗口不得凭空
+			 * 跳回旧会话）。atMs（11-06）：时间锚点透传——页鲸
+			 * openSessionAt(sid, atMs) 翻页回溯到该任务的消息。 */
+			if (f && f.type === 'pet/jump') {
+				var jTime = f.time || 0;
+				if (Date.now() - jTime < 10000 && f.sessionId &&
+					typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+					try { window.dispatchEvent(new CustomEvent('dsh-whale:pet-jump', { detail: { sessionId: f.sessionId, atMs: typeof f.atMs === 'number' ? f.atMs : undefined } })); } catch (e) {}
+				}
+				continue;
+			}
 			if (!f || typeof f.seq !== 'number' || f.seq <= lastSeq) continue;
 			rememberSeq(f.seq);
 			/* a fresh page must not replay the buffer's history — same
@@ -335,6 +451,10 @@
 			 * top-level time; bare f.time made this guard dead code) */
 			var fTime = f.time || (f.event && f.event.time);
 			if (fTime && Date.now() - fTime > 60000 && bootAt - fTime > 60000) continue;
+			/* 重放批标记（11-03）：boot 前的帧只记账不重播——see replayBatch */
+			if (replayBatch && fTime && fTime < bootAt) {
+				try { f.replaySuppress = true; } catch (e) {}
+			}
 			if (f.type === 'session/projection') {
 				if (f.key === 'title') {
 					if (f.sessionId !== resolveCurrentSessionId()) {
@@ -347,6 +467,16 @@
 								var info = subs && subs.get(f.sessionId);
 								if (info && !info.title) info.title = title;
 							} catch (e) {}
+							/* 晚到真名改写（11-06 二轮，SSE 稳态补齐）：title 帧
+							 * 晚于通知入队时（宿主 announceTitle 异步+快速任务
+							 * 同拍完成），已在屏/在队的「任务 N」要改写成真名——
+							 * poll 分支的 titles 预填早有同款调用，SSE 路径补上。
+							 * _correctReports 幂等（已是真名则 no-op）。 */
+							try {
+								if (typeof window.__dshWhale._correctReports === 'function') {
+									window.__dshWhale._correctReports(f.sessionId, title);
+								}
+							} catch (e2) {}
 						}
 					}
 					continue;
@@ -400,11 +530,55 @@
 
 	function poll() {
 		if (sseUp) return; /* the stream is live: it delivers frames + pings */
-		fetch('/api/whale-assistant/events').then(function (r) {
+		/* 桌宠：枚举 feed（token 由 WebView2 头注入层补）代替全量 events；
+		 * 页面轮询同一响应里还带着 pet.enabled 仲裁 flag */
+		fetch(PET_MODE ? '/api/whale-assistant/pet/feed' : '/api/whale-assistant/events').then(function (r) {
 			return r.ok ? r.json() : null;
 		}).then(function (data) {
 			if (data && Array.isArray(data.events)) {
 				markServerPoll(true);
+				/* 桌宠：存量标题预填（11-03）——session/title 事件只在标题变化
+				 * 时广播，老会话对桌宠静默；宿主把历史里的 真实会话→标题 用码本
+				 * 转成合成 id 随 feed 下发，这里预填通讯录（只补空缺，不覆盖
+				 * 实时 title 帧）。这是页鲸「开机主动取名」的桌宠等价物。 */
+				if (PET_MODE && data.titles && typeof data.titles === 'object') {
+					/* 11-03 诊断缝（收口后移除） */
+					try {
+						var pp = window.__dshWhale._prefillProbe = window.__dshWhale._prefillProbe || [];
+						pp.push('poll@' + Date.now() + ' keys=' + Object.keys(data.titles).join(','));
+						if (pp.length > 12) pp.shift();
+					} catch (e) {}
+					for (var tsid in data.titles) {
+						var tv = data.titles[tsid];
+						if (typeof tv !== 'string' || !tv) continue;
+						/* real names REPLACE the 任务 N placeholder (the
+						 * placeholder must never block the real one) — a live
+						 * title frame still wins by arriving later. get-then-set
+						 * kept on one line (timing-contract lint). */
+						if (!sessionTitles.get(tsid) || /^任务 \d+$/.test(sessionTitles.get(tsid))) {
+							sessionTitles.set(tsid, tv); try { rememberTitle(tsid, tv); } catch (e) {}
+							/* reportTurn reads info.label || info.title ||
+							 * bookTitle — a placeholder already固化 in
+							 * subagentSessions would压住 the real name, so
+							 * swap it here too (placeholder-only) */
+							try {
+								var w = window.__dshWhale || {};
+								var sinfo = w.subagentSessions && w.subagentSessions.get(tsid);
+								if (sinfo && (!sinfo.title || /^任务 \d+$/.test(sinfo.title))) sinfo.title = tv;
+								/* 秒回任务的完成通知先于本预填生成（文案已带
+								 * 「任务 N」占位入队）——晚到真名改写队列与在屏
+								 * 气泡，与页鲸 correctReports 同一条契约 */
+								if (typeof w._correctReports === 'function') w._correctReports(tsid, tv);
+							} catch (e) {}
+						}
+					}
+				}
+				/* PET_MODE 短路（11-06 SSE 枚举流）：休眠仲裁只属于 DSH 页内鲸
+				 * ——桌宠页即使拿到 pet 字段也绝不应用（桌宠页的 #dsh-whale
+				 * 是桌宠本体，不是页鲸） */
+				if (!PET_MODE && data.pet && typeof data.pet.enabled === 'boolean') {
+					try { applyPetDormant(petDormantOf(data.pet.enabled, data.pet.form, data.pet.up, data.pet.spawning), true); } catch (e) {}
+				}
 				consume(data.events, data.bootId);
 			} else {
 				/* a non-OK route (plugin gone / auth changed) is exactly the
@@ -429,14 +603,26 @@
 		try { f = JSON.parse(raw); } catch (e) { return; }
 		if (!f || typeof f !== 'object') return;
 		if (f.type === 'ping') { markServerPoll(true); return; }
-		if (f.type === 'hello') {
-			if (f.bootId && f.bootId !== knownBootId) { sseBootId = f.bootId; consume([], f.bootId); }
-			else if (f.bootId) { sseBootId = f.bootId; }
-			return;
-		}
+			if (f.type === 'hello') {
+				if (f.bootId && f.bootId !== knownBootId) { sseBootId = f.bootId; consume([], f.bootId); }
+				else if (f.bootId) { sseBootId = f.bootId; }
+				/* 桌宠仲裁：连接即知开关态（SSE 在线的页面不跑轮询，hello 是它
+				 * 唯一的 connect-time 状态源）；隐藏形态不休眠（召回入口）。
+				 * PET_MODE 短路（11-06 SSE 枚举流）：桌宠页同理由本页扮演桌宠，
+				 * 不应用休眠。 */
+				if (!PET_MODE && f.pet && typeof f.pet.enabled === 'boolean') {
+					try { applyPetDormant(petDormantOf(f.pet.enabled, f.pet.form, f.pet.up, f.pet.spawning), true); } catch (e) {}
+				}
+				return;
+			}
 		consume([f], sseBootId || undefined);
 	}
 	function connectSSE() {
+		/* 11-06 枚举 SSE 流（用户实报「任务通知有延时」）：宿主现在按 pet
+		 * token 把 SSE 连接分流——桌宠连接收到的是逐帧枚举载荷（与 /pet/feed
+		 * 同一码本同一边界），页鲸连接照旧收全量帧。桌宠通知从 3s 轮询节奏
+		 * 变成即时推送；轮询保留作断线兜底（EventSource 断开→sseUp=false→
+		 * poll 恢复跑 /pet/feed 补漏帧，lastSeq 闸门去重）。 */
 		if (typeof EventSource !== 'function') return; /* vm sandbox / ancient browsers */
 		try { sse = new EventSource('/api/whale-assistant/events/stream'); } catch (e) { return; }
 		sse.onopen = function () { sseUp = true; };
@@ -468,5 +654,8 @@
 		window.__dshWhale._pinSession = pinWindowSession;
 		window.__dshWhale._adoptSessionPin = adoptCurrentSessionPin;
 		window.__dshWhale._resolveSessionId = resolveCurrentSessionId;
+		/* 仲裁纯函数缝（11-05）：spawning 语义单测入口——petDormantOf 定义在
+		 * initServerEvents 闭包内，exports.js 够不着（test-whale 实证） */
+		window.__dshWhale._petDormantOf = petDormantOf;
 	} catch (e) {}
 	})();

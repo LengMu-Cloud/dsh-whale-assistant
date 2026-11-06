@@ -338,6 +338,16 @@
 				setTimeout(function () { location.reload(); }, 80);
 			});
 			menu.appendChild(refreshItem);
+			/* 桌宠常驻（第九轮用户定稿）：页面侧不再有「桌宠模式」开关——小鲸鱼
+			 * 默认活动范围=整个桌面，开机即常驻（不支持平台由页内鲸鱼兜底）。
+			 * 桌宠窗口里由 __dshPetHost 缝追加三态形态组 */
+			/* pet seam: the screen-pet window injects 形态组 (完整/气泡/隐藏)
+			 * into every rebuilt menu via __dshPetHost — a no-op everywhere else */
+			try {
+				if (window.__dshPetHost && typeof window.__dshPetHost.appendMenuItems === 'function') {
+					window.__dshPetHost.appendMenuItems(menu);
+				}
+			} catch (e) { }
 			if (!ctxMenu) document.body.appendChild(menu);
 			ctxMenu = menu;
 			/* position near the cursor, flipping at the viewport edges — the
@@ -350,6 +360,39 @@
 			var top = clientY;
 			if (left + mw > window.innerWidth - 8) left = clientX - mw;
 			if (top + mh > window.innerHeight - 8) top = clientY - mh;
+			/* 11-05 用户实报「右键菜单会挡住小鲸鱼」：菜单锚在光标上，而右键的
+			 * 光标就在鲸鱼身上——视口翻转后整块压在鲸鱼上（真机截图：菜单
+			 * 右下角=光标=鲸鱼身）。翻转后与鲸鱼布局盒求交，相交就从
+			 * 右/左/上/下四个候选位挑第一个**完整入屏且零重叠**的（各留
+			 * 10px 缝）；全放不下取夹紧后重叠最小的。布局盒 offset* 免疫
+			 * bob 动画 transform（同 clampBubble 原理）。 */
+			if (whale && whale.offsetWidth > 0) {
+				var wx = whale.offsetLeft, wy = whale.offsetTop;
+				var ww = whale.offsetWidth, wh = whale.offsetHeight;
+				function menuHitsWhale(ml, mt) {
+					return ml < wx + ww && ml + mw > wx && mt < wy + wh && mt + mh > wy;
+				}
+				if (menuHitsWhale(left, top)) {
+					var GAP = 10, MARG = 8;
+					var cands = [
+						{ l: wx + ww + GAP, t: top },
+						{ l: wx - mw - GAP, t: top },
+						{ l: left, t: wy - mh - GAP },
+						{ l: left, t: wy + wh + GAP }
+					];
+					var bestL = left, bestT = top, bestOv = Infinity;
+					for (var ci = 0; ci < cands.length; ci++) {
+						var cl = Math.min(Math.max(cands[ci].l, MARG), window.innerWidth - mw - MARG);
+						var ct = Math.min(Math.max(cands[ci].t, MARG), window.innerHeight - mh - MARG);
+						if (!menuHitsWhale(cl, ct)) { bestL = cl; bestT = ct; bestOv = 0; break; }
+						var ox = Math.max(0, Math.min(cl + mw, wx + ww) - Math.max(cl, wx));
+						var oy = Math.max(0, Math.min(ct + mh, wy + wh) - Math.max(ct, wy));
+						if (ox * oy < bestOv) { bestOv = ox * oy; bestL = cl; bestT = ct; }
+					}
+					left = bestL;
+					top = bestT;
+				}
+			}
 			menu.style.left = Math.max(8, left) + 'px';
 			menu.style.top = Math.max(8, top) + 'px';
 			menu.classList.remove('show');
@@ -545,6 +588,12 @@
 			item('拖着我走：位置会记住', '按住我拖到喜欢的角落，刷新后还在这。');
 			sec('🐳 我是什么');
 			item('打工小鲸鱼，住在 DeepSeek Harness 右下角', '只读任务事件做播报和记录，不拦截、不修改任何任务行为，随便折腾不影响工作。任务在后台跑我也会看着，跑完 3 秒内告诉你。');
+			sec('🐋 桌宠模式（桌面上的独立小鲸鱼）');
+			item('开机常驻：住在桌面上，不只在 DSH 里', '小鲸鱼开机就出现在桌面右下角，DSH 最小化也在。它在时 DSH 页里那只小金鱼会休息（页鲸休眠）；桌宠万一出意外，小金鱼会自动回来顶班，修好后自己回去。');
+			item('右键小鲸鱼：三种形态', '🐋 完整形态（日常）/ 🫧 缩成气泡 / 🙈 隐藏小鲸鱼＝躲猫猫：游到右下角收成一只小气泡，点一下气泡就破、鲸鱼冒出来。');
+			item('通知、红标、用量：页内同款', '桌宠上的通知与页内完全同一套——真名播报、红标未读、三行用量、读回；双击通知气泡直接跳回 DSH 对应对话并把窗口拉到前台。');
+			item('📜 历史任务：同一份账本', '桌宠菜单里的历史与页内共用一份记录（最近 50 条）：可搜索、可清空、可导出，点任意记录跳回对话。');
+			item('意外消失会自己回来', '小鲸鱼进程意外退出时，宿主每 30 秒体检一次，最多 1 分钟自动重生，不用重启 DSH。');
 			sec('🔔 通知一览');
 			item('[对话名]开工了 …', '任务开始跑。不进红标（不算未读）。');
 			item('[对话名]完成了 …', '正常结束：响一声 + 红标 +1，下方同时弹出用量面板（本次消耗 / 全对话累计 / 上下文占用），和气泡同生同灭。');
@@ -554,7 +603,7 @@
 			item('🤔 [对话名]需要你选择', '模型在等你作答：响铃 + 红标 +1。回到对话作答即收尾；任务还没跑完，用量等完成通知再统一看。');
 			item('⚠️ [对话名]需要你审核', '有工具调用等你批准：同上。');
 			item('上下文快挤爆了…建议 /compact', '上下文占用达到压力阈值时提醒一次。');
-			item('⏰ 定时提醒', '右键菜单设的闹钟到点播报（不进红标，不带用量面板）。');
+			item('⏰ 定时提醒', '右键菜单设的闹钟到点播报（会计入红标，不带用量面板）。');
 			sec('🐾 交互手势');
 			gesture(1, '左键拖动：移动我');
 			gesture(2, '左键单击：进行互动（读通知）');
@@ -576,7 +625,7 @@
 			item('🩺 运行状态', '鲸鱼自查各条通知链路（后台通知/用量读取/跳转）；平时全部正常、不打扰，出问题我头上会亮 ⚠️，设置里点"运行状态"能看是哪一条。');
 			item('🩺 调试模式', '排障用：开启后往控制台输出调试信息，并把取证数据写进 ~/.dsh/whale-assistant.json 的 _debug 键，平时保持关闭。');
 			sec('📜 历史与红标');
-			item('红标数字 = 未读通知数', '左键单击读一条（读过的消失），双击一键清空。完成/失败/提问/审核计入，开工/提醒不计入。');
+			item('红标数字 = 未读通知数', '左键单击读一条（读过的消失），双击一键清空。完成/失败/提问/审核/提醒计入，开工不计入。');
 			item('📜 历史任务（右键菜单）', '保留最近 50 条：本地 + 服务器双存储，桌面壳和别的浏览器窗口看到同一份；支持搜索、清空、导出。想彻底遗忘某个对话：先清历史、再「清空通讯录」（历史里存的名字快照会在下次加载时回流，两步都做才真正遗忘）。');
 			item('跳回对话', '双击通知气泡，或点历史抽屉里的任意一条记录。');
 			sec('❤️ 陪伴小彩蛋');
@@ -810,7 +859,12 @@
 			var rows = [
 				['后台通知通道', rep.server === 'fail' ? '❌ 失效（收不到后台/失败通知）' : '✅ 正常'],
 				['用量读取', rep.dom === 'fail' ? '❌ 异常（tokens 面板可能为空）' : '✅ 正常'],
-				['气泡跳转', rep.jump === 'ok' ? '✅ 可用' : '⚠️ 不可用（走侧栏兜底）']
+				/* 桌宠页的跳转走宿主通道（与通知 feed 同路由同 token），健康
+				 * 判据不同——别把页鲸的「侧栏兜底」文案搬到桌宠上误导用户
+				 * （11-03 实机：桌宠跳转修好了，面板还在报「不可用」） */
+				['气泡跳转', PET_MODE
+					? (rep.jump === 'ok' ? '✅ 可用（双击通知直达）' : '⚠️ 不可用（宿主通道异常）')
+					: (rep.jump === 'ok' ? '✅ 可用' : '⚠️ 不可用（走侧栏兜底）')]
 			];
 			for (var i = 0; i < rows.length; i++) {
 				var row = document.createElement('div');

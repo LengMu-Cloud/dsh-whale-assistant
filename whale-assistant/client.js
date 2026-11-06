@@ -32,6 +32,12 @@ window.__ModuleLoader__.load({
 			holder.setAttribute('aria-hidden', 'true');
 			holder.innerHTML = assets.svg || '';
 			document.body.appendChild(holder);
+			/* 桌宠仲裁防闪烁（第一批）：pet 开启时页面鲸鱼休眠——boot 即按
+			 * 缓存隐藏（whale.js 起来后由 /events pet.enabled 校正），避免
+			 * 双鲸并存闪现 3 秒 */
+			try {
+				if (localStorage.getItem('dsh-whale:petDormant') === '1') holder.style.display = 'none';
+			} catch (e) { /* storage unavailable: whale.js path still corrects */ }
 
 			(0, eval)(code);
 			console.log('[dsh-whale-assistant] whale loaded from plugin routes');

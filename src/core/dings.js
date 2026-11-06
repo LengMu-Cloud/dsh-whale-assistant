@@ -30,7 +30,13 @@
 			}
 			if (p && typeof p.then === 'function') {
 				p.then(function () {
-					if (dingKinds.length > 0) pumpDings();
+					/* 积压收敛（11-03 用户实报「提示音出现两次」）：autoplay
+					 * 挂起期间排队的 ding 在解锁后**连响**——resume 成功后只
+					 * 播最新一条（burst 保护同一语义：积压的历史已无时效） */
+					if (dingKinds.length > 0) {
+						if (dingKinds.length > 1) dingKinds.splice(0, dingKinds.length - 1);
+						pumpDings();
+					}
 				}).catch(function () {
 					/* resume rejected; stay silent rather than crash */
 				});
@@ -179,6 +185,7 @@
 
 	function playDing(kind) {
 		if (soundMuted) return; /* right-click menu: one-tap mute */
+		if (petDormant) return; /* 桌宠在岗：页面鲸鱼休眠静默（桌宠窗口自己响） */
 		/* 免打扰: completion/failure sounds are dropped (attention still
 		 * rings — the user must act on those regardless of the hour) */
 		if (dndActive() && (kind === 'done' || kind === 'fail')) return;

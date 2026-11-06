@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="style.css">
+<style>
+  html, body { margin: 0; background: transparent; overflow: hidden; }
+  /* 首建区域淡入：宿主第一次 SetWindowRgn 的 DWM re-clip 可能闪 1 帧空白
+     （POC 坑 20）——鲸鱼从透明淡入 220ms，把这次重贴藏在淡入里 */
+  #dsh-whale { opacity: 0; transition: opacity .22s ease; }
+  /* 桌宠版面修正：DSH 页内 UI 的投影/毛玻璃是为应用深底设计的，透到任意壁纸上
+     会显形成灰晕/黑块 —— 桌宠语境一律去阴影、玻璃改实色（与深色主题同色系）。
+     水花/涟漪/喷水等水效保留半透明（透墙纸是合理观感）。 */
+  #dsh-whale { filter: none !important; }
+  #dsh-whale.dsh-whale-asleep { filter: grayscale(0.55) brightness(0.85) !important; }
+  .dsh-whale-bubble, .dsh-whale-note {
+    background: #232b3f !important;
+    color: #e8eefc !important;
+    box-shadow: none !important;
+    filter: none !important;
+    backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+  }
+  .dsh-whale-bubble::after, .dsh-whale-note::after {
+    border-top-color: #232b3f !important; border-bottom-color: #232b3f !important;
+  }
+  .dsh-whale-menu, .dsh-whale-settings, .dsh-whale-wardrobe, .dsh-whale-history,
+  .dsh-whale-status, .dsh-whale-status-report {
+    background: #141c30 !important;
+    box-shadow: none !important;
+    filter: none !important;
+    backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+  }
+  /* 裸悬浮指示标（⚠️/💤）：原生无底色，桌宠语境必须保持透明——误罩会成深蓝底 */
+  .dsh-whale-health-chip, .dsh-whale-zzz {
+    background: transparent !important;
+    box-shadow: none !important;
+    filter: none !important;
+    backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+  }
+  /* 红标：原生实色红胶囊，保底色只去投影 */
+  .dsh-whale-badge {
+    box-shadow: none !important;
+    filter: none !important;
+  }
+  /* 气泡形态（第一批三态之一；10-31 用户反馈重做）：不是把鲸鱼缩小——
+     鲸鱼实体收进一枚「玻璃圆角卡」：半透明深色玻璃渐变+高光描边+内投影
+     （WebView2 透明页拿不到壁纸做 backdrop，玻璃感靠材质层叠伪造），
+     中间是线稿小鲸鱼（同一条 logo path，CSS 换装成 stroke 线条）。
+     形变动画：body class 切换驱动 transform/opacity 过渡（弹性曲线），
+     盒子尺寸同步过渡；morph 期间引导层把 d 报成 1（宿主区域冻结），
+     结束后落回贴身圆角矩形（宿主 b 标志跳过多边形用圆角区域）。 */
+  /* opacity 淡入必须与 width/height 合并在同一条 transition 里（三轮）：
+     后写的 transition 声明会整体覆盖前者——分离写=淡入被静默杀死，
+     桌宠鲸鱼出现变成生硬的瞬间贴出 */
+  #dsh-whale { transition: opacity .22s ease, width .45s cubic-bezier(.34,1.56,.64,1), height .45s cubic-bezier(.34,1.56,.64,1); }
+  body.pet-form-bubble #dsh-whale { width: 64px !important; height: 64px !important; }
+  #pet-bubble {
+    position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+    border-radius: 30%;
+    opacity: 0; transform: scale(0.25) rotate(-30deg);
+    transition: transform .5s cubic-bezier(.34,1.56,.64,1), opacity .32s ease;
+    pointer-events: none;
+    background: linear-gradient(150deg, rgba(56,74,118,0.60) 0%, rgba(24,34,62,0.58) 48%, rgba(88,110,168,0.42) 100%);
+    border: 1px solid rgba(255,255,255,0.32);
+    box-shadow: 0 8px 22px rgba(8,16,38,0.38),
+                inset 0 1px 0 rgba(255,255,255,0.50),
+                inset 0 -8px 14px rgba(120,150,220,0.16),
+                inset 0 0 18px rgba(180,205,255,0.10);
+  }
+  body.pet-form-bubble #pet-bubble { opacity: 1; transform: scale(1) rotate(0deg); }
+  /* 线稿鲸鱼：同一条 logo path，气泡语境下 stroke 化（线条而非实心）。
+   **svg transition 必须限定在气泡形态**（真机取证 11-01 二轮）：泛挂在
+   #dsh-whale svg 上会把游动期每帧的 rotate 也做 0.5s 弹性追赶——鲸鱼
+   整个身体转着游（用户描述「180° 旋转着游/倒着游」） */
+  body.pet-form-bubble #dsh-whale svg { transition: transform .5s cubic-bezier(.34,1.56,.64,1); }
+  #dsh-whale svg { transform-origin: center; }
+  body.pet-form-bubble #dsh-whale svg {
+    transform: scale(0.5);
+  }
+  body.pet-form-bubble #dsh-whale svg path {
+    fill: none !important;
+    stroke: #dbe8ff !important;
+    stroke-width: 1.5 !important;
+  }
+  body.pet-form-bubble #dsh-whale svg g { display: none !important; } /* 装备组在气泡里隐藏 */
+  /* 躲猫猫形态（11-01 用户定稿三轮：隐藏≠消失——鲸鱼游到桌面右下角，收成
+     一枚**水下小圆气泡**，点一下气泡破裂、鲸鱼从气泡里冒出来。#pet-peek
+     常驻 DOM，body.pet-form-peek 才显示；位置由 applyForm 在鲸鱼到达角落时
+     写入（≈鲸鱼头部处）。窗口从此**永不 Hide/Show**——WebView2 隐藏再显示
+     会丢透明表面（整面黑块真机实证）+ 隐藏期节流定时器（远程 form 变化到
+     不了页面），peek 一并根治。 */
+  #pet-peek {
+    position: fixed; width: 34px; height: 34px; z-index: 50;
+    cursor: pointer; display: none;
+  }
+  body.pet-form-peek #pet-peek {
+    display: block;
+    animation: pet-peek-pop .4s cubic-bezier(.34,1.56,.64,1);
+  }
+  /* 破裂（11-01 三轮）：点击后先播爆裂再放鲸鱼——scale 撑大+透明消散 */
+  #pet-peek.burst { animation: pet-peek-burst .3s ease-out forwards; }
+  #pet-peek .ball {
+    position: absolute; left: 0; top: 0; width: 34px; height: 34px;
+    border-radius: 50%;
+    /* 水下气泡：边缘白亮环+内部淡蓝透明，中心近透明露出壁纸 */
+    background: radial-gradient(circle at 50% 50%,
+      rgba(210, 232, 255, 0.10) 0%,
+      rgba(170, 205, 250, 0.16) 58%,
+      rgba(235, 246, 255, 0.55) 84%,
+      rgba(255, 255, 255, 0.72) 100%);
+    border: 1.5px solid rgba(255, 255, 255, 0.65);
+    box-shadow: 0 2px 8px rgba(70, 120, 210, 0.25),
+                inset 0 -3px 6px rgba(120, 170, 240, 0.30),
+                inset 0 2px 4px rgba(255, 255, 255, 0.55);
+    animation: pet-peek-float 2.8s ease-in-out infinite;
+    transform-origin: center;
+  }
+  #pet-peek .ball::before {
+    /* 左上高光弧 */
+    content: '';
+    position: absolute; left: 18%; top: 12%;
+    width: 11px; height: 7px;
+    border-radius: 50%;
+    border-top: 2.5px solid rgba(255, 255, 255, 0.9);
+    border-left: 1.5px solid rgba(255, 255, 255, 0.5);
+    transform: rotate(-28deg);
+  }
+  #pet-peek .ball::after {
+    /* 右下小反光点 */
+    content: '';
+    position: absolute; right: 22%; bottom: 18%;
+    width: 4px; height: 4px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.65);
+  }
+  @keyframes pet-peek-pop { from { transform: scale(0); } to { transform: scale(1); } }
+  @keyframes pet-peek-float {
+    0%, 100% { transform: translateY(0) scale(1); }
+    50% { transform: translateY(-3px) scale(1.04); }
+  }
+  @keyframes pet-peek-burst {
+    from { transform: scale(1); opacity: 1; }
+    to { transform: scale(1.6); opacity: 0; }
+  }
+</style>
+</head>
+<body>
+<div id="dsh-whale">__WHALE_SVG__</div>
+<div id="pet-peek"><div class="ball"></div></div>
+<script>
+/* 引导层 v6（第一批）：POC v4 引导层 + 宿主缝。
+   1) 轮廓多边形：svg 画到离屏 canvas(2x)，逐行 alpha>100 跨度 -> 相对 svg 盒
+      的 CSS 像素多边形（径向外扩 14px）；装备变化才重算
+   2) 每拍上报 {v, whale(布局盒), rects(浮层), d(运动), b(气泡形态), poly(版本变化/400ms 补发)}
+      经 postMessage 直推宿主，title 只写坐标（兜底通道）
+   3) __dshPetHost：whale.js 菜单缝（形态组）+ 形态应用 + 认证自杀
+   4) 异常写进 payload.err 便于宿主日志排障 */
+(function () {
+  var CLASSES = ['dsh-whale-bubble', 'dsh-whale-menu', 'dsh-whale-settings', 'dsh-whale-wardrobe', 'dsh-whale-history', 'dsh-whale-status', 'dsh-whale-status-report', 'dsh-whale-zzz', 'dsh-whale-badge', 'dsh-whale-note', 'dsh-whale-heart', 'dsh-whale-ripple', 'dsh-whale-jet', 'dsh-whale-waterring', 'dsh-whale-spray', 'dsh-whale-health-chip'];
+  var PAD = 14;
+  var EPS = 2;
+  var svgEl = document.querySelector('#dsh-whale svg');
+  var whaleEl = document.getElementById('dsh-whale');
+  /* 气泡卡（形态变形的玻璃层）：先于 whale.js 插入，CSS 过渡由 body class 驱动 */
+  try {
+    var petBubble = document.createElement('div');
+    petBubble.id = 'pet-bubble';
+    whaleEl.insertBefore(petBubble, whaleEl.firstChild);
+  } catch (e) { }
+  /* 躲猫猫小气泡：单击/右键=气泡破裂→鲸鱼从气泡里冒出来（form 翻回 full，
+   * POST 走 ctrl 入账本）。破裂先播 0.3s 再放鲸鱼=「点一下气泡破了」。 */
+  try {
+    var petPeek = document.getElementById('pet-peek');
+    if (petPeek) {
+      var peekBursting = false;
+      var peekOut = function (ev) {
+        try { ev.preventDefault(); } catch (e0) { }
+        if (peekBursting) return;
+        peekBursting = true;
+        try {
+          fetch('ctrl', { method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ action: 'form', value: 'full' }) }).catch(function () { });
+        } catch (e1) { }
+        try { petPeek.classList.add('burst'); } catch (e2) { }
+        setTimeout(function () {
+          try { petPeek.classList.remove('burst'); } catch (e3) { }
+          peekBursting = false;
+          applyForm('full');
+        }, 300);
+      };
+      petPeek.addEventListener('click', peekOut);
+      petPeek.addEventListener('contextmenu', peekOut);
+    }
+  } catch (e) { }
+  var poly = null, polyV = 0, sentV = -1, curSig = '?';
+  var polyRepeat = 0;   /* 新版本 poly 连发两拍：ps1 的 16ms latest-wins 合流
+                           会用紧跟的无 poly 消息覆盖首拍（真机 20:10 实证
+                           poly 丢失 2.4s），第二拍兜底 */
+  var extMx = 0, extPn = 0;   /* extraction diagnostics: max alpha, point count */
+  var lastSent = '';
+  var lastPolyAt = 0;
+  var fatal = false;
+  var currentForm = 'full';
+  var morphUntil = 0;   /* 形变动画期间 d 报 1（宿主区域冻结，防 60Hz 贴身重建闪烁） */
+  var readySent = false;   /* ready 握手只发一次 */
+
+  function sendCtrl(obj) {
+    try { if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage(obj); } catch (e) { }
+  }
+
+  /* ---- 形态三态（full 轮廓鲸鱼 / bubble 玻璃气泡 / hidden=右下角躲猫猫） ---- */
+  /* hidden 语义（11-01 用户定稿）：鲸鱼游到桌面右下角，收成一只躲在角落的
+     小眼睛，单击跳出来——窗口永不 Hide（WebView2 隐藏再显示丢透明表面=整面
+     黑块 + 隐藏期节流定时器，双坑根治）。morph 冻结只在 bubble 相关切换时
+     置位（hidden↔full 无形变动画，误报 d=1 会把区域撑成全工作区 700ms）。 */
+  function applyForm(v) {
+    if (v !== 'full' && v !== 'bubble' && v !== 'hidden') return;
+    if (v === currentForm) return;   /* 幂等：fetchState 2s 轮询会重复喂同值 */
+    var prev = currentForm;
+    currentForm = v;
+    if ((v === 'bubble' || prev === 'bubble') && v !== 'hidden' && prev !== 'hidden') {
+      morphUntil = performance.now() + 700;   /* 形变期=运动期（区域冻结） */
+    }
+    try {
+      document.body.classList.toggle('pet-form-bubble', v === 'bubble');
+    } catch (e) { }
+    if (v === 'hidden') {
+      /* 先让鲸鱼游到右下角（自然潜入角落），到达才收成眼睛 */
+      var showEye = function () {
+        try {
+          var w2 = whaleEl.offsetWidth || 88, h2 = whaleEl.offsetHeight || 88;
+          var pe = document.getElementById('pet-peek');
+          /* 眼睛≈鲸鱼头部位置：盒子中心偏左上（logo 鲸头朝左上） */
+          pe.style.left = Math.max(0, whaleEl.offsetLeft + w2 * 0.34 - 17) + 'px';
+          pe.style.top = Math.max(0, whaleEl.offsetTop + h2 * 0.30 - 17) + 'px';
+          document.body.classList.add('pet-form-peek');
+        } catch (e) { }
+        try { whaleEl.style.display = 'none'; } catch (e2) { }
+        lastSent = '';   /* 强制一拍上报 eye 区域 */
+      };
+      try {
+        if (window.__dshWhale && typeof window.__dshWhale.peekHide === 'function') {
+          window.__dshWhale.peekHide(showEye);
+        } else {
+          showEye();   /* 缝缺席：原地收成眼睛 */
+        }
+      } catch (e3) { showEye(); }
+      sendCtrl({ c: 'form', v: v });
+      return;
+    }
+    if (prev === 'hidden') {
+      /* 从躲猫猫跳出来：先恢复鲸鱼显示（display:none 期间 offsetWidth=0，
+       * 不恢复会把鲸鱼盒报成 (0,0)=左上角隐形区域黑洞），再收眼睛、
+       * 原地弹跳+水花+台词（choreography 在 whale.js 的 peekShow 缝里） */
+      try { whaleEl.style.display = ''; } catch (e4) { }
+      try { document.body.classList.remove('pet-form-peek'); } catch (e5) { }
+      try { if (window.__dshWhale && typeof window.__dshWhale.peekShow === 'function') window.__dshWhale.peekShow(); } catch (e6) { }
+    }
+    sendCtrl({ c: 'form', v: v });
+    lastSent = '';  /* 形态切换后强制一拍重建 */
+  }
+
+  /* ---- 认证自杀：/pet/* 403 = token 失效（宿主重启/被顶替）——立即上报
+     fatal 让宿主进程退出，绝不带着坏会话空转 ---- */
+  function authFail() {
+    fatal = true;
+    sendCtrl({ c: 'fatal', r: 'auth' });
+    try { document.title = 'WR:' + JSON.stringify({ fatal: 1 }); } catch (e) { }
+  }
+  function fetchState() {
+    try {
+      fetch('state').then(function (r) {
+        if (r.status === 401 || r.status === 403) { authFail(); return null; }
+        return r.ok ? r.json() : null;
+      }).then(function (doc) {
+        if (doc && doc.form && doc.form !== currentForm) applyForm(doc.form);
+      }).catch(function () { });
+    } catch (e) { }
+  }
+  fetchState();
+  setInterval(fetchState, 2000);
+
+  /* ---- 宿主缝：whale.js 右键菜单构建时调用，追加桌宠三态形态组 ---- */
+  window.__dshPetHost = {
+    applyForm: applyForm,
+    form: function () { return currentForm; },
+    appendMenuItems: function (menu) {
+      if (!menu || fatal) return;
+      var mark = { full: '🐋 完整形态', bubble: '🫧 缩成气泡', hidden: '🙈 隐藏小鲸鱼' };
+      var sep = document.createElement('div');
+      sep.className = 'dsh-whale-menu-sep';
+      menu.appendChild(sep);
+      var forms = ['full', 'bubble', 'hidden'];
+      for (var i = 0; i < forms.length; i++) {
+        (function (f) {
+          var row = document.createElement('div');
+          row.className = 'dsh-whale-menu-item';
+          row.textContent = mark[f] + (currentForm === f ? ' ✓' : '');
+          row.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            try {
+              fetch('ctrl', { method: 'POST', headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ action: 'form', value: f }) }).catch(function () { });
+            } catch (e) { }
+            applyForm(f);
+            try { document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 })); } catch (e2) { }
+          });
+          menu.appendChild(row);
+        })(forms[i]);
+      }
+      /* 无退出项（第九轮用户定稿）：桌宠常驻，三态即全部功能 */
+    }
+  };
+
+  function isDrag() {
+    try {
+      var cl = whaleEl.classList;
+      return cl.contains('dsh-whale-dragging') || cl.contains('dsh-whale-swimming');
+    } catch (e) { return false; }
+  }
+
+  /* burst mode: any DOM insertion / class / style change anywhere in the page
+     (menu opening, bubble show, ripples, whale drag) keeps pushes running at
+     display rate for 800ms -> pop animations and effect trails tracked
+     smoothly; idle stays on the quiet 250ms interval */
+  var rafPending = false, burstUntil = 0;
+  function armPush() {
+    if (rafPending) return;
+    rafPending = true;
+    requestAnimationFrame(function () {
+      rafPending = false;
+      push();
+      /* 只续跑、不续期：burstUntil 只由真实 DOM 变化（schedulePush）重置，
+         否则 rAF 链永不退场（空闲 60Hz 空转的根因） */
+      if (performance.now() < burstUntil) armPush();
+    });
+  }
+  function schedulePush() {
+    /* hidden 不再静默（躲猫猫改版）：过渡期鲸鱼游向角落要持续上报 d=1；
+     * 眼睛就位后 payload 恒定（json===lastSent 自然静默），CSS 动画不触发
+     * MutationObserver——无空转风险 */
+    if (fatal) return;
+    burstUntil = performance.now() + 800;
+    armPush();
+  }
+  try {
+    if (window.MutationObserver && document.body) {
+      new MutationObserver(schedulePush).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+    }
+  } catch (e) { }
+
+  function sig() {
+    var s = '';
+    var ids = ['helmet', 'coffee'];
+    for (var i = 0; i < ids.length; i++) {
+      var el = document.getElementById('dsh-whale-gear-' + ids[i]);
+      s += (el && getComputedStyle(el).display !== 'none') ? '1' : '0';
+    }
+    return s;
+  }
+
+  function extract() {
+    curSig = sig();
+    try {
+      var vb = svgEl.viewBox.baseVal;
+      var W = vb.width || 50, H = vb.height || 50;
+      var cw = Math.round(W * EPS), ch = Math.round(H * EPS);
+      var str = new XMLSerializer().serializeToString(svgEl);
+      var url = URL.createObjectURL(new Blob([str], { type: 'image/svg+xml' }));
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var cv = document.createElement('canvas');
+          cv.width = cw; cv.height = ch;
+          var cx = cv.getContext('2d');
+          cx.drawImage(img, 0, 0, cw, ch);
+          var d = cx.getImageData(0, 0, cw, ch).data;
+          var left = [], right = [];
+          extMx = 0;
+          for (var y = 0; y < ch; y++) {
+            var mn = -1, mx = -1;
+            var base = y * cw * 4 + 3;
+            for (var x = 0; x < cw; x++) {
+              var a = d[base + x * 4];
+              if (a > extMx) extMx = a;
+              if (a > 100) { if (mn < 0) mn = x; mx = x; }
+            }
+            left.push(mn); right.push(mx);
+          }
+          var pts = [];
+          for (var y1 = 0; y1 < ch; y1 += 2) { if (left[y1] >= 0) pts.push([left[y1], y1]); }
+          for (var y2 = ch - 2; y2 >= 0; y2 -= 2) { if (right[y2] >= 0) pts.push([right[y2], y2]); }
+          if (pts.length < 3) { extPn = 0; poly = null; polyV++; return; }
+          extPn = pts.length;
+          var sx = (svgEl.clientWidth || 88) / W, sy = (svgEl.clientHeight || 88) / H;
+          var out = [];
+          for (var i = 0; i < pts.length; i++) {
+            out.push([pts[i][0] / EPS * sx, pts[i][1] / EPS * sy]);
+          }
+          var cxx = 0, cyy = 0, j;
+          for (j = 0; j < out.length; j++) { cxx += out[j][0]; cyy += out[j][1]; }
+          cxx /= out.length; cyy /= out.length;
+          for (j = 0; j < out.length; j++) {
+            var dx = out[j][0] - cxx, dy = out[j][1] - cyy;
+            var len = Math.sqrt(dx * dx + dy * dy) || 1;
+            out[j] = [out[j][0] + dx / len * PAD, out[j][1] + dy / len * PAD];
+          }
+          poly = out; polyV++;
+        } catch (e) { poly = null; polyV++; }
+        finally { URL.revokeObjectURL(url); }
+      };
+      img.onerror = function () { poly = null; polyV++; URL.revokeObjectURL(url); };
+      img.src = url;
+    } catch (e) { poly = null; polyV++; }
+  }
+
+  function rects(q) {
+    var out = [];
+    for (var i = 0; i < CLASSES.length; i++) {
+      var els = document.querySelectorAll('.' + CLASSES[i]);
+      for (var j = 0; j < els.length; j++) {
+        var el = els[j];
+        var r = el.getBoundingClientRect();
+        if (r.width < 2 || r.height < 2) continue;
+        var cs = getComputedStyle(el);
+        if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) < 0.05) continue;
+        var l = Math.floor(r.left) - PAD, t = Math.floor(r.top) - PAD;
+        var rr = Math.ceil(r.right) + PAD, bb = Math.ceil(r.bottom) + PAD;
+        if (q) {
+          l = Math.round(l / q) * q; t = Math.round(t / q) * q;
+          rr = Math.round(rr / q) * q; bb = Math.round(bb / q) * q;
+        }
+        out.push([l, t, rr, bb]);
+      }
+    }
+    return out;
+  }
+
+  /* 右键菜单关闭项：区域裁剪让 DSH 的"点外部关闭"（document pointerdown）
+     在桌面版失效——菜单外就是桌面，点击穿透了。给每次打开的菜单注入一个
+     原生样式的「❌ 关闭」项，点击后向 body 派发合成 pointerdown，恰好走进
+     whale.js 自己的外部关闭逻辑（button≠2 且目标不在浮层内 -> closeCtxFloats）。
+     菜单每次打开都会重建（textContent=''），所以每拍检查补注。 */
+  function ensureMenuClose() {
+    var menus = document.querySelectorAll('.dsh-whale-menu');
+    for (var i = 0; i < menus.length; i++) {
+      var m = menus[i];
+      if (!m.classList.contains('show')) continue;
+      if (m.querySelector('#pet-menu-close')) continue;
+      var row = document.createElement('div');
+      row.id = 'pet-menu-close';
+      row.className = 'dsh-whale-menu-item';
+      row.textContent = '❌ 关闭';
+      row.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        try {
+          document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }));
+        } catch (e) {
+          try { document.body.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); } catch (e2) { }
+        }
+      });
+      m.appendChild(row);
+    }
+  }
+
+  function push() {
+    if (fatal) return;
+    try {
+      /* whale.js 未就位或入场未定位完成前不发区域不发 ready（11-01 闪现修复）：
+       * 宿主此刻只有 1px 预区域=什么都看不见；提前发会让区域先落在 CSS 默认
+       * 角（或 loadPos 位），随后 petEntranceSwim 才把鲸鱼移到交接位=角落
+       * 闪现。petEntranceSwim 定位完成后置 __dshPetHost.entranceReady=true，
+       * 首帧区域+ready 同拍发出，桌宠鲸鱼直接在交接位现身。 */
+      if (!window.__dshWhale) return;
+      try { if (window.__dshPetHost && !window.__dshPetHost.entranceReady) return; } catch (e3) { return; }
+      /* ready 握手（11-01 两鲸并存根因）：鲸鱼脚本已加载+首拍区域推送在途
+       * =桌宠窗口真出现了——此刻才告诉宿主，宿主广播后页鲸才让位。
+       * 漏发这条=页鲸永远不休眠（两鲸并存）。
+       * 回执驱动（11-01 闪现竞态修复）：盲等 placeAndArm+600ms 起跳会早于
+       * 页鲸隐藏（ready 随首拍推送，冷启动 rAF 可延迟数百 ms）——桌宠先游
+       * 走、页鲸还在原地=双鲸分离闪现。改为 ready 回包置 ackReady，泳动
+       * 定时器等它（swim.js），两节点同源触发、顺序恒定。 */
+      if (!readySent) {
+        readySent = true;
+        try {
+          fetch('ctrl', { method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ action: 'ready' }) }).then(function () {
+              try { if (window.__dshPetHost) window.__dshPetHost.ackReady = true; } catch (e1) { }
+            }).catch(function () { });
+        } catch (e0) { }
+      }
+      if (sig() !== curSig) extract();
+      ensureMenuClose();
+      /* 躲猫猫（11-01 用户定稿）：hidden=右下角小眼睛。眼睛就位后区域=eye
+       * 椭圆（p:1）；眼睛未就位（鲸鱼正游向角落）=照常上报鲸鱼（d=1 冻结） */
+      var peekOn = (currentForm === 'hidden') && !!document.body.classList.contains('pet-form-peek');
+      var drag = isDrag() || performance.now() < morphUntil;   /* 形变期=运动期（区域冻结） */
+      var wr = null;
+      if (peekOn) {
+        var pe = document.getElementById('pet-peek');
+        if (!pe) return;
+        wr = [pe.offsetLeft, pe.offsetTop, pe.offsetLeft + pe.offsetWidth, pe.offsetTop + pe.offsetHeight];
+      } else {
+        try {
+          /* 布局盒（offsetLeft/Top/Width/Height）不受 bob/wiggle/bounce 的 CSS
+             transform 影响：锚点在浮动期间静止 -> 空闲零重建；上浮/旋转的像素
+             偏移由宿主侧轮廓 PAD + 游移包络矩形兜住（包围盒会被旋转撑大移位
+             导致边缘缺口） */
+          wr = [whaleEl.offsetLeft, whaleEl.offsetTop,
+                whaleEl.offsetLeft + whaleEl.offsetWidth, whaleEl.offsetTop + whaleEl.offsetHeight];
+        } catch (e) { }
+      }
+      var payload = { v: polyV, whale: wr, rects: (peekOn ? [] : rects(0)), d: (drag ? 1 : 0), b: (currentForm === 'bubble' ? 1 : 0), p: (peekOn ? 1 : 0), dc: document.styleSheets.length, a: (window.__dshWhale ? 1 : 0), iw: (window.innerWidth || 0), mx: extMx, pn: extPn };
+      /* poly 只在版本变化或每 400ms 补发（宿主按 v 缓存）：游动 60Hz 消息
+         不再每条拖 1.1KB 轮廓。版本变化连发两拍（polyRepeat）——ps1 的
+         latest-wins 合流可能用 2ms 后的相邻消息覆盖首拍。peek 无轮廓意义 */
+      var nowMs = performance.now();
+      var newV = (polyV !== sentV);
+      if (!peekOn && poly && (newV || polyRepeat > 0 || nowMs - lastPolyAt > 400)) {
+        payload.poly = poly; sentV = polyV; lastPolyAt = nowMs;
+        polyRepeat = newV ? 1 : Math.max(0, polyRepeat - 1);
+      }
+      var json = JSON.stringify(payload);
+      if (json === lastSent) return;
+      lastSent = json;
+      sendCtrl(payload);
+      try { document.title = 'WR:' + json; } catch (e2) { }
+    } catch (e) {
+      try { document.title = 'WR:' + JSON.stringify({ err: ('' + e.message).slice(0, 120) }); } catch (e2) { }
+    }
+  }
+  extract();
+  setInterval(push, 250);
+  push();
+})();
+</script>
+<script src="whale.js"></script>
+</body>
+</html>

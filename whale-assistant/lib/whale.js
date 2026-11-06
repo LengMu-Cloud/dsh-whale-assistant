@@ -35,12 +35,24 @@
 	window.__dshWhale = { sockets: [] };
 
 /* ---- module: src/utils/constants.js ---- */
-/** Centralized magic values (inline module authored after the split).
+	/** Centralized magic values (inline module authored after the split).
 	 * Consumers reference these names instead of raw literals. */
+
+	/** 桌宠模式（第一批）：pet 页在 whale.js 之前定义 window.__dshPetHost
+	 * （形态菜单缝 + 页面注入证据）；普通 DSH 页面没有它。整个共享 IIFE
+	 * 里凡属桌宠专属分支（枚举 feed 端点 / 历史惰性 / 跳转文案 / 菜单缝）
+	 * 都以它为总开关。 */
+	var PET_MODE = typeof window !== 'undefined' && !!window.__dshPetHost;
+
+	/** 桌宠合成会话前缀（与 lib/pet.js enumerateFrames 跨端契约）：宿主枚举
+	 * feed 里的会话 id 一律 'session-pet-sN'——必须带 'session-' 主会话前缀，
+	 * 否则鲸鱼的子代理静默闸门会吞掉全部任务通知（冒烟实测 10-31）；
+	 * N=宿主 per-boot 会话码，页面据此显示「任务 N」。 */
+	var PET_SID_PREFIX = 'session-pet-s';
 
 	/** Whale patch version (M5.1). Build-time override: build-whale.js reads
 	 * env PATCH_VERSION; the default here is the fallback single source. */
-	var PATCH_VERSION = '0.4.2';
+	var PATCH_VERSION = '0.4.3-rc.1';
 
 	/** Session id prefix that marks a user conversation ("main task").
 	 * Spawned subagents use bare UUIDs and are treated as silent sub-tasks. */
@@ -443,6 +455,10 @@ function adoptCurrentSessionPin() {
 	/** Fire-and-forget upload of the current list (with the clear marker so
 	 * the server drops cleared records on its side too). */
 	function pushCloudHistory() {
+		/* 桌宠（第一批）：pet 窗口不写共享台账——它的会话是枚举化的合成 id
+		 * (pet-sN)，写进去是纯噪声；清空走 /pet/ctrl clear-history（11-05），
+		 * 记录读取走 /pet/history 枚举路由——写路径保持全关。 */
+		if (PET_MODE) return;
 		if (typeof fetch !== 'function') return;
 		try {
 			fetch('/api/whale-assistant/save', {
@@ -456,24 +472,64 @@ function adoptCurrentSessionPin() {
 	/** Pull the server copy and merge it in (union by key). `onDone` fires
 	 * after the merge so the caller can re-render. */
 	function pullCloudHistory(onDone) {
-		if (typeof fetch !== 'function') return;
+		/* 桌宠（11-05 扩容，用户实报「历史任务里面读取不到，桌宠的时候还会
+		 * 出现」）：第一批把读写双门全关（pet profile 磁盘零历史），但菜单
+		 * 「📜 历史任务」入口还在——抽屉永远空而通知照常出，成了半成品。
+		 * 现在读路接通：走 /pet/history 枚举路由（真实 id 不出宿主、字段
+		 * 白名单），**内存态只读渲染——本地磁盘仍然零写入**（safeSet/回写
+		 * 都不发生），清空走 /pet/ctrl clear-history 直达共享账本。 */
+		if (PET_MODE) {
+			if (typeof fetch !== 'function') { if (onDone) onDone(); return; }
+			try {
+				fetch('/api/whale-assistant/pet/history').then(function (response) {
+					return response.ok ? response.json() : null;
+				}).then(function (doc) {
+					if (doc && Array.isArray(doc.history) && doc.history.length) {
+						var merged = mergeHistories(history, doc.history);
+						/* 11-05 与页内分支同款键签名比较——长度守卫在 cap 处失效
+						 * （内存满 50 时新进一条=挤走最旧一条，长度不变 → 丢弃），
+						 * 真机插桩实锤：路由 170 条 top=新记录、抽屉停在旧数据 */
+						var sig = function (list) {
+							var s = '';
+							for (var si = 0; si < list.length; si++) s += dedupeKey(list[si]) + ';';
+							return s;
+						};
+						if (sig(merged) !== sig(history)) history = merged;
+					}
+					if (onDone) onDone();
+				}).catch(function () { if (onDone) onDone(); });
+			} catch (e) { if (onDone) onDone(); }
+			return;
+		}
+		if (typeof fetch !== 'function') { if (onDone) onDone(); return; }
 		try {
 			fetch('/api/whale-assistant/state').then(function (response) {
 				return response.ok ? response.json() : null;
 			}).then(function (doc) {
-				if (!doc || !Array.isArray(doc.history)) return;
-				var merged = mergeHistories(history, doc.history);
-				if (merged.length !== history.length) {
-					history = merged;
-					safeSet(HISTORY_KEY, history);
-					/* write the merge back: a browser whose local history was
-					 * ahead uploads it — this is also how an existing window's
-					 * records migrate to the server on first open */
-					pushCloudHistory();
+				if (doc && Array.isArray(doc.history)) {
+					var merged = mergeHistories(history, doc.history);
+					/* 11-05 用户实报「要退出重启才能同步」真凶：**长度守卫在
+					 * cap 处失效**——内存已被 HISTORY_CAP 截到 50 时，新记录
+					 * 并入=「新进一条挤走最旧一条」，长度不变 → 合并结果被整
+					 * 个丢弃（真机插桩：拉到 169 条 top=03:18，渲染停在
+					 * 02:29）。改为**键签名比较**：任一变化都落地。 */
+					var sig = function (list) {
+						var s = '';
+						for (var si = 0; si < list.length; si++) s += dedupeKey(list[si]) + ';';
+						return s;
+					};
+					if (sig(merged) !== sig(history)) {
+						history = merged;
+						safeSet(HISTORY_KEY, history);
+						/* write the merge back: a browser whose local history was
+						 * ahead uploads it — this is also how an existing window's
+						 * records migrate to the server on first open */
+						pushCloudHistory();
+					}
 				}
 				if (onDone) onDone();
-			}).catch(function () {});
-		} catch (e) {}
+			}).catch(function () { if (onDone) onDone(); });
+		} catch (e) { if (onDone) onDone(); }
 	}
 
 	function loadHistory() {
@@ -486,6 +542,9 @@ function adoptCurrentSessionPin() {
 	}
 
 	function pushHistory(entry) {
+		/* 桌宠：合成会话不落历史（抽屉如实显示空；真实记录由休眠中的页面
+		 * 鲸鱼数据管线继续写） */
+		if (PET_MODE) return;
 		if (!entry || typeof entry.sessionId !== 'string') return;
 		history.unshift(entry);
 		if (history.length > HISTORY_CAP) history.length = HISTORY_CAP;
@@ -1648,8 +1707,41 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		try { localStorage.setItem('dsh-whale:evseq', JSON.stringify({ bootId: knownBootId, seq: n })); } catch (e) {}
 	}
 
+	/* 桌宠仲裁判定（第一批；11-01 语义修正）：页内休眠 = 桌宠开启且**已就绪**
+	 * ——与形态无关。隐藏形态下桌宠窗口仍在（进程活着、托盘可召回），页鲸
+	 * 必须保持休眠：唤醒页鲸会把「隐藏桌宠」变成事实上的「退出桌宠」（真机
+	 * 取证 11-01：用户看到鲸鱼跳回 DSH 右下角=语义混淆）。召回入口=托盘
+	 * （点击/右键菜单「🐋 显示小鲸鱼」）+首次隐藏的气球提示。up=false =
+	 * 桌宠还在 spawn 窗口期/已阵亡——页鲸原地不动（接力式交接）：等桌宠
+	 * 窗口真出现了（ready 握手）才潜水让位。 */
+	function petDormantOf(enabled, form, up, spawning) {
+		void form;
+		/* 常驻架构修订（11-05，用户实报「下午打开时桌宠和 DSH 里的小金鱼同时
+		 * 出现，过一会 DSH 里面的才消失」）：spawn 窗口期（up=false 且
+		 * spawning=true）页鲸也休眠——桌宠马上要出现，页鲸先顶班再潜水就是
+		 * 双鲸同屏（真机抓包 t2.9→t4.3 两鲸重叠 2s；「up=false 页鲸顶班」是
+		 * 交接时代语义，交接已随第九轮常驻架构退役）。spawn 失败（up=false
+		 * 且 spawning=false）页鲸照旧苏醒兜底，永不无鱼可看。 */
+		return !!(enabled && (up !== false || spawning));
+	}
+
 	function feedEventFrame(frame) {
 		var sid = frame.sessionId;
+	/* 桌宠（第一批）：feed 会话是宿主编码的合成 id（PET_SID_PREFIX =
+	 * 'session-pet-sN'，带主会话前缀才能过子代理静默闸门——冒烟实测）。
+	 * 这里就地给合成会话一个稳定名字「任务 N」，通知读起来是
+	 * 「任务 3 完成了 ✅」；rememberTitle 写 pet profile 的 localStorage
+	 * ——只有合成名，没有真实标题。 */
+		if (PET_MODE && sid && sid.indexOf(PET_SID_PREFIX) === 0) {
+			try {
+				var existingPetName = sessionTitles.get(sid) || '';
+				if (!existingPetName) {
+					var petName = '任务 ' + (parseInt(String(sid).slice(PET_SID_PREFIX.length), 10) || '?');
+					sessionTitles.set(sid, petName);
+					rememberTitle(sid, petName);
+				}
+			} catch (e) {}
+		}
 		var event = frame.event || {};
 		var active = resolveCurrentSessionId();
 		var isActive = sid === active;
@@ -1689,14 +1781,19 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				 * history row and the 被中止了 announcement all hang on it.
 				 * It must also skip endFiredRecently: that 30s fail window
 				 * would swallow a legitimate stop → restart → stop. */
-				if (reason !== 'aborted' && endFiredRecently(sid)) return;
+				if (reason !== 'aborted' && !frame.replaySuppress && endFiredRecently(sid)) return;
 			}
+			/* 审计 B1（2026-11-04）：重放批帧豁免活页面竞态短路——dedup/
+			 * endFiredRecently 是为「同代活页面双通道竞态」设计的（同一次
+			 * 完成两条通道各报一次）；重启恢复流的语义是**只记账**（suppress
+			 * 已由 consume 标定），不该被这些窗口整个丢弃——丢弃=照记契约
+			 * 失效（红标/历史全丢）。 */
 			/* cross-channel completion dedup (09-06): the active-session
 			 * check above can race (chip gate / session tracking) and the
 			 * DOM chip adapter may have JUST announced this same end —
 			 * same physical end = same wall clock within seconds; a real
 			 * new completion carries its own endTime and still announces */
-			if (reason === 'completed' && endFiredFor(sid, 'success', frame.time || Date.now(), 8000)) return;
+			if (reason === 'completed' && !frame.replaySuppress && endFiredFor(sid, 'success', frame.time || Date.now(), 8000)) return;
 			try { registerBackground(sid); } catch (e) {}
 			handleMuxPayload({
 				type: 'session/event',
@@ -1707,9 +1804,32 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					 * the newest completed turn of a flood session announce
 					 * NOTHING; the newest announces for the whole batch */
 					foldSuppress: event.foldSuppress || undefined,
-					foldCount: event.foldCount || undefined
+					foldCount: event.foldCount || undefined,
+					/* 重放批标记（审计 B1，2026-11-04）：consume 在**外层信封**
+					 * 上标 replaySuppress（bootId 换代+boot 前帧），这里构造
+					 * 内层 event 时必须带上——此前丢失=frames 的四条通知路径
+					 * 永远看不到标记，「重放批静默」从未真正生效（第十三轮
+					 * 夜间验证被免打扰+autoplay 掩盖，真机从未听到） */
+					replaySuppress: event.replaySuppress || frame.replaySuppress || undefined
 				}
 			});
+			return;
+		}
+		if (type === 'approval/asked') {
+			/* 审核请求（11-06，用户实报「提问能通知，审核通知不了」）：
+			 * approval/requested 在鲸鱼里只有消费壳（frames.js 的 ⚠️ 分支）
+			 * 而零生产者——审核通知从未被实现。DSH 0.2.1 的审批事件类型
+			 * approval/asked {id, toolName, callId?, reason?}（asar 类型表
+			 * 实证）。若它流经 session 事件总线，这里转成注意帧（⚠️
+			 * [会话名]需要你审核，reportAttention 现成）；active+后台都走
+			 * （页鲸休眠期间 DOM 不可见=桌宠/页鲸唯一通知源），seeAttention
+			 * 共享去重（SSE/轮询双通道 race + 未来 DOM 检测同 key 合流）。 */
+			var aData = event.data || {};
+			var aKey = aData.callId || aData.id || ('a:' + (frame.time || ''));
+			if (seeAttention(aKey)) {
+				try { registerBackground(sid); } catch (e) {}
+				handleMuxPayload({ type: 'approval/requested', sessionId: sid, time: frame.time || Date.now() });
+			}
 			return;
 		}
 		if (type === 'session/title') {
@@ -1724,6 +1844,16 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			var t = event.data && event.data.title;
 			if (t && typeof t === 'string') {
 				handleMuxPayload({ type: 'session/projection', sessionId: sid, key: 'title', value: t });
+			}
+			return;
+		}
+		if (type === 'approval/asked' && PET_MODE) {
+			/* 桌宠（11-06）：枚举 feed/SSE 里的审核请求（宿主白名单只放行
+			 * toolName）→ ⚠️ 注意帧。去重键带 frame.seq——feed 轮询整环重放
+			 * 靠 consume 的 lastSeq 闸门，这里再兜 SSE/poll 双通道 race。 */
+			if (seeAttention('pet-a:' + (frame.seq || event.time || ''))) {
+				try { registerBackground(sid); } catch (e) {}
+				handleMuxPayload({ type: 'approval/requested', sessionId: sid, time: frame.time || Date.now() });
 			}
 			return;
 		}
@@ -1851,6 +1981,8 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	 * at startup AND on the first background registration. */
 	var titlesLookedUp = false;
 	function lookupTitlesFromHistory(force) {
+		/* 桌宠：不取真实标题（枚举化边界），命名由 feedEventFrame 的合成名负责 */
+		if (PET_MODE) return;
 		if (titlesLookedUp && !force) return;
 		titlesLookedUp = true;
 		if (typeof fetch !== 'function') return;
@@ -1883,12 +2015,26 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	lookupTitlesFromHistory(true);
 
 	function consume(events, bootId) {
+		var replayBatch = false;
 		if (bootId && bootId !== knownBootId) {
 			/* new host generation: its seq starts over — reset and only take
 			 * frames newer than the swap */
 			knownBootId = bootId;
 			lastSeq = 0;
 			rememberSeq(0);
+			/* 桌宠重放批（11-03）：DSH 重启后整环重放——重启前 60s 内的完成
+			 * 帧会**再响一次**（用户实报「任务提示音出现两次」）。历史恢复只
+			 * 应**记账**（红标/历史），不应**重播**（say/音效/面板）。
+			 * 审计 B1（2026-11-04）语义修正：**「上一代 bootId」必须取持久化
+			 * 记录**——内存态 knownBootId 初始 null，首次连接（页面刚打开/
+			 * 页面关闭期间的补达帧）也被判成「换代」→ 48b 的「补达要响」被
+			 * 误杀。真重启的判据=**localStorage 里存过上一代 bootId 且 !=
+			 * 本次**（页面重载后仍在=真的换宿主代了）；首次打开无记录=补达
+			 * 场景，照常播报。 */
+			var prevBoot = null;
+			try { prevBoot = localStorage.getItem('dsh-whale:lastBootId'); } catch (e0) {}
+			if (prevBoot && prevBoot !== bootId) replayBatch = true;
+			try { localStorage.setItem('dsh-whale:lastBootId', bootId); } catch (e1) {}
 		}
 		/* --- batch-fold pre-scan ---: count each session's completed
 		 * turn/ends that will actually feed this batch (same freshness and
@@ -1914,6 +2060,35 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		}
 		for (var i = 0; i < events.length; i++) {
 			var f = events[i];
+			/* 桌宠仲裁（第一批）：pet/state 在 seq 闸门之前处理——它是绝对态
+			 * （幂等，重放无害），SSE 在线的页面不跑轮询，任何 seq 陈旧/缺失
+			 * 都不能错过休眠/唤醒（2026-10-31 真机洞）。
+			 * PET_MODE 短路（11-06 SSE 枚举流）：桌宠页现在也订 /events/stream，
+			 * pet/state 帧会到达桌宠页——桌宠页自己就是桌宠，绝不能把
+			 * #dsh-whale（桌宠鲸本体）休眠掉；休眠机器只属于 DSH 页内鲸。 */
+			if (f && f.type === 'pet/state') {
+				if (!PET_MODE && typeof f.enabled === 'boolean') {
+					/* force（11-05）：权威状态即使值未变也要走 DOM 应用——
+					 * 开机先藏的页鲸靠它唤醒（幂等闸门不许拦权威状态） */
+					try { applyPetDormant(petDormantOf(f.enabled, f.form, f.up, f.spawning), true); } catch (e) {}
+				}
+				continue;
+			}
+			/* 桌宠通知双击跳转（11-03）：宿主把合成码反查回真实 sessionId 后
+			 * 广播 pet/jump——页鲸是唯一持有跳转桥的一方（桌宠页没有桥也没有
+			 * DSH DOM）。core 不直接引用 ui 的跳转函数（方向闸门）：派发自定义
+			 * 事件，session-jump.js 自行监听执行。跳转是即时动作：只认 10s 内
+			 * 的新帧，重放缓冲里的旧 jump 一律忽略（刷新页面/新窗口不得凭空
+			 * 跳回旧会话）。atMs（11-06）：时间锚点透传——页鲸
+			 * openSessionAt(sid, atMs) 翻页回溯到该任务的消息。 */
+			if (f && f.type === 'pet/jump') {
+				var jTime = f.time || 0;
+				if (Date.now() - jTime < 10000 && f.sessionId &&
+					typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+					try { window.dispatchEvent(new CustomEvent('dsh-whale:pet-jump', { detail: { sessionId: f.sessionId, atMs: typeof f.atMs === 'number' ? f.atMs : undefined } })); } catch (e) {}
+				}
+				continue;
+			}
 			if (!f || typeof f.seq !== 'number' || f.seq <= lastSeq) continue;
 			rememberSeq(f.seq);
 			/* a fresh page must not replay the buffer's history — same
@@ -1921,6 +2096,10 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			 * top-level time; bare f.time made this guard dead code) */
 			var fTime = f.time || (f.event && f.event.time);
 			if (fTime && Date.now() - fTime > 60000 && bootAt - fTime > 60000) continue;
+			/* 重放批标记（11-03）：boot 前的帧只记账不重播——see replayBatch */
+			if (replayBatch && fTime && fTime < bootAt) {
+				try { f.replaySuppress = true; } catch (e) {}
+			}
 			if (f.type === 'session/projection') {
 				if (f.key === 'title') {
 					if (f.sessionId !== resolveCurrentSessionId()) {
@@ -1933,6 +2112,16 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 								var info = subs && subs.get(f.sessionId);
 								if (info && !info.title) info.title = title;
 							} catch (e) {}
+							/* 晚到真名改写（11-06 二轮，SSE 稳态补齐）：title 帧
+							 * 晚于通知入队时（宿主 announceTitle 异步+快速任务
+							 * 同拍完成），已在屏/在队的「任务 N」要改写成真名——
+							 * poll 分支的 titles 预填早有同款调用，SSE 路径补上。
+							 * _correctReports 幂等（已是真名则 no-op）。 */
+							try {
+								if (typeof window.__dshWhale._correctReports === 'function') {
+									window.__dshWhale._correctReports(f.sessionId, title);
+								}
+							} catch (e2) {}
 						}
 					}
 					continue;
@@ -1986,11 +2175,55 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 
 	function poll() {
 		if (sseUp) return; /* the stream is live: it delivers frames + pings */
-		fetch('/api/whale-assistant/events').then(function (r) {
+		/* 桌宠：枚举 feed（token 由 WebView2 头注入层补）代替全量 events；
+		 * 页面轮询同一响应里还带着 pet.enabled 仲裁 flag */
+		fetch(PET_MODE ? '/api/whale-assistant/pet/feed' : '/api/whale-assistant/events').then(function (r) {
 			return r.ok ? r.json() : null;
 		}).then(function (data) {
 			if (data && Array.isArray(data.events)) {
 				markServerPoll(true);
+				/* 桌宠：存量标题预填（11-03）——session/title 事件只在标题变化
+				 * 时广播，老会话对桌宠静默；宿主把历史里的 真实会话→标题 用码本
+				 * 转成合成 id 随 feed 下发，这里预填通讯录（只补空缺，不覆盖
+				 * 实时 title 帧）。这是页鲸「开机主动取名」的桌宠等价物。 */
+				if (PET_MODE && data.titles && typeof data.titles === 'object') {
+					/* 11-03 诊断缝（收口后移除） */
+					try {
+						var pp = window.__dshWhale._prefillProbe = window.__dshWhale._prefillProbe || [];
+						pp.push('poll@' + Date.now() + ' keys=' + Object.keys(data.titles).join(','));
+						if (pp.length > 12) pp.shift();
+					} catch (e) {}
+					for (var tsid in data.titles) {
+						var tv = data.titles[tsid];
+						if (typeof tv !== 'string' || !tv) continue;
+						/* real names REPLACE the 任务 N placeholder (the
+						 * placeholder must never block the real one) — a live
+						 * title frame still wins by arriving later. get-then-set
+						 * kept on one line (timing-contract lint). */
+						if (!sessionTitles.get(tsid) || /^任务 \d+$/.test(sessionTitles.get(tsid))) {
+							sessionTitles.set(tsid, tv); try { rememberTitle(tsid, tv); } catch (e) {}
+							/* reportTurn reads info.label || info.title ||
+							 * bookTitle — a placeholder already固化 in
+							 * subagentSessions would压住 the real name, so
+							 * swap it here too (placeholder-only) */
+							try {
+								var w = window.__dshWhale || {};
+								var sinfo = w.subagentSessions && w.subagentSessions.get(tsid);
+								if (sinfo && (!sinfo.title || /^任务 \d+$/.test(sinfo.title))) sinfo.title = tv;
+								/* 秒回任务的完成通知先于本预填生成（文案已带
+								 * 「任务 N」占位入队）——晚到真名改写队列与在屏
+								 * 气泡，与页鲸 correctReports 同一条契约 */
+								if (typeof w._correctReports === 'function') w._correctReports(tsid, tv);
+							} catch (e) {}
+						}
+					}
+				}
+				/* PET_MODE 短路（11-06 SSE 枚举流）：休眠仲裁只属于 DSH 页内鲸
+				 * ——桌宠页即使拿到 pet 字段也绝不应用（桌宠页的 #dsh-whale
+				 * 是桌宠本体，不是页鲸） */
+				if (!PET_MODE && data.pet && typeof data.pet.enabled === 'boolean') {
+					try { applyPetDormant(petDormantOf(data.pet.enabled, data.pet.form, data.pet.up, data.pet.spawning), true); } catch (e) {}
+				}
 				consume(data.events, data.bootId);
 			} else {
 				/* a non-OK route (plugin gone / auth changed) is exactly the
@@ -2015,14 +2248,26 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		try { f = JSON.parse(raw); } catch (e) { return; }
 		if (!f || typeof f !== 'object') return;
 		if (f.type === 'ping') { markServerPoll(true); return; }
-		if (f.type === 'hello') {
-			if (f.bootId && f.bootId !== knownBootId) { sseBootId = f.bootId; consume([], f.bootId); }
-			else if (f.bootId) { sseBootId = f.bootId; }
-			return;
-		}
+			if (f.type === 'hello') {
+				if (f.bootId && f.bootId !== knownBootId) { sseBootId = f.bootId; consume([], f.bootId); }
+				else if (f.bootId) { sseBootId = f.bootId; }
+				/* 桌宠仲裁：连接即知开关态（SSE 在线的页面不跑轮询，hello 是它
+				 * 唯一的 connect-time 状态源）；隐藏形态不休眠（召回入口）。
+				 * PET_MODE 短路（11-06 SSE 枚举流）：桌宠页同理由本页扮演桌宠，
+				 * 不应用休眠。 */
+				if (!PET_MODE && f.pet && typeof f.pet.enabled === 'boolean') {
+					try { applyPetDormant(petDormantOf(f.pet.enabled, f.pet.form, f.pet.up, f.pet.spawning), true); } catch (e) {}
+				}
+				return;
+			}
 		consume([f], sseBootId || undefined);
 	}
 	function connectSSE() {
+		/* 11-06 枚举 SSE 流（用户实报「任务通知有延时」）：宿主现在按 pet
+		 * token 把 SSE 连接分流——桌宠连接收到的是逐帧枚举载荷（与 /pet/feed
+		 * 同一码本同一边界），页鲸连接照旧收全量帧。桌宠通知从 3s 轮询节奏
+		 * 变成即时推送；轮询保留作断线兜底（EventSource 断开→sseUp=false→
+		 * poll 恢复跑 /pet/feed 补漏帧，lastSeq 闸门去重）。 */
 		if (typeof EventSource !== 'function') return; /* vm sandbox / ancient browsers */
 		try { sse = new EventSource('/api/whale-assistant/events/stream'); } catch (e) { return; }
 		sse.onopen = function () { sseUp = true; };
@@ -2054,6 +2299,9 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		window.__dshWhale._pinSession = pinWindowSession;
 		window.__dshWhale._adoptSessionPin = adoptCurrentSessionPin;
 		window.__dshWhale._resolveSessionId = resolveCurrentSessionId;
+		/* 仲裁纯函数缝（11-05）：spawning 语义单测入口——petDormantOf 定义在
+		 * initServerEvents 闭包内，exports.js 够不着（test-whale 实证） */
+		window.__dshWhale._petDormantOf = petDormantOf;
 	} catch (e) {}
 	})();
 /* ---- module: src/core/health.js ---- */
@@ -2129,7 +2377,17 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			rep = {
 				server: (sh && (sh.failStreak >= 3 || visibleStale)) ? 'fail' : 'ok',
 				dom: (uh && uh.missStreak >= 3) ? 'fail' : 'ok',
-				jump: jumpReady() ? 'ok' : 'warn' /* 0.4.0: the in-house client-module bridge replaces the injected hook */
+				/* jump probe: the page whale reports its bridge binding (jumpReady);
+				 * the PET whale has NO bridge — its jump runs through the HOST
+				 * channel (POST /pet/ctrl → reverse-lookup → pet/jump broadcast →
+				 * the page whale's own bridge executes), which rides the SAME
+				 * /pet/* routes and token as the notification feed. There the
+				 * server health IS the jump-channel health — reporting jumpReady
+				 * on the pet page would warn forever on a working feature
+				 * (11-03 实机：桌宠健康面板把修好的跳转报成 ⚠️ 不可用）. */
+				jump: PET_MODE
+					? ((sh && sh.failStreak < 3 && !visibleStale) ? 'ok' : 'warn')
+					: (jumpReady() ? 'ok' : 'warn')
 			};
 		}
 		var degraded = rep.server === 'fail' || rep.dom === 'fail';
@@ -2233,6 +2491,67 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	var uiReady = false;
 	/** sessionId of the report currently shown in the bubble (for late-title rewrites). */
 	var currentSaySession = null;
+
+	/* 桌宠仲裁（第一批）：pet.enabled 时页面鲸鱼休眠——隐藏 + 静默
+	 * （台词 uiSay / 音效 playDing 入口拦下），但数据管线照跑（DOM 采集、
+	 * 历史与台账继续记录），桌宠关闭后页面鲸鱼无缝回来。宿主 /events 轮询
+	 * 响应带 pet.enabled，server-events 消费后调 applyPetDormant；
+	 * localStorage 缓存让 client.js 在下一次 boot 时先于任何请求隐藏元素
+	 * （防双鲸闪现）。状态放 core：core 的静默门（dings/server-events）与
+	 * ui 的静默门（uiSay）都读它，core→ui 方向边不加。
+	 * **内存态必须从同一份缓存初始化**（2026-10-31 真机洞）：client.js 开机
+	 * 已按缓存 display:none，而内存态若从 false 起步，hello 送来
+	 * pet.enabled=false 会撞上幂等闸门早退（false===false）——元素永久隐藏。
+	 * 从缓存起步后，缓存"休眠"+内存"休眠"一致，第一次 hello=false 即正常
+	 * 走唤醒分支清 display + 改写缓存。 */
+	var petDormant = false;
+	try { petDormant = localStorage.getItem('dsh-whale:petDormant') === '1'; } catch (e) {}
+	/** 11-05 开机防双鲸第二层：是否消费过**权威**桌宠状态（hello/轮询/帧）。
+	 * 非桌宠页开机一律先藏（不信任缓存 0——每次关 DSH 都会把它写成 0），
+	 * 由权威状态强制应用或 6s 兜底 reveal 唤醒；bootReveal 只在
+	 * 「从未见过权威状态且内存态非休眠」时出手（缓存 1 的开机不许被它吵醒）。 */
+	var petStateSeen = false;
+	function applyPetDormant(v, force) {
+		v = !!v;
+		petStateSeen = true;
+		var changed = v !== petDormant;
+		if (!changed && !force) return;
+		/* force（11-05）：权威状态每 3s 轮询都会再来一次——值未变时 DOM
+		 * 应用必须零抖动，尤其唤醒分支的 resize 会重座菜单锚点。只在
+		 * 「真从隐藏翻出来」时派发 resize。 */
+		var wasHidden = false;
+		try {
+			var el0 = whale || document.getElementById('dsh-whale');
+			wasHidden = !!(el0 && el0.style.display === 'none');
+		} catch (e0) {}
+		petDormant = v;
+		try { localStorage.setItem('dsh-whale:petDormant', v ? '1' : '0'); } catch (e) {}
+		try {
+			/* target: uiInit 的 whale 优先（client.js 的 holder 与它同一节点） */
+			var el = whale || document.getElementById('dsh-whale');
+			if (!el) return;
+			if (v) {
+				/* 让位（11-01 终版）：ready 握手时桌宠鲸鱼已出现在页鲸正上方
+				 * （完全重叠）——瞬间隐藏即不可见，任何下潜/位移动画反而会
+				 * 从桌宠鲸鱼底下"剥离"出第二只。桌宠随后从交接位自然游走。 */
+				el.style.display = 'none';
+			} else {
+				/* 唤醒（真机洞 10-31#1）：loadPos 曾在 display:none 下执行，
+				 * offsetWidth=0 让 seatFromAnchor 算出垃圾位——醒来后盒子尺寸
+				 * 才真实。清除残留变换 + 重派 resize（menu.js 的锚点重座逻辑
+				 * 原样复用，零新增 core→ui 依赖边），鲸鱼回到贴角正确位。
+				 * 唤醒场景（第九轮常驻版）=桌宠进程死亡/平台不支持/开机先藏
+				 * 后被权威状态唤醒的页内兜底。 */
+				el.style.transition = 'none';
+				el.style.transform = '';
+				el.style.display = '';
+				if (wasHidden) {
+					try { window.dispatchEvent(new Event('resize')); } catch (e2) {}
+				}
+			}
+		} catch (e) {}
+	}
+	function petStateEverSeen() { return petStateSeen; }
 /* ---- module: src/core/reports.js ---- */
 
 	function say(text, duration, sessionId) {
@@ -2476,7 +2795,13 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			}
 			if (p && typeof p.then === 'function') {
 				p.then(function () {
-					if (dingKinds.length > 0) pumpDings();
+					/* 积压收敛（11-03 用户实报「提示音出现两次」）：autoplay
+					 * 挂起期间排队的 ding 在解锁后**连响**——resume 成功后只
+					 * 播最新一条（burst 保护同一语义：积压的历史已无时效） */
+					if (dingKinds.length > 0) {
+						if (dingKinds.length > 1) dingKinds.splice(0, dingKinds.length - 1);
+						pumpDings();
+					}
 				}).catch(function () {
 					/* resume rejected; stay silent rather than crash */
 				});
@@ -2625,6 +2950,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 
 	function playDing(kind) {
 		if (soundMuted) return; /* right-click menu: one-tap mute */
+		if (petDormant) return; /* 桌宠在岗：页面鲸鱼休眠静默（桌宠窗口自己响） */
 		/* 免打扰: completion/failure sounds are dropped (attention still
 		 * rings — the user must act on those regardless of the hour) */
 		if (dndActive() && (kind === 'done' || kind === 'fail')) return;
@@ -2680,6 +3006,11 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	 * margin from the viewport edge, so it NEVER touches the screen edge and
 	 * the open text re-flows (wraps) live while the whale moves. */
 	function updateStatusPos() {
+		/* 气泡同场夹紧（动态边界 2026-11-04）必须在 statusEl 判定**之前**：
+		 * 主框从未显示过时 statusEl=null，整条链在下面就 return 了——拖鲸鱼
+		 * 贴顶时开着的通知气泡不会翻面（实机 11-04 右上角实证 top=-58）。
+		 * clampBubble 自带 whale/show 守卫，statusEl 与它互不依赖。 */
+		try { clampBubble(); } catch (e) { }
 		var el = statusEl;
 		if (!el || !whale) return;
 		var below = window.innerHeight - (whale.offsetTop + whale.offsetHeight);
@@ -2692,19 +3023,35 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		var above = below >= 80 && whale.offsetTop + whale.offsetHeight + 12 + estH > window.innerHeight;
 		el.classList.toggle('dsh-whale-status-above', above);
 		el.classList.toggle('dsh-whale-status-below', below >= 80 && !above);
+		/* inline anchor reset: the below branch may right-anchor (below),
+		 * the side branch is pure CSS-class anchored — stale inline values
+		 * from a previous anchored state must never leak across variants */
+		el.style.left = '';
+		el.style.right = '';
 		if (above || below >= 80) {
-			/* under/over the whale, left-aligned, expanding right — keep a
-			 * 16px margin from the viewport's right edge */
+			/* under/over the whale. 11-05 用户二次实报：贴右缘时右侧只剩
+			 * ~86px，报告整列被省略号吃掉（「此... 27.0K t...」）——修=
+			 * 哪边宽朝哪边展开：右侧放不下（<190px 满行宽）且左侧更宽时
+			 * 右锚定（inline right），面板从鲸鱼右缘向左展开到全宽；右缘
+			 * 恒保持 16px 视口边距。省略号只留两端都放不下的极端兜底。 */
 			el.classList.remove('dsh-whale-status-leftflip');
-			maxW = Math.max(60, Math.min(280, window.innerWidth - wl - 4 - 16));
+			var spaceR = window.innerWidth - wl - 4 - 16;
+			var spaceL = window.innerWidth - 24; /* right-anchored: whole row minus margins */
+			if (spaceR < 190 && spaceL > spaceR) {
+				el.style.left = 'auto';
+				el.style.right = Math.max(0, (wl + w) - (window.innerWidth - 16)) + 'px';
+				maxW = Math.max(60, Math.min(280, spaceL));
+			} else {
+				maxW = Math.max(60, Math.min(280, spaceR));
+			}
 		} else {
-			/* side panel: LEFT of the whale by default, flip to its RIGHT
-			 * when there is no room on the left */
-			var flip = wl < 140;
+			/* side panel: pick the ROOMIER side of the whale（11-05 同修：
+			 * 旧判据 wl<140 过糙——wl=150 时左侧只剩 130px 照样截断） */
+			var slL = wl - 20;
+			var slR = window.innerWidth - (wl + w) - 16;
+			var flip = slR > slL;
 			el.classList.toggle('dsh-whale-status-leftflip', flip);
-			maxW = flip
-				? Math.max(60, Math.min(280, window.innerWidth - (wl + w) - 16))
-				: Math.max(60, Math.min(280, wl - 20));
+			maxW = Math.max(60, Math.min(280, flip ? slR : slL));
 		}
 		el.style.maxWidth = maxW + 'px';
 		applyStatusText();
@@ -3446,7 +3793,11 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		} catch (e) { return {}; }
 	})();
 	function rememberTitle(sessionId, title) {
-		if (!sessionId || !title || title === '未命名任务') return;
+		/* 占位名不落通讯录（11-03 桌宠）：「任务 N」是枚举会话的临时显示名，
+		 * 固化进 localStorage 会堵死真名的三条路（bookTitle 兜底/info.title
+		 * 填充/correctReports 改写）——页鲸占位「未命名任务」本就不落，桌宠
+		 * 占位同待遇。 */
+		if (!sessionId || !title || title === '未命名任务' || /^任务 \d+$/.test(title)) return;
 		titleBook[sessionId] = { t: title, at: Date.now() };
 		var keys = Object.keys(titleBook);
 		if (keys.length > TITLE_BOOK_CAP) {
@@ -3485,11 +3836,21 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	function correctReports(sessionId, title) {
 		correctHistoryTitle(sessionId, title); /* history rows saved pre-name follow too */
 		rememberTitle(sessionId, title); /* and the contact book learns the real name */
+		/* 桌宠占位「[任务 N]」同享晚到改写（11-03）：枚举会话的占位名与
+		 * 「未命名任务」语义相同——真实标题到达即改写，两者都不许残留。 */
+		function isFallback(text) {
+			return text.indexOf('未命名任务') !== -1 || /^\[[任务]+ \d+\]/.test(text);
+		}
+		function applyTitle(text) {
+			return /^\[任务 \d+\]/.test(text)
+				? text.replace(/^\[任务 \d+\]/, '[' + title + ']')
+				: text.split('未命名任务').join(title);
+		}
 		var changed = false;
 		for (var i = 0; i < reportQueue.length; i++) {
 			var item = reportQueue[i];
-			if (item.sessionId === sessionId && item.text.indexOf('未命名任务') !== -1) {
-				item.text = item.text.split('未命名任务').join(title);
+			if (item.sessionId === sessionId && isFallback(item.text)) {
+				item.text = applyTitle(item.text);
 				changed = true;
 			}
 		}
@@ -3501,11 +3862,13 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		 * only thing a late title can still fix. */
 		if (document && document.querySelector) {
 			var bubble = document.querySelector('.dsh-whale-bubble');
-			if (bubble && currentSaySession === sessionId && bubble.textContent.indexOf('未命名任务') !== -1) {
-				bubble.textContent = bubble.textContent.split('未命名任务').join(title);
+			if (bubble && currentSaySession === sessionId && isFallback(bubble.textContent)) {
+				bubble.textContent = applyTitle(bubble.textContent);
 			}
 		}
 	}
+	/* seam: 桌宠 titles 预填（server-events poll）改写已排队的占位通知（11-03） */
+	try { window.__dshWhale._correctReports = correctReports; } catch (e) {}
 
 	function fetchSubagentLabel(sessionId, onDone) {
 		if (typeof fetch !== 'function') {
@@ -3676,14 +4039,23 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		var info = subagentSessions.get(frame.sessionId);
 		if (!info) return;
 		var event = frame.event;
-		var title = truncate(info.label || info.title || bookTitle(frame.sessionId) || '未命名任务', 40);
+		var title = truncate(
+			info.label
+			|| (info.title && !/^任务 \d+$/.test(info.title) ? info.title : null)
+			/* 桌宠真名（11-03）：sessionTitles 是预填/实时 title 的直接落点，
+			 * 优先级高于固化的 info.title 占位（「任务 N」不许压住真名） */
+			|| sessionTitles.get(frame.sessionId)
+			|| bookTitle(frame.sessionId)
+			|| '未命名任务', 40);
+		/* 11-03 诊断缝（真名链路排查，收口后移除）：title 各段实值 */
+		try { window.__dshWhale._titleProbe = { sid: frame.sessionId, seq: frame.seq, label: info.label, infoTitle: info.title, mem: sessionTitles.get(frame.sessionId), book: bookTitle(frame.sessionId), chosen: title }; } catch (e) {}
 		if (event.type === 'turn/start') {
 			bumpWork(1);
 			/* mark the status panel as busy while this turn runs */
 			markStatusBusy(true);
 			/* (the task counter was already reset on the live turn/start
 			 * event, before the name-hold, so early usage is kept) */
-			if (CONFIG.notifyOnStart) {
+			if (CONFIG.notifyOnStart && !event.replaySuppress) {
 				var startMsg = '[' + title + ']开工了 ' + pickTail('running');
 				say(startMsg, DURATION_START, frame.sessionId);
 				/* 开工通知不计入红标（user request): say only — no
@@ -3705,12 +4077,12 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				/* stopped by the user: not a success — no completion bell, no
 				 * gear credit; history keeps a neutral ⏹ entry that still jumps */
 				var stopMsg = '[' + title + ']被中止了 ✋';
-				say(stopMsg, DURATION_END, frame.sessionId);
+				if (!event.replaySuppress) say(stopMsg, DURATION_END, frame.sessionId);
 				pushReport(stopMsg, DURATION_END, frame.sessionId, undefined, atMs);
 				pushHistory({ title: title, sessionId: frame.sessionId, kind: 'killed', at: Date.now(), endTime: atMs, turnTokens: sessionTurnTokens(frame.sessionId) });
 			} else if (isError) {
 				var endMsg = '[' + title + ']失败了 ' + pickTail('failed') + '（双击通知可回到该对话）';
-				if (!dndActive()) {
+				if (!event.replaySuppress && !dndActive()) {
 					say(endMsg, DURATION_END, frame.sessionId);
 					playDing('fail');
 					var repFail = statusReport(sessionTurnTokens(frame.sessionId), sessionTotalTokens(frame.sessionId), sessionPressure.get(frame.sessionId));
@@ -3726,6 +4098,27 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				 * they record history + gear credit silently so the unread
 				 * badge never explodes; the NEWEST carries foldCount and
 				 * announces once for the whole batch. */
+				if (event.replaySuppress) {
+					/* 重放批（11-03）：DSH 重启后的历史恢复——完成通知**只静默
+					 * 记账**：红标（pushReport）照记（未读不丢）、历史/gear 照
+					 * 记，但 say/音效/面板全跳过——否则重启前 60s 内的完成会在
+					 * 重启后**再响一次**（用户实报「提示音出现两次」）。 */
+					var replayMsg = isMaxTokens
+						? '[' + title + ']被截断了 ' + pickTail('killed')
+						: '[' + title + ']完成了 ' + completedTail();
+					pushReport(replayMsg, DURATION_END, frame.sessionId, undefined, atMs);
+					pushHistory({
+						title: title,
+						sessionId: frame.sessionId,
+						kind: isMaxTokens ? 'max-tokens' : 'done',
+						at: Date.now(),
+						endTime: atMs,
+						turnTokens: sessionTurnTokens(frame.sessionId)
+					});
+					gearStats.tasksDone++;
+					saveGearStats();
+					return;
+				}
 				if (event.foldSuppress) {
 					gearStats.tasksDone++;
 					saveGearStats();
@@ -4532,6 +4925,8 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 
 /* ---- module: src/ui/bubble.js ---- */
 	function uiSay(text, duration, sessionId) {
+		/* 休眠期静默（桌宠在岗，页面鲸鱼只剩数据管线）——状态机在 core/state.js */
+		if (petDormant) return;
 		/* who owns the current bubble text — late-title rewrites must match */
 		currentSaySession = sessionId || null;
 		var bubble = document.querySelector('.dsh-whale-bubble');
@@ -4552,6 +4947,43 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		uiSay.remainMs = duration || 5000;
 		uiSay.shownAt = Date.now();
 		armBubbleHide(bubble, uiSay.remainMs);
+		/* 动态边界（2026-11-04）：气泡原生只向上弹，鲸鱼贴顶时 2/3 出屏
+		 * （实机 rect.top=-67）。show 前同步夹紧——offset 布局盒不受 pop
+		 * 动画 transform 影响，判定无时序问题。 */
+		clampBubble(true);
+	}
+
+	/** Keep the bubble inside the viewport (动态边界 2026-11-04): flip
+	 * BELOW the whale when it would clip off the top (the
+	 * `.dsh-whale-bubble-flip` variant mirrors the arrow and the pop
+	 * animation), nudge horizontally with a margin when an edge clips it.
+	 * Measured from the LAYOUT boxes (whale.offset* + bubble.offset*) which
+	 * are immune to the pop animation's transform, so the call is safe both
+	 * synchronously (uiSay, before .show) and live (updateStatusPos while
+	 * the whale is dragged with a bubble open). Idempotent: clears the
+	 * previous margin/flip first, then measures — flip can never oscillate
+	 * because the measurement always happens in the un-flipped anchor. */
+	function clampBubble(force) {
+		var bubble = document.querySelector('.dsh-whale-bubble');
+		if (!bubble || !whale) return;
+		if (!force && !bubble.classList.contains('show')) return;
+		bubble.style.marginLeft = '0px';
+		bubble.classList.remove('dsh-whale-bubble-flip');
+		if (!bubble.offsetWidth && !bubble.offsetHeight) return; /* vm stub */
+		/* horizontal: the bubble is RIGHT-anchored (right:-8px), so for the
+		 * over-constrained solve left = CBw - right - width - margin-left —
+		 * a POSITIVE margin-left moves the box LEFT. To pull the box RIGHT
+		 * (clipped at the left edge) the margin goes negative; to push it
+		 * LEFT (clipped at the right edge) positive. 实机 11-04：两分支初版
+		 * 写反，贴左气泡 left=-2 出屏 2px 实证后修正。 */
+		var left = whale.offsetLeft + bubble.offsetLeft;
+		var right = left + bubble.offsetWidth;
+		if (left < 4) {
+			bubble.style.marginLeft = (left - 4) + 'px';
+		} else if (right > window.innerWidth - 4) {
+			bubble.style.marginLeft = (right - (window.innerWidth - 4)) + 'px';
+		}
+		if (whale.offsetTop + bubble.offsetTop < 2) bubble.classList.add('dsh-whale-bubble-flip');
 	}
 
 	function armBubbleHide(bubble, ms) {
@@ -4608,6 +5040,19 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		var whaleEl = document.getElementById('dsh-whale');
 		if (!whaleEl) return;
 		whale = whaleEl;
+		/* 开机防双鲸（11-05 第三层，用户实报「一打开 DSH 就两只小金鱼，DSH
+		 * 的闪一下才消失」）：非桌宠页**元素创建即隐藏**——不信任缓存 0
+		 * （每次关 DSH 桌宠跟随死亡都会把缓存写成 0，冷开必踩 spawn 窗口
+		 * =这不是罕见路径，是每次冷开的必经路径）。唤醒只走两条正路：
+		 * ①权威状态（hello/轮询/pet/state 帧，force 破幂等）——宿主活着
+		 * 时 <1s；②6s 兜底 reveal（仅「从未见过权威状态且内存态非休眠」
+		 * ——宿主死/无桌宠宿主的降级场景）。缓存 1 的开机不踩兜底。 */
+		if (!PET_MODE) {
+			whaleEl.style.display = 'none';
+			setTimeout(function () {
+				if (!petStateEverSeen() && !petDormant) applyPetDormant(false, true);
+			}, 6000);
+		}
 		uiReady = true;
 
 		var bubble = document.createElement('div');
@@ -4634,6 +5079,54 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		 * on the bubble, or on a spot that overlaps it). Idle summaries
 		 * carry no session and only get a hint. */
 		function jumpToBubbleSession() {
+			/* 桌宠（11-03 真跳转）：通知挂着枚举化合成会话（session-pet-sN），
+			 * 桌宠页没有跳转桥也没有 DSH DOM——但宿主持有 编号→真实会话 的
+			 * 反查表。POST /pet/ctrl jump 让宿主广播 pet/jump（页鲸用自己的
+			 * 跳转桥执行切换），同时请桌宠宿主把 DSH 窗口拉到前台——用户在
+			 * 桌宠上双击通知，落地就是「DSH 到眼前+停在目标对话」。 */
+			if (PET_MODE) {
+				var sid = currentSaySession || '';
+				var m = sid.match(/^session-pet-s(\d+)$/);
+				if (!m) {
+					uiSay('这条消息没有对应的对话哦 🐳', 2000);
+					return;
+				}
+				var code = parseInt(m[1], 10);
+				/* 时间锚点（11-06，用户实报「跳的是对话不是任务节点」）：与页鲸
+				 * 分支同源——当前通知报告的 endTime（这条报告所指的那次任务完
+				 * 成时刻）。宿主原样回传 pet/jump，页鲸 openSessionAt(sid, atMs)
+				 * 的翻页回溯把那条消息滚进视野。 */
+				var repAt = reading || lastShownReport;
+				var atMs = repAt && typeof repAt.endTime === 'number' ? repAt.endTime : undefined;
+				uiSay('正在打开对话… 🐳', 1800);
+				try {
+					if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+						/* the pet shell raises the DSH window (jump 落点必须可见） */
+						window.chrome.webview.postMessage({ c: 'jump' });
+					}
+				} catch (e) { /* non-pet shell: window switch is best-effort */ }
+				fetch('/api/whale-assistant/pet/ctrl', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ action: 'jump', code: code, atMs: atMs })
+				}).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (out) {
+					if (out && out.ok === true && out.delivered === false) {
+						/* 常驻语义（11-06）：关窗≠退出——DSH 窗口关着时页鲸不在场
+						 * （宿主广播 pet/jump 无人消费），跳转落不了地。通知**保留
+						 * 未读**（红标不掉），用户重开 DSH 后再双击还能定位到任务
+						 * 节点——比默默标已读丢了通知诚实得多。 */
+						uiSay('DSH 窗口已关闭——打开 DSH 后再点我跳转吧 🐳', 3500);
+					} else if (out && out.ok === true) {
+						/* jumping counts as reading the report (same contract as
+						 * the page whale): the badge drops and the notification
+						 * leaves the queue */
+						markBubbleRead();
+					} else {
+						uiSay('通知已过期，回 DSH 看看吧 🐳', 2500);
+					}
+				}).catch(function () { /* network hiccup: the shell switch already happened */ });
+				return;
+			}
 			var sessionId = currentSaySession;
 			if (!sessionId) {
 				uiSay('这条消息没有对应的对话哦 🐳', 2000);
@@ -5123,6 +5616,16 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				setTimeout(function () { location.reload(); }, 80);
 			});
 			menu.appendChild(refreshItem);
+			/* 桌宠常驻（第九轮用户定稿）：页面侧不再有「桌宠模式」开关——小鲸鱼
+			 * 默认活动范围=整个桌面，开机即常驻（不支持平台由页内鲸鱼兜底）。
+			 * 桌宠窗口里由 __dshPetHost 缝追加三态形态组 */
+			/* pet seam: the screen-pet window injects 形态组 (完整/气泡/隐藏)
+			 * into every rebuilt menu via __dshPetHost — a no-op everywhere else */
+			try {
+				if (window.__dshPetHost && typeof window.__dshPetHost.appendMenuItems === 'function') {
+					window.__dshPetHost.appendMenuItems(menu);
+				}
+			} catch (e) { }
 			if (!ctxMenu) document.body.appendChild(menu);
 			ctxMenu = menu;
 			/* position near the cursor, flipping at the viewport edges — the
@@ -5135,6 +5638,39 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			var top = clientY;
 			if (left + mw > window.innerWidth - 8) left = clientX - mw;
 			if (top + mh > window.innerHeight - 8) top = clientY - mh;
+			/* 11-05 用户实报「右键菜单会挡住小鲸鱼」：菜单锚在光标上，而右键的
+			 * 光标就在鲸鱼身上——视口翻转后整块压在鲸鱼上（真机截图：菜单
+			 * 右下角=光标=鲸鱼身）。翻转后与鲸鱼布局盒求交，相交就从
+			 * 右/左/上/下四个候选位挑第一个**完整入屏且零重叠**的（各留
+			 * 10px 缝）；全放不下取夹紧后重叠最小的。布局盒 offset* 免疫
+			 * bob 动画 transform（同 clampBubble 原理）。 */
+			if (whale && whale.offsetWidth > 0) {
+				var wx = whale.offsetLeft, wy = whale.offsetTop;
+				var ww = whale.offsetWidth, wh = whale.offsetHeight;
+				function menuHitsWhale(ml, mt) {
+					return ml < wx + ww && ml + mw > wx && mt < wy + wh && mt + mh > wy;
+				}
+				if (menuHitsWhale(left, top)) {
+					var GAP = 10, MARG = 8;
+					var cands = [
+						{ l: wx + ww + GAP, t: top },
+						{ l: wx - mw - GAP, t: top },
+						{ l: left, t: wy - mh - GAP },
+						{ l: left, t: wy + wh + GAP }
+					];
+					var bestL = left, bestT = top, bestOv = Infinity;
+					for (var ci = 0; ci < cands.length; ci++) {
+						var cl = Math.min(Math.max(cands[ci].l, MARG), window.innerWidth - mw - MARG);
+						var ct = Math.min(Math.max(cands[ci].t, MARG), window.innerHeight - mh - MARG);
+						if (!menuHitsWhale(cl, ct)) { bestL = cl; bestT = ct; bestOv = 0; break; }
+						var ox = Math.max(0, Math.min(cl + mw, wx + ww) - Math.max(cl, wx));
+						var oy = Math.max(0, Math.min(ct + mh, wy + wh) - Math.max(ct, wy));
+						if (ox * oy < bestOv) { bestOv = ox * oy; bestL = cl; bestT = ct; }
+					}
+					left = bestL;
+					top = bestT;
+				}
+			}
 			menu.style.left = Math.max(8, left) + 'px';
 			menu.style.top = Math.max(8, top) + 'px';
 			menu.classList.remove('show');
@@ -5330,6 +5866,12 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			item('拖着我走：位置会记住', '按住我拖到喜欢的角落，刷新后还在这。');
 			sec('🐳 我是什么');
 			item('打工小鲸鱼，住在 DeepSeek Harness 右下角', '只读任务事件做播报和记录，不拦截、不修改任何任务行为，随便折腾不影响工作。任务在后台跑我也会看着，跑完 3 秒内告诉你。');
+			sec('🐋 桌宠模式（桌面上的独立小鲸鱼）');
+			item('开机常驻：住在桌面上，不只在 DSH 里', '小鲸鱼开机就出现在桌面右下角，DSH 最小化也在。它在时 DSH 页里那只小金鱼会休息（页鲸休眠）；桌宠万一出意外，小金鱼会自动回来顶班，修好后自己回去。');
+			item('右键小鲸鱼：三种形态', '🐋 完整形态（日常）/ 🫧 缩成气泡 / 🙈 隐藏小鲸鱼＝躲猫猫：游到右下角收成一只小气泡，点一下气泡就破、鲸鱼冒出来。');
+			item('通知、红标、用量：页内同款', '桌宠上的通知与页内完全同一套——真名播报、红标未读、三行用量、读回；双击通知气泡直接跳回 DSH 对应对话并把窗口拉到前台。');
+			item('📜 历史任务：同一份账本', '桌宠菜单里的历史与页内共用一份记录（最近 50 条）：可搜索、可清空、可导出，点任意记录跳回对话。');
+			item('意外消失会自己回来', '小鲸鱼进程意外退出时，宿主每 30 秒体检一次，最多 1 分钟自动重生，不用重启 DSH。');
 			sec('🔔 通知一览');
 			item('[对话名]开工了 …', '任务开始跑。不进红标（不算未读）。');
 			item('[对话名]完成了 …', '正常结束：响一声 + 红标 +1，下方同时弹出用量面板（本次消耗 / 全对话累计 / 上下文占用），和气泡同生同灭。');
@@ -5339,7 +5881,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			item('🤔 [对话名]需要你选择', '模型在等你作答：响铃 + 红标 +1。回到对话作答即收尾；任务还没跑完，用量等完成通知再统一看。');
 			item('⚠️ [对话名]需要你审核', '有工具调用等你批准：同上。');
 			item('上下文快挤爆了…建议 /compact', '上下文占用达到压力阈值时提醒一次。');
-			item('⏰ 定时提醒', '右键菜单设的闹钟到点播报（不进红标，不带用量面板）。');
+			item('⏰ 定时提醒', '右键菜单设的闹钟到点播报（会计入红标，不带用量面板）。');
 			sec('🐾 交互手势');
 			gesture(1, '左键拖动：移动我');
 			gesture(2, '左键单击：进行互动（读通知）');
@@ -5361,7 +5903,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			item('🩺 运行状态', '鲸鱼自查各条通知链路（后台通知/用量读取/跳转）；平时全部正常、不打扰，出问题我头上会亮 ⚠️，设置里点"运行状态"能看是哪一条。');
 			item('🩺 调试模式', '排障用：开启后往控制台输出调试信息，并把取证数据写进 ~/.dsh/whale-assistant.json 的 _debug 键，平时保持关闭。');
 			sec('📜 历史与红标');
-			item('红标数字 = 未读通知数', '左键单击读一条（读过的消失），双击一键清空。完成/失败/提问/审核计入，开工/提醒不计入。');
+			item('红标数字 = 未读通知数', '左键单击读一条（读过的消失），双击一键清空。完成/失败/提问/审核/提醒计入，开工不计入。');
 			item('📜 历史任务（右键菜单）', '保留最近 50 条：本地 + 服务器双存储，桌面壳和别的浏览器窗口看到同一份；支持搜索、清空、导出。想彻底遗忘某个对话：先清历史、再「清空通讯录」（历史里存的名字快照会在下次加载时回流，两步都做才真正遗忘）。');
 			item('跳回对话', '双击通知气泡，或点历史抽屉里的任意一条记录。');
 			sec('❤️ 陪伴小彩蛋');
@@ -5595,7 +6137,12 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			var rows = [
 				['后台通知通道', rep.server === 'fail' ? '❌ 失效（收不到后台/失败通知）' : '✅ 正常'],
 				['用量读取', rep.dom === 'fail' ? '❌ 异常（tokens 面板可能为空）' : '✅ 正常'],
-				['气泡跳转', rep.jump === 'ok' ? '✅ 可用' : '⚠️ 不可用（走侧栏兜底）']
+				/* 桌宠页的跳转走宿主通道（与通知 feed 同路由同 token），健康
+				 * 判据不同——别把页鲸的「侧栏兜底」文案搬到桌宠上误导用户
+				 * （11-03 实机：桌宠跳转修好了，面板还在报「不可用」） */
+				['气泡跳转', PET_MODE
+					? (rep.jump === 'ok' ? '✅ 可用（双击通知直达）' : '⚠️ 不可用（宿主通道异常）')
+					: (rep.jump === 'ok' ? '✅ 可用' : '⚠️ 不可用（走侧栏兜底）')]
 			];
 			for (var i = 0; i < rows.length; i++) {
 				var row = document.createElement('div');
@@ -5806,6 +6353,11 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		 * jump back to its conversation via the session-opening hook. Uses a
 		 * separate panel slot so it can be wider and left-anchored. */
 		var ctxHistory = null;
+		/** 11-05 用户实报「历史任务不能实时同步」：数据链（页面记账→共享账本
+		 * →桌宠 /pet/history 枚举路由）实测秒级通畅，真正的缺口=**打开着的
+		 * 抽屉是静态快照**——任务完成不重开就看不见。开着期间 5s re-pull+
+		 * 重渲染（关抽屉即停；每次 open 重置，绝不叠加）。 */
+		var ctxHistoryLiveTimer = null;
 		/** icon glyph for a history record kind */
 		function historyIcon(kind) {
 			if (kind === 'done') return { text: '✓', cls: 'dsh-whale-history-icon-done' };
@@ -5891,6 +6443,31 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					return function (event) {
 						event.stopPropagation();
 						closeCtxHistory();
+						if (PET_MODE) {
+							/* 桌宠跳转（11-05）：合成 id 反解任务码 → /pet/ctrl
+							 * jump（宿主反查真实会话广播 pet/jump，DSH 页跳转+
+							 * 桌宠拉前台）——与通知双击同一条链。
+							 * 时间锚点（11-06）：这条记录的 endTime（任务完成时
+							 * 刻）随载荷走——页鲸 openSessionAt(sid, atMs) 的翻页
+							 * 回溯把该任务的消息滚进视野，跳的就是任务节点。 */
+							var m = /^session-pet-s(\d+)$/.exec(String(sessionId));
+							var code = m ? Number(m[1]) : 0;
+							if (code > 0) {
+								try {
+									fetch('/api/whale-assistant/pet/ctrl', {
+										method: 'POST',
+										headers: { 'content-type': 'application/json' },
+											body: JSON.stringify({ action: 'jump', code: code, atMs: typeof endTime === 'number' ? endTime : undefined })
+									}).catch(function () {});
+									uiSay('正在打开对话… 🐳', 1500, sessionId);
+								} catch (e) {
+									uiSay('跳转失败，稍后再试 🥲', 2000, sessionId);
+								}
+							} else {
+								uiSay('这条记录的跳转凭证已失效 🥲', 2000, sessionId);
+							}
+							return;
+						}
 						if (openSessionAt(sessionId, endTime) || openViaSidebarById(sessionId) || openViaSidebarByTitle(title)) {
 							uiSay('正在跳转到该对话… 🐳', 1500, sessionId);
 							return;
@@ -6206,14 +6783,24 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 
 		function openHistory() {
 			closeCtxPanel(); /* drawers and floating panels never stack */
-			pullCloudHistory(function () {
+			var refillLive = function () {
 				/* the server merge may have brought records from other windows:
-				 * re-fill the list body when the pull settles */
+				 * re-fill the list body when the pull settles (children walk —
+				 * NOT querySelector: the class form must work in the DOM stub
+				 * too, whose querySelector matches by tag) */
 				if (ctxHistory && ctxHistory.isConnected) {
-					var liveList = ctxHistory.querySelector('.dsh-whale-history-list');
+					var liveList = null;
+					for (var li = 0; li < ctxHistory.children.length; li++) {
+						if (ctxHistory.children[li].className === 'dsh-whale-history-list') { liveList = ctxHistory.children[li]; break; }
+					}
 					if (liveList) fillHistoryList(liveList);
 				}
-			});
+			};
+			pullCloudHistory(refillLive);
+			/* 打开期间实时跟随（5s）：桌宠页 re-pull /pet/history，页内 re-pull
+			 * /state 合并其他窗口——两条路都落在 refillLive 重渲染上 */
+			if (ctxHistoryLiveTimer) clearInterval(ctxHistoryLiveTimer);
+			ctxHistoryLiveTimer = setInterval(function () { pullCloudHistory(refillLive); }, 5000);
 			var panel = ctxHistory || document.createElement('div');
 			panel.className = 'dsh-whale-history';
 			panel.textContent = '';
@@ -6257,8 +6844,20 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					}
 				}
 				bumpClearAt(cutoff === null ? undefined : cutoff);
-				try { safeSet(HISTORY_KEY, history); } catch (e) {}
-				pushCloudHistory();
+				if (PET_MODE) {
+					/* 桌宠（11-05）：本地磁盘零历史——清空直达共享账本（宿主
+					 * clearAt 世代标记，页内/其他窗口下次合并时同步消失） */
+					try {
+						fetch('/api/whale-assistant/pet/ctrl', {
+							method: 'POST',
+							headers: { 'content-type': 'application/json' },
+							body: JSON.stringify({ action: 'clear-history', cutoff: cutoff === null ? null : cutoff })
+						}).catch(function () {});
+					} catch (e) {}
+				} else {
+					try { safeSet(HISTORY_KEY, history); } catch (e) {}
+					pushCloudHistory();
+				}
 				historySearch = '';
 				fillHistoryList(list);
 				clearRow.dataset.armed = '0';
@@ -6329,6 +6928,8 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			showSidePanel(panel, 280);
 		}
 		function closeCtxHistory() {
+			/* 11-05：实时刷新定时器随抽屉关闭停止（开着才轮询） */
+			if (ctxHistoryLiveTimer) { clearInterval(ctxHistoryLiveTimer); ctxHistoryLiveTimer = null; }
 			if (ctxHistory) ctxHistory.classList.remove('show');
 		}
 /* ---- module: src/input/swim.js ---- */
@@ -6347,6 +6948,9 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		}
 
 		function finishSwim() {
+			/* capture BEFORE nulling: the peek dive flips the completion path */
+			var petPeek = !!(swim && swim.petPeek);
+			var peekCb = (swim && swim.peekCb) || null;
 			swim = null;
 			whale.classList.remove('dsh-whale-swimming');
 			/* ease the figure back to the logo orientation */
@@ -6357,17 +6961,29 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					if (figure) figure.style.transition = 'none';
 				}, 300);
 			}
-			/* arrival splash: flowing-water burst + a little bounce */
-			var w = whale.offsetWidth;
-			var h = whale.offsetHeight;
-			spawnWaterSplash(whale.offsetLeft + w / 2, whale.offsetTop + h * 0.8);
-			whale.classList.add('dsh-whale-splash');
-			setTimeout(function () {
-				whale.classList.remove('dsh-whale-splash');
-			}, 600);
-			wiggle();
+			/* arrival splash: flowing-water burst + a little bounce。
+			 * petPeek 到达不撒水花不扭动：主体随即收成小气泡——只做安静落定。 */
+			if (!petPeek) {
+				var w = whale.offsetWidth;
+				var h = whale.offsetHeight;
+				spawnWaterSplash(whale.offsetLeft + w / 2, whale.offsetTop + h * 0.8);
+				whale.classList.add('dsh-whale-splash');
+				setTimeout(function () {
+					whale.classList.remove('dsh-whale-splash');
+				}, 600);
+				wiggle();
+			}
 			updateStatusPos();
-			uiSay(ARRIVAL_LINES[Math.floor(Math.random() * ARRIVAL_LINES.length)]);
+			/* 桌宠常驻（第九轮用户定稿）：没有进入/退出交接，只有躲猫猫潜入。
+			 * 页内双击回游维持随机到达台词。 */
+			if (petPeek) {
+				/* 躲猫猫到达右下角：静默（主体随即收成小气泡），写回落点并回调
+				 * 页面（收鲸鱼、显小气泡） */
+				try { savePos(); } catch (e) {}
+				if (peekCb) peekCb();
+			} else {
+				uiSay(ARRIVAL_LINES[Math.floor(Math.random() * ARRIVAL_LINES.length)]);
+			}
 		}
 
 		function swimFrame(now) {
@@ -6400,19 +7016,15 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			finishSwim();
 		}
 
-		/** Animated directional swim back to the default corner. */
-		function swimToCorner() {
-			closeCtxFloats(); /* swimming away closes any open float */
+		/** Shared swim core: bezier arc from the whale's CURRENT position to
+		 * (x1, y1) with the ripple trail + arrival splash. opts.petPeek marks
+		 * the hide-into-bubble dive (silent arrival + done callback).
+		 * swimToCorner keeps its exact historical semantics (POS removal +
+		 * bottom-right); tests drive this shape. */
+		function startSwim(x1, y1, opts) {
 			var x0 = whale.offsetLeft;
 			var y0 = whale.offsetTop;
-			var x1 = window.innerWidth - whale.offsetWidth - DEFAULT_RIGHT;
-			var y1 = window.innerHeight - whale.offsetHeight - DEFAULT_BOTTOM;
-			safeRemove(POS_KEY);
-			if (Math.abs(x1 - x0) < 2 && Math.abs(y1 - y0) < 2) return;
-			if (reducedMotion()) {
-				applyPos(x1, y1);
-				return;
-			}
+			if (Math.abs(x1 - x0) < 2 && Math.abs(y1 - y0) < 2) return false;
 			/* gentle arc: control point bulges toward the upper-left of travel */
 			var dx = x1 - x0;
 			var dy = y1 - y0;
@@ -6423,19 +7035,90 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			cancelSwim();
 			whale.style.transition = 'none';
 			whale.classList.add('dsh-whale-swimming');
-			swim = {
-				x0: x0,
-				y0: y0,
-				cx: (x0 + x1) / 2 + nx * bulge,
-				cy: (y0 + y1) / 2 + ny * bulge,
-				x1: x1,
-				y1: y1,
-				start: performance.now(),
-				/* leisurely pace so the swim can be interrupted by grabbing it */
-				duration: Math.max(900, Math.min(2600, 500 + len * 1.4)),
-				lastRipple: 0
-			};
+		swim = {
+			x0: x0,
+			y0: y0,
+			cx: (x0 + x1) / 2 + nx * bulge,
+			cy: (y0 + y1) / 2 + ny * bulge,
+			x1: x1,
+			y1: y1,
+			start: performance.now(),
+			/* leisurely pace so the swim can be interrupted by grabbing it */
+			duration: Math.max(900, Math.min(2600, 500 + len * 1.4)),
+			lastRipple: 0,
+			petPeek: !!(opts && opts.petPeek),
+			peekCb: (opts && typeof opts.peekCb === 'function') ? opts.peekCb : null
+		};
 			requestAnimationFrame(swimFrame);
+			return true;
+		}
+
+		/** Animated directional swim back to the default corner. */
+		function swimToCorner() {
+			closeCtxFloats(); /* swimming away closes any open float */
+			var x1 = window.innerWidth - whale.offsetWidth - DEFAULT_RIGHT;
+			var y1 = window.innerHeight - whale.offsetHeight - DEFAULT_BOTTOM;
+			safeRemove(POS_KEY);
+			if (reducedMotion()) {
+				applyPos(x1, y1);
+				return;
+			}
+			startSwim(x1, y1);
+		}
+
+		/** 桌宠入场（第九轮用户定稿：桌宠常驻，无进入/退出交接）——PET_MODE
+		 * 下 uiInit 的 loadPos 已把鲸鱼放回家（上次落点），这里只做两件事：
+		 * 恢复透明度（pet 页 CSS opacity 0→1 淡入，首建区域的 DWM re-clip 帧
+		 * 藏进淡入段）+ 立 entranceReady（页面从此才发首帧区域+ready 握手，
+		 * 页鲸让位仲裁照旧）。鲸鱼开机即在家里，没有跨窗口交接=闪现无从谈起。 */
+		function petEntranceSwim() {
+			if (!whale) return;
+			try { whale.style.opacity = '1'; } catch (e) {}
+			try { if (window.__dshPetHost) window.__dshPetHost.entranceReady = true; } catch (e) {}
+		}
+		/** 躲猫猫潜入（用户定稿 11-02）：「隐藏小鲸鱼」=鲸鱼游到桌面右下角钻进
+		 * 角落，到达回调页面（收鲸鱼、在原位弹出小气泡）。到达静默——主体
+		 * 随即收起。 */
+		function peekHide(done) {
+			if (!whale) { if (done) done(); return; }
+			closeCtxFloats();
+			var w = whale.offsetWidth;
+			var h = whale.offsetHeight;
+			var x1 = window.innerWidth - w - DEFAULT_RIGHT;
+			var y1 = window.innerHeight - h - DEFAULT_BOTTOM;
+			x1 = Math.max(0, Math.min(x1, window.innerWidth - w));
+			y1 = Math.max(0, Math.min(y1, window.innerHeight - h));
+			var fire = function () {
+				try { savePos(); } catch (e) {}
+				if (done) done();
+			};
+			if (reducedMotion() || !startSwim(x1, y1, { petPeek: true, peekCb: fire })) {
+				applyPos(x1, y1);
+				fire();
+			}
+		}
+
+		/** 躲猫猫跳出（小气泡单击）：鲸鱼在气泡处现身——弹跳+水花+台词，
+		 * 落点写回（下次开机从这起）。display 恢复由页面负责（peekShow 只管
+		 * 鲸鱼自己的 choreography）。 */
+		function peekShow() {
+			if (!whale) return;
+			try {
+				whale.classList.add('dsh-whale-bounce');
+				setTimeout(function () { try { whale.classList.remove('dsh-whale-bounce'); } catch (e2) {} }, 600);
+			} catch (e3) {}
+			var w = whale.offsetWidth;
+			var h = whale.offsetHeight;
+			spawnWaterSplash(whale.offsetLeft + w / 2, whale.offsetTop + h * 0.8);
+			whale.classList.add('dsh-whale-splash');
+			setTimeout(function () { try { whale.classList.remove('dsh-whale-splash'); } catch (e4) {} }, 600);
+			wiggle();
+			uiSay('我回来啦 🐋', 3200);
+			try { savePos(); } catch (e5) {}
+		}
+		if (typeof window !== 'undefined' && window.__dshWhale) {
+			window.__dshWhale.peekHide = peekHide;
+			window.__dshWhale.peekShow = peekShow;
 		}
 
 /* ---- module: src/input/drag.js ---- */
@@ -6595,6 +7278,13 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 
 		loadPos();
 
+		/* 桌宠入场（第一批）：PET_MODE 下落位后同步执行——首帧即画在「落点
+		 * 向屏幕中心回拉」的拉入位，随后游向最近边缘（弧线+涟漪+到达水花+
+		 * 引导台词），uiInit 同步无跳变。见 swim.js petEntranceSwim。 */
+		if (PET_MODE) {
+			try { petEntranceSwim(); } catch (e) {}
+		}
+
 		/* nap timer starts at page load: 5 idle minutes -> sleep
 		 * (defensive clear: drag.js must never leave a stale timer around —
 		 * the shared sleepTimer var belongs to core/sleep.js) */
@@ -6726,23 +7416,51 @@ function parseStamp(text) {
  *   paging below is DOM-based and engine-agnostic, so it rides on either. */
 function openSessionAt(sessionId, atMs) {
 	if (!sessionId) return false;
-	if (jumpSessions && typeof jumpSessions.open === 'function') {
+	/* 同会话跳转跳过 open（11-06 真机破案）：dispatch 验证 45s 内 ~30 次翻页
+	 * 点击全被 openSession 的异步 replaceMain 重渲染覆盖丢弃（点击落在过渡
+	 * 视图上），页面静止后手工同款 onClick 一次生效——open() 对「当前已打开
+	 * 的会话」本来就是 no-op 切换，跳过它翻页点击直接落在稳定视图上。 */
+	var activeNow = null;
+	try { activeNow = (typeof resolveCurrentSessionId === 'function') ? resolveCurrentSessionId() : null; } catch (e) { activeNow = null; }
+	var sameSession = !!activeNow && activeNow === sessionId;
+	/* 异会话的 open settle 权威信号（11-06 二轮，用户实报「有一些历史行
+	 * 只能跳到对话」）：同会话已 skip open；异会话必须 open——但 replaceMain
+	 * 的异步重渲染会把翻页点击整个覆盖丢弃（真机实锤同会话竞态，异会话
+	 * 同病且更重=历史行大多是异会话）。session 面的 openPromise 是官方
+	 * settle 信号：resolve 前循环只观察不点击，resolve 后点击才落在稳定
+	 * 视图上。桥拿不到（老引擎/形状变化）时立即放行（12s 无进展兜底）。 */
+	var openSettled = sameSession;
+	if (!sameSession) {
 		try {
-			/* atMs forwarded on the call surface (same 2-arg shape as the old
-			 * hook) for observability; the REAL anchor consumer is the paging
-			 * loop below — the official open() ignores the extra arg */
-			jumpSessions.open(sessionId, atMs);
-		} catch (e) {
-			return false; /* open failed: callers fall back to the sidebar */
+			var uwS = jumpUiWorkspace && jumpUiWorkspace.sessions;
+			var uwScope = uwS && uwS.scopes && typeof uwS.scopes.get === 'function' ? uwS.scopes.get(sessionId) : null;
+			var uwSession = uwScope && uwScope.session;
+			if (uwSession && uwSession.openPromise && typeof uwSession.openPromise.then === 'function') {
+				uwSession.openPromise.then(function () { openSettled = true; }, function () { openSettled = true; });
+			} else {
+				openSettled = true;
+			}
+		} catch (e) { openSettled = true; }
+	}
+	if (!sameSession) {
+		if (jumpSessions && typeof jumpSessions.open === 'function') {
+			try {
+				/* atMs forwarded on the call surface (same 2-arg shape as the old
+				 * hook) for observability; the REAL anchor consumer is the paging
+				 * loop below — the official open() ignores the extra arg */
+				jumpSessions.open(sessionId, atMs);
+			} catch (e) {
+				return false; /* open failed: callers fall back to the sidebar */
+			}
+		} else if (jumpUiWorkspace && typeof jumpUiWorkspace.openSession === 'function') {
+			try {
+				jumpUiWorkspace.openSession(sessionId);
+			} catch (e) {
+				return false; /* open failed: callers fall back to the sidebar */
+			}
+		} else {
+			return false; /* no bridge bound */
 		}
-	} else if (jumpUiWorkspace && typeof jumpUiWorkspace.openSession === 'function') {
-		try {
-			jumpUiWorkspace.openSession(sessionId);
-		} catch (e) {
-			return false; /* open failed: callers fall back to the sidebar */
-		}
-	} else {
-		return false; /* no bridge bound */
 	}
 	/* 每窗口归属（P1 2026-10-28）：本窗口主动打开的会话直接钉进本窗口 pin
 	 * （utils/session-key.js）——跳转是归属最确定的一手信号 */
@@ -6772,17 +7490,54 @@ function openSessionAt(sessionId, atMs) {
 		return out;
 	}
 	function stampMs(el) { return parseStamp((el.textContent || "").trim()); }
-	/* the pager node EXISTS while older history remains — its label flips to
-	 * a loading text mid-flight, so match the node, not the text */
-	function hasMoreNode() {
+	/** oldest already-rendered stamp in ms, or null when nothing renders yet */
+	function renderedOldestMs() {
+		var list = stampEls();
+		var oldest = null;
+		for (var i = 0; i < list.length; i++) {
+			var ms = stampMs(list[i]);
+			if (ms === null) continue;
+			if (oldest === null || ms < oldest) oldest = ms;
+		}
+		return oldest;
+	}
+	/** the「加载更早」pager button element, or null. The pager node EXISTS
+	 * while older history remains — its label flips to a loading text
+	 * mid-flight, so match the node, not the text. */
+	function findOlderButton() {
 		var root = document.querySelector("[data-chat-flow]");
-		if (root && root.querySelector('[class*="older"] button')) return true;
+		if (root) {
+			var b = root.querySelector('[class*="older"] button');
+			if (b) return b;
+		}
 		var btns = document.querySelectorAll("button");
 		for (var i = 0; i < btns.length; i++) {
 			var t = (btns[i].textContent || "").trim();
-			if (t.indexOf("\u52a0\u8f7d") === 0 || /^load/i.test(t)) return true;
+			if (t.indexOf("\u52a0\u8f7d") === 0 || /^load/i.test(t)) return btns[i];
 		}
-		return false;
+		return null;
+	}
+	function hasMoreNode() { return !!findOlderButton(); }
+	/** Fire the pager's React onClick directly (props live on the
+	 * __reactProps$ key): el.click() does NOT reach React's handler on this
+	 * DSH build — 真机实拍 11-06：三次测试 stamps 恒 56 直到 props-onClick
+	 * 触发（56→64）——合成 .click() 在该按钮上是死的。回退=完整
+	 * pointer/mouse 事件序列。 */
+	function clickOlderButton(btn) {
+		try {
+			var k = Object.keys(btn).find(function (key) { return key.indexOf('__reactProps$') === 0; });
+			if (k && btn[k] && typeof btn[k].onClick === 'function') {
+				btn[k].onClick({ preventDefault: function () {}, stopPropagation: function () {} });
+				return true;
+			}
+		} catch (e) { /* fall through to the sequence */ }
+		try {
+			['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(function (t) {
+				var E = t.indexOf('pointer') === 0 ? (window.PointerEvent || MouseEvent) : MouseEvent;
+				btn.dispatchEvent(new E(t, { bubbles: true, cancelable: true, view: window, button: 0 }));
+			});
+			return true;
+		} catch (e) { return false; }
 	}
 	function finish() {
 		if (done) return;
@@ -6821,38 +7576,84 @@ function openSessionAt(sessionId, atMs) {
 		setTimeout(place, 350);
 		setTimeout(place, 900);
 	}
+	var lastStampSig = '';
+	var lastProgressAt = t0;
+	var viewStableAt = 0;
+	/* 11-06 诊断缝（保留）：翻页循环每拍状态快照，外部经
+	 * window.__dshWhale._jumpDebug() 只读——跳转定位问题的首查入口
+	 * （oldest/pages/clicks/lastAction 一眼定位卡点）。 */
+	var __dbg = { started: false, lastTick: 0, oldest: null, n: 0, sig: '', pages: 0, paged: false, inFlight: 0, clicks: 0, lastAction: '-', t0ms: t0, atMsV: atMs, sameSession: sameSession };
+	if (typeof window !== 'undefined' && window.__dshWhale) {
+		try { window.__dshWhale._jumpDebug = function () { return JSON.parse(JSON.stringify(__dbg)); }; } catch (e) {}
+	}
 	var timer = setInterval(function () {
-		if (jumpRunSeq !== run) { clearInterval(timer); return; }
-		if (pages >= 400 || Date.now() - t0 > 45000) { clearInterval(timer); finish(); return; }
-		if (done) { clearInterval(timer); return; }
+		__dbg.lastTick = Date.now();
+		if (jumpRunSeq !== run) { __dbg.lastAction = 'superseded'; clearInterval(timer); return; }
+		if (pages >= 400 || Date.now() - t0 > 45000) { __dbg.lastAction = 'timeout'; clearInterval(timer); finish(); return; }
+		if (done) { __dbg.lastAction = 'done'; clearInterval(timer); return; }
+		/* 渲染面判定（每拍）：目标时刻已被渲染窗口覆盖 → 收尾定位 */
+		var oldest = renderedOldestMs();
+		__dbg.oldest = oldest; __dbg.n = stampEls().length;
+		if (oldest !== null && oldest <= atMs) { __dbg.lastAction = 'covered'; clearInterval(timer); finish(); return; }
+		/* 无进展检测（11-06）：渲染窗口签名（最早 stamp+条数）12 秒没变化
+		 * =翻页卡死/到底/被竞态吞——收尾，别把 45s 窗口耗在静止上 */
+		var sig = (oldest === null ? '' : oldest) + ':' + stampEls().length;
+		__dbg.sig = sig; __dbg.pages = pages; __dbg.paged = paged; __dbg.inFlight = inFlight;
+		if (sig !== lastStampSig) { lastStampSig = sig; lastProgressAt = Date.now(); viewStableAt = 0; }
+		else {
+			if (!viewStableAt) viewStableAt = Date.now();
+			else if (Date.now() - lastProgressAt > 12000) { clearInterval(timer); finish(); return; }
+		}
+		if (inFlight && Date.now() - inFlight < 1500) return; /* page watchdog (both paths) */
+		/* 视图稳定窗（11-06 真机破案，两段式）：①dispatch 后立即点击的翻页
+		 * 全部无效——openSession 的 replaceMain 是异步重渲染，点击加载的
+		 * older 内容挂在过渡视图上被 settle 后的 tail 重渲染整个覆盖
+		 * （真机：45s 内 ~30 次点击全丢；页面静止后手工同款 onClick 一次
+		 * 生效 56→64）；②固定 2.5s 仍概率性失败（非确定竞态：点击落在
+		 * React 渲染事务中被吞，同构建三次 56 停 vs 并行验证全程 36→56→64
+		 * 成功）。改为**签名稳定 1.5s 才允许点击**——tail 渲染/settle 完全
+		 * 停歇后才出手，配合 1.5s 点击节流=每次点击都落在静默窗口里。 */
+		if (Date.now() - t0 < 2500 || !openSettled || !viewStableAt || Date.now() - viewStableAt < 1500) return;
+		/* 翻页双路线（11-06，用户实报「只跳到对话不跳到节点」根修）：
+		 * 真机取证 0.2.1 桌面 __dshWhaleSessions 桥未绑（inject 闸门挡了
+		 * sessions 服务）——旧循环里 jumpSessions.scope() 每拍 TypeError、
+		 * conv 恒 null、`if (!conv || …) return` 空转 45s 超时 → atMs 有值
+		 * 也无处使，用户看到的=「跳到会话停在默认位置」。现改双路线：
+		 * ①conv.loadOlder() 桥优先（绑上了就用，0.1.x/老引擎原样）；
+		 * ②DOM「加载更早」按钮点击兜底——与用户手动点击同一条路径，
+		 *   版本无关（CDP 实证 0.2.1 的 [class*="older"] button 在）。
+		 * 两条路径都受 1.5s watchdog 节流（DOM 点击后置 inFlight 不清零
+		 * ——React 异步渲染期间连点无效，真机实拍 200ms 全速点击 25 拍
+		 * 就烧完 bail 预算只翻了几页）。 */
 		var conv = null;
 		try {
-			var scoped = jumpSessions.scope(sessionId);
-			conv = scoped && scoped.get("conversation");
-		} catch (e) { conv = null; }
-		if (!conv || typeof conv.loadOlder !== "function") return; /* open still settling */
-		if (paged) {
-			var oldest = Infinity, seen = false;
-			var list = stampEls();
-			for (var i = 0; i < list.length; i++) {
-				var ms = stampMs(list[i]);
-				if (ms === null) continue;
-				seen = true;
-				if (ms < oldest) oldest = ms;
+			if (jumpSessions && typeof jumpSessions.scope === 'function') {
+				var scoped = jumpSessions.scope(sessionId);
+				conv = scoped && scoped.get("conversation");
 			}
-			if (seen && oldest <= atMs) { clearInterval(timer); finish(); return; }
-			if (!hasMoreNode()) { clearInterval(timer); finish(); return; }
+		} catch (e) { conv = null; }
+		if (conv && typeof conv.loadOlder === "function") {
+			inFlight = Date.now();
+			pages++;
+			Promise.resolve(conv.loadOlder()).then(function () {
+				paged = true;
+				inFlight = 0;
+			}, function () {
+				paged = true;
+				inFlight = 0;
+			});
+			return;
 		}
-		if (inFlight && Date.now() - inFlight < 6000) return; /* page watchdog */
-		inFlight = Date.now();
-		pages++;
-		Promise.resolve(conv.loadOlder()).then(function () {
+		var btn = findOlderButton();
+		if (btn) {
+			inFlight = Date.now();   /* watchdog holds: next attempt ≥1.5s later */
+			pages++;
+			__dbg.clicks++; __dbg.lastAction = 'clicked@' + (Date.now() - t0) + 'ms';
+			try { clickOlderButton(btn); } catch (e) { __dbg.lastAction = 'click-err'; }
 			paged = true;
-			inFlight = 0;
-		}, function () {
-			paged = true;
-			inFlight = 0;
-		});
+			return;
+		}
+		if (paged && !hasMoreNode()) { clearInterval(timer); finish(); return; }
 	}, 200);
 	return true;
 }
@@ -6915,6 +7716,22 @@ if (typeof window !== 'undefined' && (window.__dshWhaleSessions || window.__dshW
 	try {
 		bindJumpSessions(window.__dshWhaleSessions, window.__dshWhaleConversation, window.__dshWhaleUiWorkspace);
 	} catch (e) { /* service shape mismatch — jump unbound until the bridges rebind */ }
+}
+
+/* 桌宠通知双击跳转（11-03）：宿主把合成码反查回真实会话后广播 pet/jump
+ * 帧，server-events（core）派发本事件——这里是唯一执行者（跳转桥+侧栏
+ * 兜底都在 ui 层）。页鲸在桌宠常驻期间处于视觉休眠，但数据管线照跑，
+ * 事件照常到达。载荷坏值只跳过本次，绝不打断监听。
+ * atMs（11-06）：时间锚点透传——openSessionAt 的翻页回溯把桌宠通知/历史
+ * 行所指的那条任务消息滚进视野（跳到任务节点，不再只跳到会话头部）。 */
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+	window.addEventListener('dsh-whale:pet-jump', function (ev) {
+		try {
+			var sid = ev && ev.detail && ev.detail.sessionId;
+			var atMs = ev && ev.detail && ev.detail.atMs;
+			if (sid && typeof openSessionAt === 'function') openSessionAt(sid, typeof atMs === 'number' ? atMs : undefined);
+		} catch (e) { /* a bad payload must not kill the listener */ }
+	});
 }
 /* ---- module: src/core/exports.js ---- */
 
@@ -7042,6 +7859,20 @@ if (typeof window !== 'undefined' && (window.__dshWhaleSessions || window.__dshW
 	};
 	window.__dshWhale.showWhaleNote = showWhaleNote;
 	window.__dshWhale._bubble = { resumeMs: bubbleResumeMs };
+	/* 桌宠仲裁 seam（第一批）：测试直接驱动休眠开关 / 读当前态（see ui/bubble.js） */
+	window.__dshWhale._petDormant = {
+		apply: applyPetDormant,
+		get: function () { return petDormant; },
+		seen: function () { return petStateEverSeen(); }
+	};
+	/* 11-05 开机防双鲸：兜底 reveal 缝（真实页 6s 定时器调用；测试的
+	 * ready() 同步调用它模拟超时——见 test-whale makeEnv.ready） */
+	window.__dshWhale._bootReveal = function () {
+		if (!petStateEverSeen() && !petDormant) applyPetDormant(false, true);
+	};
+	/* _petDormantOf（仲裁纯函数）由 server-events 闭包内导出——这里够不着 */
+	/* 桌宠常驻（第九轮）：没有开局问候——鲸鱼开机即在家里（loadPos 落位），
+	 * 页内鲸鱼在桌宠运行期间整体休眠，问候无从谈起。 */
 	/* idle companionship seam (see core/mood.js): force-fire the idle tick
 	 * (bypasses the probability gate) for tests */
 	window.__dshWhale._idleGuide = {

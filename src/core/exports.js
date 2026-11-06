@@ -123,6 +123,20 @@
 	};
 	window.__dshWhale.showWhaleNote = showWhaleNote;
 	window.__dshWhale._bubble = { resumeMs: bubbleResumeMs };
+	/* 桌宠仲裁 seam（第一批）：测试直接驱动休眠开关 / 读当前态（see ui/bubble.js） */
+	window.__dshWhale._petDormant = {
+		apply: applyPetDormant,
+		get: function () { return petDormant; },
+		seen: function () { return petStateEverSeen(); }
+	};
+	/* 11-05 开机防双鲸：兜底 reveal 缝（真实页 6s 定时器调用；测试的
+	 * ready() 同步调用它模拟超时——见 test-whale makeEnv.ready） */
+	window.__dshWhale._bootReveal = function () {
+		if (!petStateEverSeen() && !petDormant) applyPetDormant(false, true);
+	};
+	/* _petDormantOf（仲裁纯函数）由 server-events 闭包内导出——这里够不着 */
+	/* 桌宠常驻（第九轮）：没有开局问候——鲸鱼开机即在家里（loadPos 落位），
+	 * 页内鲸鱼在桌宠运行期间整体休眠，问候无从谈起。 */
 	/* idle companionship seam (see core/mood.js): force-fire the idle tick
 	 * (bypasses the probability gate) for tests */
 	window.__dshWhale._idleGuide = {

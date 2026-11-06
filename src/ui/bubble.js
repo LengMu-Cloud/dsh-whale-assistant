@@ -1,4 +1,6 @@
 	function uiSay(text, duration, sessionId) {
+		/* 休眠期静默（桌宠在岗，页面鲸鱼只剩数据管线）——状态机在 core/state.js */
+		if (petDormant) return;
 		/* who owns the current bubble text — late-title rewrites must match */
 		currentSaySession = sessionId || null;
 		var bubble = document.querySelector('.dsh-whale-bubble');
@@ -19,6 +21,43 @@
 		uiSay.remainMs = duration || 5000;
 		uiSay.shownAt = Date.now();
 		armBubbleHide(bubble, uiSay.remainMs);
+		/* 动态边界（2026-11-04）：气泡原生只向上弹，鲸鱼贴顶时 2/3 出屏
+		 * （实机 rect.top=-67）。show 前同步夹紧——offset 布局盒不受 pop
+		 * 动画 transform 影响，判定无时序问题。 */
+		clampBubble(true);
+	}
+
+	/** Keep the bubble inside the viewport (动态边界 2026-11-04): flip
+	 * BELOW the whale when it would clip off the top (the
+	 * `.dsh-whale-bubble-flip` variant mirrors the arrow and the pop
+	 * animation), nudge horizontally with a margin when an edge clips it.
+	 * Measured from the LAYOUT boxes (whale.offset* + bubble.offset*) which
+	 * are immune to the pop animation's transform, so the call is safe both
+	 * synchronously (uiSay, before .show) and live (updateStatusPos while
+	 * the whale is dragged with a bubble open). Idempotent: clears the
+	 * previous margin/flip first, then measures — flip can never oscillate
+	 * because the measurement always happens in the un-flipped anchor. */
+	function clampBubble(force) {
+		var bubble = document.querySelector('.dsh-whale-bubble');
+		if (!bubble || !whale) return;
+		if (!force && !bubble.classList.contains('show')) return;
+		bubble.style.marginLeft = '0px';
+		bubble.classList.remove('dsh-whale-bubble-flip');
+		if (!bubble.offsetWidth && !bubble.offsetHeight) return; /* vm stub */
+		/* horizontal: the bubble is RIGHT-anchored (right:-8px), so for the
+		 * over-constrained solve left = CBw - right - width - margin-left —
+		 * a POSITIVE margin-left moves the box LEFT. To pull the box RIGHT
+		 * (clipped at the left edge) the margin goes negative; to push it
+		 * LEFT (clipped at the right edge) positive. 实机 11-04：两分支初版
+		 * 写反，贴左气泡 left=-2 出屏 2px 实证后修正。 */
+		var left = whale.offsetLeft + bubble.offsetLeft;
+		var right = left + bubble.offsetWidth;
+		if (left < 4) {
+			bubble.style.marginLeft = (left - 4) + 'px';
+		} else if (right > window.innerWidth - 4) {
+			bubble.style.marginLeft = (right - (window.innerWidth - 4)) + 'px';
+		}
+		if (whale.offsetTop + bubble.offsetTop < 2) bubble.classList.add('dsh-whale-bubble-flip');
 	}
 
 	function armBubbleHide(bubble, ms) {

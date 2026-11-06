@@ -20,7 +20,8 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { loadStore, saveStoreAtomic, saveFileAtomic, mergeHistory } from './store.js';
+import { loadStore, saveStoreAtomic, saveFileAtomic, mergeHistory, queueStoreWrite } from './store.js';
+import { applyPet } from './pet.js';
 
 const inject = ['webServer', 'sessionController'];
 
@@ -175,11 +176,24 @@ function pushFrame(frame) {
 	while (recentFrames.length > 400) recentFrames.shift();
 	/* SSE fan-out: deliver the frame the moment it exists — network push is
 	 * NOT throttled in hidden tabs (timers are), so background notification
-	 * latency drops from "whenever the throttled 3s poll next runs" to now */
+	 * latency drops from "whenever the throttled 3s poll next runs" to now.
+	 * pet clients (11-06 通知延时修复) receive the ENUMERATED frame instead:
+	 * enumerateForPet runs per-frame against the SAME code book /pet/feed
+	 * uses, so the pet channel stays enumerated (no real session ids, no
+	 * conversation content) AND realtime. Clients are stored as
+	 * {res, pet} records — a plain res is treated as a page-whale client. */
 	if (sseClients.size) {
-		const payload = 'data: ' + JSON.stringify(frame) + '\n\n';
-		for (const res of sseClients) {
-			try { res.write(payload); } catch (e) { sseClients.delete(res); }
+		for (const client of sseClients) {
+			const res = client && client.res ? client.res : client;
+			try {
+				if (client && client.pet) {
+					for (const ev of client.enumerate(frame)) {
+						res.write('data: ' + JSON.stringify(ev) + '\n\n');
+					}
+				} else {
+					res.write('data: ' + JSON.stringify(frame) + '\n\n');
+				}
+			} catch (e) { sseClients.delete(client); }
 		}
 	}
 }
@@ -199,6 +213,15 @@ function apply(ctx) {
 				sessionId: session.id,
 				event: { type: event.type, time: event.time, data: event.data }
 			});
+			/* 真名主动帧（11-06 二轮）：任务开工会铸码（pet 枚举流的合成 id
+			 * 就此诞生），但老会话的标题早已生成、onChanged 永不再广播——
+			 * 桌宠 SSE 稳态下 titles 预填不刷新，通知退回「任务 N」。开工会
+			 * 话有真名就立即推一条 projection title（petCtl.announceTitle，
+			 * 30s memo 的全量标题源），通知生成时真名已在。petCtl 未就位
+			 * （boot 极早期）静默跳过——下一任务自然补上。 */
+			if (event.type === 'turn/start' && petCtl && typeof petCtl.announceTitle === 'function') {
+				try { petCtl.announceTitle(session.id); } catch (e) { /* title is best-effort */ }
+			}
 		});
 	} catch (e) { /* events unavailable on this host version */ }
 	try {
@@ -222,6 +245,10 @@ function apply(ctx) {
 			});
 		});
 	} catch (e) { /* jobs service unavailable */ }
+
+	/* the pet host attaches AFTER route registration (it needs the live
+	 * webServer/port); the events route reads its state lazily per request */
+	let petCtl = null;
 
 	const routes = [
 		{
@@ -270,14 +297,23 @@ function apply(ctx) {
 					}
 					/* History arrives as a full-document replace from every
 					 * window — merge (never replace) via mergeHistory
-					 * (lib/store.js), then persist through the atomic writer. */
-					mergeHistory(loadStore(storeDir()), parsed);
-					saveStoreAtomic(storeDir(), parsed);
-					res.writeHead(200, {
-						'content-type': 'application/json; charset=utf-8',
-						'cache-control': 'no-store'
+					 * (lib/store.js), then persist through the atomic writer.
+					 * The write goes through the SAME serialized queue the pet
+					 * host uses: two interleaved load→mutate→rename cycles used
+					 * to be able to lose one side's rows whole-file. */
+					queueStoreWrite(storeDir(), () => {
+						mergeHistory(loadStore(storeDir()), parsed);
+						saveStoreAtomic(storeDir(), parsed);
+					}).then(() => {
+						res.writeHead(200, {
+							'content-type': 'application/json; charset=utf-8',
+							'cache-control': 'no-store'
+						});
+						res.end('{"ok":true}');
+					}).catch((error) => {
+						res.writeHead(500, { 'cache-control': 'no-store' });
+						res.end('{"ok":false,"error":' + JSON.stringify(String(error && error.message || error)) + '}');
 					});
-					res.end('{"ok":true}');
 				});
 			}
 		},
@@ -362,11 +398,35 @@ function apply(ctx) {
 					res.end('{"events":[]}');
 					return;
 				}
+				/* 桌宠自愈心跳（11-04）：页鲸 3s 轮询=宿主唯一稳定心跳——
+				 * pet 死亡（窗口消失自杀/强杀）后页鲸苏醒接管但永不再退位的
+				 * 死局，在这里每拍检查重生（pet.js 内置 60s 冷却防 crash loop） */
+				try { if (petCtl && typeof petCtl.heartbeat === 'function') petCtl.heartbeat(); } catch (e) { }
 				res.writeHead(200, {
 					'content-type': 'application/json; charset=utf-8',
 					'cache-control': 'no-store'
 				});
-				res.end(JSON.stringify({ events: recentFrames.slice(-360), now: Date.now(), bootId }));
+				res.end(JSON.stringify({
+					events: recentFrames.slice(-360),
+					now: Date.now(),
+					bootId,
+					/* 桌宠仲裁 flag (first batch): the page whale reads this on
+					 * every poll and goes DORMANT while the screen pet owns the
+					 * visuals — recording continues, whales don't double up.
+					 * form rides along: a HIDDEN pet wakes the page whale
+					 * (真机反馈 10-31#3). up=false during the spawn window:
+					 * page whales STAY PUT until the pet window is actually
+					 * visible (接力式交接 11-01，页鲸等到桌宠出现才潜水） */
+					pet: {
+						enabled: !!(petCtl && petCtl.state().enabled),
+						form: petCtl ? petCtl.state().form : 'full',
+						up: petCtl ? petCtl.state().up !== false : true,
+						/* spawn 窗口标志（11-05）：页鲸凭它区分「桌宠正在出生」与
+						 * 「桌宠已死」——窗口期保持休眠，开机不再双鲸同屏（真机
+						 * 抓包 t2.9→t4.3 页鲸迟到潜水=用户看到的「两个同时出现」）。 */
+						spawning: petCtl ? !!petCtl.state().spawning : false
+					}
+				}));
 			}
 		},
 		{
@@ -468,7 +528,13 @@ function apply(ctx) {
 				}
 				/* 0.4.0 push channel: hello + live frames + heartbeats. EventSource
 				 * reconnects on its own (retry below); a dropped socket just
-				 * removes the subscriber. */
+				 * removes the subscriber. 11-06: a connection carrying the LIVE
+				 * pet token becomes a PET client — it receives per-frame
+				 * enumerated payloads (same code book as /pet/feed) instead of
+				 * the raw buffer, so the pet whale can ride realtime push
+				 * without breaching the enumeration boundary. Token-less
+				 * connections keep the legacy full-frame behaviour. */
+				const petClient = !!(petCtl && typeof petCtl.checkToken === 'function' && petCtl.checkToken(req));
 				res.writeHead(200, {
 					'content-type': 'text/event-stream; charset=utf-8',
 					'cache-control': 'no-store',
@@ -476,10 +542,27 @@ function apply(ctx) {
 				});
 				req.socket.setTimeout(0);
 				res.write('retry: 3000\n\n');
-				res.write('data: ' + JSON.stringify({ type: 'hello', bootId, now: Date.now() }) + '\n\n');
-				sseClients.add(res);
-				req.on('close', () => sseClients.delete(res));
-				req.on('error', () => sseClients.delete(res));
+				/* hello carries the pet arbitration flag: an SSE-connected page
+				 * never polls /events, so connect-time dormancy must ride here
+				 * (2026-10-31 真机：缺它=页内鲸鱼重载后永久隐藏） */
+				res.write('data: ' + JSON.stringify({
+					type: 'hello',
+					bootId,
+					now: Date.now(),
+					pet: {
+						enabled: !!(petCtl && petCtl.state().enabled),
+						form: petCtl ? petCtl.state().form : 'full',
+						up: petCtl ? petCtl.state().up !== false : true,
+						/* spawn 窗口标志（11-05）：页鲸凭它区分「桌宠正在出生」与
+						 * 「桌宠已死」——窗口期保持休眠，开机不再双鲸同屏（真机
+						 * 抓包 t2.9→t4.3 页鲸迟到潜水=用户看到的「两个同时出现」）。 */
+						spawning: petCtl ? !!petCtl.state().spawning : false
+					}
+				}) + '\n\n');
+				const clientRecord = { res, pet: petClient, enumerate: petClient ? petCtl.enumerateForPet : null };
+				sseClients.add(clientRecord);
+				req.on('close', () => sseClients.delete(clientRecord));
+				req.on('error', () => sseClients.delete(clientRecord));
 			}
 		}
 		];
@@ -506,8 +589,9 @@ function apply(ctx) {
 	/* SSE heartbeat: a real event the whale counts toward server liveness —
 	 * an IDLE server must not read as dead to the health check (R3) */
 	const sseHeartbeat = setInterval(() => {
-		for (const res of sseClients) {
-			try { res.write('data: ' + JSON.stringify({ type: 'ping' }) + '\n\n'); } catch (e) { sseClients.delete(res); }
+		for (const client of sseClients) {
+			const res = client && client.res ? client.res : client;
+			try { res.write('data: ' + JSON.stringify({ type: 'ping' }) + '\n\n'); } catch (e) { sseClients.delete(client); }
 		}
 	}, 20000);
 	/* unref: the heartbeat must never be the handle keeping an otherwise-idle
@@ -519,11 +603,75 @@ function apply(ctx) {
 		 * grants the whole engine tree only ~10s before SIGTERM (main.js
 		 * requireGraceful), so a live EventSource socket must not be left for
 		 * the webServer teardown to chase via client disconnects */
-		for (const res of sseClients) {
+		for (const client of sseClients) {
+			const res = client && client.res ? client.res : client;
 			try { res.end(); } catch (e) { /* client already gone */ }
 		}
 		sseClients.clear();
 	});
+	/* Pet host (桌宠, first batch): spawns pet/pet.ps1 when the ledger switch
+	 * is on, serves /pet/* (page + enumerated feed + ctrl). It reuses THIS
+	 * module's fence/body-reader — the security-critical predicate is never
+	 * duplicated. Its disposer kills the whole process tree (taskkill /T):
+	 * the ~10s desktop-update graceful window must not be spent chasing
+	 * WebView2 orphans that would lock the DLLs. */
+	petCtl = applyPet(ctx, {
+		isAllowed,
+		readJsonBody,
+		getFrames: () => recentFrames,
+		pushFrame,
+		bootId,
+		/* 跳转落点探测（11-06 常驻语义）：关窗≠退出后页鲸可能不在场（窗口
+		 * 关了 DOM 就没了）——桌宠双击跳转时宿主广播 pet/jump，但没有页鲸
+		 * 消费=无声失败。把「页鲸是否在场」（SSE 连接数）交给 jump 响应，
+		 * 桌宠页据此提示用户而不是干点没反应。 */
+		hasPageClients: () => sseClients.size > 0,
+		/* 存量标题预填（11-03）：session/title 事件只在标题**变化**时广播，
+		 * 桌宠起来后老会话（标题早已生成）不会有 title 帧——页鲸靠开机取
+		 * 名从历史预填，桌宠走同一条路：宿主从账本历史提取 真实会话→标题，
+		 * pet 层用码本转成合成 id 再下发（真实 id 永不出宿主）。 */
+		getHistoryTitles: () => {
+			try {
+				const doc = loadStore(storeDir());
+				const out = {};
+				if (doc && Array.isArray(doc.history)) {
+					for (const e of doc.history) {
+						if (e && typeof e.sessionId === 'string' && typeof e.title === 'string' && e.title) {
+							out[e.sessionId] = e.title;
+						}
+					}
+				}
+				return out;
+			} catch (e) {
+				return {};
+			}
+		},
+		/* 真名全量预填（11-05，用户实报「对话通知有时候识别不到名称」）：
+		 * 账本历史只是有损来源（清空过/从未记录的会话没有标题快照）——
+		 * sessionController.list() 是侧栏正在用的同一份会话清单（含冷会话
+		 * 的标题投影缓存），从这里拿全量 真实会话→现势标题。失败静默回落
+		 * 账本路径；真实 id 仍只在宿主内存，pet 层码本转码后下发。 */
+		listSessionTitles: () => {
+			const sc = ctx.sessionController;
+			if (!sc || typeof sc.list !== 'function') return Promise.resolve({});
+			return Promise.resolve(sc.list(AbortSignal.timeout(5000))).then((items) => {
+				const out = {};
+				if (Array.isArray(items)) {
+					for (const it of items) {
+						if (!it || typeof it.sessionId !== 'string') continue;
+						const t = it.projections && it.projections.values && it.projections.values.title;
+						if (typeof t === 'string' && t) out[it.sessionId] = t;
+					}
+				}
+				return out;
+			}).catch(() => ({}));
+		},
+		/* 桌宠历史抽屉（11-05）：账本目录（loadStore/saveStoreAtomic 的落点），
+		 * /pet/history 读 + clear-history 写都走这里——目录语义不重复实现。 */
+		ledgerDir: () => storeDir()
+	});
+	disposers.push(() => { petCtl.dispose(); });
+
 	return () => {
 		for (const dispose of disposers) dispose();
 	};

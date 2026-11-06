@@ -114,7 +114,11 @@
 		} catch (e) { return {}; }
 	})();
 	function rememberTitle(sessionId, title) {
-		if (!sessionId || !title || title === '未命名任务') return;
+		/* 占位名不落通讯录（11-03 桌宠）：「任务 N」是枚举会话的临时显示名，
+		 * 固化进 localStorage 会堵死真名的三条路（bookTitle 兜底/info.title
+		 * 填充/correctReports 改写）——页鲸占位「未命名任务」本就不落，桌宠
+		 * 占位同待遇。 */
+		if (!sessionId || !title || title === '未命名任务' || /^任务 \d+$/.test(title)) return;
 		titleBook[sessionId] = { t: title, at: Date.now() };
 		var keys = Object.keys(titleBook);
 		if (keys.length > TITLE_BOOK_CAP) {
@@ -153,11 +157,21 @@
 	function correctReports(sessionId, title) {
 		correctHistoryTitle(sessionId, title); /* history rows saved pre-name follow too */
 		rememberTitle(sessionId, title); /* and the contact book learns the real name */
+		/* 桌宠占位「[任务 N]」同享晚到改写（11-03）：枚举会话的占位名与
+		 * 「未命名任务」语义相同——真实标题到达即改写，两者都不许残留。 */
+		function isFallback(text) {
+			return text.indexOf('未命名任务') !== -1 || /^\[[任务]+ \d+\]/.test(text);
+		}
+		function applyTitle(text) {
+			return /^\[任务 \d+\]/.test(text)
+				? text.replace(/^\[任务 \d+\]/, '[' + title + ']')
+				: text.split('未命名任务').join(title);
+		}
 		var changed = false;
 		for (var i = 0; i < reportQueue.length; i++) {
 			var item = reportQueue[i];
-			if (item.sessionId === sessionId && item.text.indexOf('未命名任务') !== -1) {
-				item.text = item.text.split('未命名任务').join(title);
+			if (item.sessionId === sessionId && isFallback(item.text)) {
+				item.text = applyTitle(item.text);
 				changed = true;
 			}
 		}
@@ -169,11 +183,13 @@
 		 * only thing a late title can still fix. */
 		if (document && document.querySelector) {
 			var bubble = document.querySelector('.dsh-whale-bubble');
-			if (bubble && currentSaySession === sessionId && bubble.textContent.indexOf('未命名任务') !== -1) {
-				bubble.textContent = bubble.textContent.split('未命名任务').join(title);
+			if (bubble && currentSaySession === sessionId && isFallback(bubble.textContent)) {
+				bubble.textContent = applyTitle(bubble.textContent);
 			}
 		}
 	}
+	/* seam: 桌宠 titles 预填（server-events poll）改写已排队的占位通知（11-03） */
+	try { window.__dshWhale._correctReports = correctReports; } catch (e) {}
 
 	function fetchSubagentLabel(sessionId, onDone) {
 		if (typeof fetch !== 'function') {
@@ -344,14 +360,23 @@
 		var info = subagentSessions.get(frame.sessionId);
 		if (!info) return;
 		var event = frame.event;
-		var title = truncate(info.label || info.title || bookTitle(frame.sessionId) || '未命名任务', 40);
+		var title = truncate(
+			info.label
+			|| (info.title && !/^任务 \d+$/.test(info.title) ? info.title : null)
+			/* 桌宠真名（11-03）：sessionTitles 是预填/实时 title 的直接落点，
+			 * 优先级高于固化的 info.title 占位（「任务 N」不许压住真名） */
+			|| sessionTitles.get(frame.sessionId)
+			|| bookTitle(frame.sessionId)
+			|| '未命名任务', 40);
+		/* 11-03 诊断缝（真名链路排查，收口后移除）：title 各段实值 */
+		try { window.__dshWhale._titleProbe = { sid: frame.sessionId, seq: frame.seq, label: info.label, infoTitle: info.title, mem: sessionTitles.get(frame.sessionId), book: bookTitle(frame.sessionId), chosen: title }; } catch (e) {}
 		if (event.type === 'turn/start') {
 			bumpWork(1);
 			/* mark the status panel as busy while this turn runs */
 			markStatusBusy(true);
 			/* (the task counter was already reset on the live turn/start
 			 * event, before the name-hold, so early usage is kept) */
-			if (CONFIG.notifyOnStart) {
+			if (CONFIG.notifyOnStart && !event.replaySuppress) {
 				var startMsg = '[' + title + ']开工了 ' + pickTail('running');
 				say(startMsg, DURATION_START, frame.sessionId);
 				/* 开工通知不计入红标（user request): say only — no
@@ -373,12 +398,12 @@
 				/* stopped by the user: not a success — no completion bell, no
 				 * gear credit; history keeps a neutral ⏹ entry that still jumps */
 				var stopMsg = '[' + title + ']被中止了 ✋';
-				say(stopMsg, DURATION_END, frame.sessionId);
+				if (!event.replaySuppress) say(stopMsg, DURATION_END, frame.sessionId);
 				pushReport(stopMsg, DURATION_END, frame.sessionId, undefined, atMs);
 				pushHistory({ title: title, sessionId: frame.sessionId, kind: 'killed', at: Date.now(), endTime: atMs, turnTokens: sessionTurnTokens(frame.sessionId) });
 			} else if (isError) {
 				var endMsg = '[' + title + ']失败了 ' + pickTail('failed') + '（双击通知可回到该对话）';
-				if (!dndActive()) {
+				if (!event.replaySuppress && !dndActive()) {
 					say(endMsg, DURATION_END, frame.sessionId);
 					playDing('fail');
 					var repFail = statusReport(sessionTurnTokens(frame.sessionId), sessionTotalTokens(frame.sessionId), sessionPressure.get(frame.sessionId));
@@ -394,6 +419,27 @@
 				 * they record history + gear credit silently so the unread
 				 * badge never explodes; the NEWEST carries foldCount and
 				 * announces once for the whole batch. */
+				if (event.replaySuppress) {
+					/* 重放批（11-03）：DSH 重启后的历史恢复——完成通知**只静默
+					 * 记账**：红标（pushReport）照记（未读不丢）、历史/gear 照
+					 * 记，但 say/音效/面板全跳过——否则重启前 60s 内的完成会在
+					 * 重启后**再响一次**（用户实报「提示音出现两次」）。 */
+					var replayMsg = isMaxTokens
+						? '[' + title + ']被截断了 ' + pickTail('killed')
+						: '[' + title + ']完成了 ' + completedTail();
+					pushReport(replayMsg, DURATION_END, frame.sessionId, undefined, atMs);
+					pushHistory({
+						title: title,
+						sessionId: frame.sessionId,
+						kind: isMaxTokens ? 'max-tokens' : 'done',
+						at: Date.now(),
+						endTime: atMs,
+						turnTokens: sessionTurnTokens(frame.sessionId)
+					});
+					gearStats.tasksDone++;
+					saveGearStats();
+					return;
+				}
 				if (event.foldSuppress) {
 					gearStats.tasksDone++;
 					saveGearStats();

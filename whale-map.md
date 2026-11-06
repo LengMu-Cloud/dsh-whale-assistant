@@ -63,7 +63,7 @@
 
 > Server-events consumer (inline module): polls the whale-assistant host's /api/whale-assistant/events route (the host lives in the dsh server's cordis container and buffers session events for EVERY session) and feeds the frames the DOM adapter cannot see:    - turn/start of EVERY session (2026-09-02 
 
-**rememberSeq()** · **feedEventFrame()** · **registerBackground()** · **lookupTitlesFromHistory()** · **consume()** · **poll()** · **handleSseData()** · **connectSSE()**
+**rememberSeq()** · **petDormantOf()** · **feedEventFrame()** · **registerBackground()** · **lookupTitlesFromHistory()** · **consume()** · **poll()** · **handleSseData()** · **connectSSE()**
 
 ## **src/core/health.js**
 
@@ -74,6 +74,8 @@
 ## **src/core/state.js**（行切片）
 
 > job id -> { status, label, kind, sessionId }
+
+**applyPetDormant()** · **petStateEverSeen()**
 
 ## **src/core/reports.js**（行切片）
 
@@ -147,9 +149,9 @@
 
 ## **src/ui/bubble.js**（行切片）
 
-> Faint transient note above the whale (clear-all feedback #10): never a bubble, never unread, never a sound — auto-fades, then removes.
+> Keep the bubble inside the viewport (动态边界 2026-11-04): flip BELOW the whale when it would clip off the top (the `.dsh-whale-bubble-flip` variant mirrors the arrow and the pop animation), nudge horizontally with a margin when an edge clips it. Measured from the LAYOUT boxes (whale.offset* + bubble.of
 
-**uiSay()** · **armBubbleHide()** · **bubbleResumeMs()** · **bindBubbleHover()** · **showWhaleNote()**
+**uiSay()** · **clampBubble()** · **armBubbleHide()** · **bubbleResumeMs()** · **bindBubbleHover()** · **showWhaleNote()**
 
 ## **src/ui/bootstrap.js**（行切片）
 
@@ -167,7 +169,7 @@
 
 ## **src/input/swim.js**（行切片）
 
-> Animated directional swim back to the default corner.
+> Shared swim core: bezier arc from the whale's CURRENT position to (x1, y1) with the ripple trail + arrival splash. opts.petPeek marks the hide-into-bubble dive (silent arrival + done callback). swimToCorner keeps its exact historical semantics (POS removal + bottom-right); tests drive this shape.
 
 ## **src/input/drag.js**（行切片）
 
@@ -177,6 +179,6 @@
 
 > Session jump (inline module): open a conversation in the DSH UI and, when a target moment (atMs) is given, page the conversation log backwards until the rendered message stamps cover that moment (or the whole log is in memory), then scroll the closest older stamp into view.  0.4.0 provenance: this l
 
-**stampEls()** · **stampMs()** · **hasMoreNode()** · **finish()**
+**stampEls()** · **stampMs()** · **renderedOldestMs()** · **findOlderButton()** · **hasMoreNode()** · **clickOlderButton()** · **finish()**
 
 ## **src/core/exports.js**（行切片）

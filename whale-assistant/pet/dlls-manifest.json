@@ -1,0 +1,25 @@
+{
+  "package": "Microsoft.Web.WebView2",
+  "version": "1.0.2903.40",
+  "source": "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.2903.40/microsoft.web.webview2.1.0.2903.40.nupkg",
+  "license": "MIT (see dlls/LICENSE.txt)",
+  "verified": "2026-10-31",
+  "checks": [
+    "SHA-256 pinned below (scripts/check-pet.js gate + CI)",
+    "Authenticode: Valid, CN=Microsoft Corporation (verified on the ingested copies)",
+    "byte-identical to the ASUS Aura 1.0.2903.40 copies used by the POC (independent provenance cross-check)"
+  ],
+  "files": {
+    "WebView2Loader.dll": "462b36fd1be6ca9f7563466a89e57c41ef4a4def3e0a84fa885d203aea4a3aaf",
+    "Microsoft.Web.WebView2.Core.dll": "88a3b62f45225a811cdb85df6dfd95c2bff9a0e43e3b04f813b125eaca56cc9f",
+    "Microsoft.Web.WebView2.Wpf.dll": "1c5b6c792916d168093ef9b836f33e818d2d15d0c81f0864b5cddff97d913319",
+    "PetNative.dll": "b5bfbe70c2b790f9e4ce4e10da1612e66d040af68714bc857bc080a7db53e6e4"
+  },
+  "petNative": {
+    "source": "pet/native/PetNative.cs (source of truth — edit it, rebuild via scripts/build-pet-native.ps1, refresh this hash)",
+    "built": "2026-11-06",
+    "why": "pet.ps1's inline Add-Type compiled this P/Invoke class with csc.exe on every cold start — measured 14.5s (11-06 boot log). Precompiled load removes the compiler from the boot path; Add-Type remains as fallback.",
+    "compiler": "Windows PowerShell 5.1 / .NET Framework v4.0.30319 csc.exe, /target:library /platform:anycpu"
+  },
+  "notes": "Only the three DLLs the pet host actually loads are shipped (native loader + Core + Wpf). Microsoft.Web.WebView2.WinForms.dll is NOT referenced by pet.ps1 and was left out; WinForms.dll is also the one file where a third-party-copy cross-check could not be reproduced byte-for-byte."
+}

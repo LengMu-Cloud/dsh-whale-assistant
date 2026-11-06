@@ -25,6 +25,11 @@
 	 * margin from the viewport edge, so it NEVER touches the screen edge and
 	 * the open text re-flows (wraps) live while the whale moves. */
 	function updateStatusPos() {
+		/* 气泡同场夹紧（动态边界 2026-11-04）必须在 statusEl 判定**之前**：
+		 * 主框从未显示过时 statusEl=null，整条链在下面就 return 了——拖鲸鱼
+		 * 贴顶时开着的通知气泡不会翻面（实机 11-04 右上角实证 top=-58）。
+		 * clampBubble 自带 whale/show 守卫，statusEl 与它互不依赖。 */
+		try { clampBubble(); } catch (e) { }
 		var el = statusEl;
 		if (!el || !whale) return;
 		var below = window.innerHeight - (whale.offsetTop + whale.offsetHeight);
@@ -37,19 +42,35 @@
 		var above = below >= 80 && whale.offsetTop + whale.offsetHeight + 12 + estH > window.innerHeight;
 		el.classList.toggle('dsh-whale-status-above', above);
 		el.classList.toggle('dsh-whale-status-below', below >= 80 && !above);
+		/* inline anchor reset: the below branch may right-anchor (below),
+		 * the side branch is pure CSS-class anchored — stale inline values
+		 * from a previous anchored state must never leak across variants */
+		el.style.left = '';
+		el.style.right = '';
 		if (above || below >= 80) {
-			/* under/over the whale, left-aligned, expanding right — keep a
-			 * 16px margin from the viewport's right edge */
+			/* under/over the whale. 11-05 用户二次实报：贴右缘时右侧只剩
+			 * ~86px，报告整列被省略号吃掉（「此... 27.0K t...」）——修=
+			 * 哪边宽朝哪边展开：右侧放不下（<190px 满行宽）且左侧更宽时
+			 * 右锚定（inline right），面板从鲸鱼右缘向左展开到全宽；右缘
+			 * 恒保持 16px 视口边距。省略号只留两端都放不下的极端兜底。 */
 			el.classList.remove('dsh-whale-status-leftflip');
-			maxW = Math.max(60, Math.min(280, window.innerWidth - wl - 4 - 16));
+			var spaceR = window.innerWidth - wl - 4 - 16;
+			var spaceL = window.innerWidth - 24; /* right-anchored: whole row minus margins */
+			if (spaceR < 190 && spaceL > spaceR) {
+				el.style.left = 'auto';
+				el.style.right = Math.max(0, (wl + w) - (window.innerWidth - 16)) + 'px';
+				maxW = Math.max(60, Math.min(280, spaceL));
+			} else {
+				maxW = Math.max(60, Math.min(280, spaceR));
+			}
 		} else {
-			/* side panel: LEFT of the whale by default, flip to its RIGHT
-			 * when there is no room on the left */
-			var flip = wl < 140;
+			/* side panel: pick the ROOMIER side of the whale（11-05 同修：
+			 * 旧判据 wl<140 过糙——wl=150 时左侧只剩 130px 照样截断） */
+			var slL = wl - 20;
+			var slR = window.innerWidth - (wl + w) - 16;
+			var flip = slR > slL;
 			el.classList.toggle('dsh-whale-status-leftflip', flip);
-			maxW = flip
-				? Math.max(60, Math.min(280, window.innerWidth - (wl + w) - 16))
-				: Math.max(60, Math.min(280, wl - 20));
+			maxW = Math.max(60, Math.min(280, flip ? slR : slL));
 		}
 		el.style.maxWidth = maxW + 'px';
 		applyStatusText();

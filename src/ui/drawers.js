@@ -9,6 +9,11 @@
 		 * jump back to its conversation via the session-opening hook. Uses a
 		 * separate panel slot so it can be wider and left-anchored. */
 		var ctxHistory = null;
+		/** 11-05 用户实报「历史任务不能实时同步」：数据链（页面记账→共享账本
+		 * →桌宠 /pet/history 枚举路由）实测秒级通畅，真正的缺口=**打开着的
+		 * 抽屉是静态快照**——任务完成不重开就看不见。开着期间 5s re-pull+
+		 * 重渲染（关抽屉即停；每次 open 重置，绝不叠加）。 */
+		var ctxHistoryLiveTimer = null;
 		/** icon glyph for a history record kind */
 		function historyIcon(kind) {
 			if (kind === 'done') return { text: '✓', cls: 'dsh-whale-history-icon-done' };
@@ -94,6 +99,31 @@
 					return function (event) {
 						event.stopPropagation();
 						closeCtxHistory();
+						if (PET_MODE) {
+							/* 桌宠跳转（11-05）：合成 id 反解任务码 → /pet/ctrl
+							 * jump（宿主反查真实会话广播 pet/jump，DSH 页跳转+
+							 * 桌宠拉前台）——与通知双击同一条链。
+							 * 时间锚点（11-06）：这条记录的 endTime（任务完成时
+							 * 刻）随载荷走——页鲸 openSessionAt(sid, atMs) 的翻页
+							 * 回溯把该任务的消息滚进视野，跳的就是任务节点。 */
+							var m = /^session-pet-s(\d+)$/.exec(String(sessionId));
+							var code = m ? Number(m[1]) : 0;
+							if (code > 0) {
+								try {
+									fetch('/api/whale-assistant/pet/ctrl', {
+										method: 'POST',
+										headers: { 'content-type': 'application/json' },
+											body: JSON.stringify({ action: 'jump', code: code, atMs: typeof endTime === 'number' ? endTime : undefined })
+									}).catch(function () {});
+									uiSay('正在打开对话… 🐳', 1500, sessionId);
+								} catch (e) {
+									uiSay('跳转失败，稍后再试 🥲', 2000, sessionId);
+								}
+							} else {
+								uiSay('这条记录的跳转凭证已失效 🥲', 2000, sessionId);
+							}
+							return;
+						}
 						if (openSessionAt(sessionId, endTime) || openViaSidebarById(sessionId) || openViaSidebarByTitle(title)) {
 							uiSay('正在跳转到该对话… 🐳', 1500, sessionId);
 							return;
@@ -409,14 +439,24 @@
 
 		function openHistory() {
 			closeCtxPanel(); /* drawers and floating panels never stack */
-			pullCloudHistory(function () {
+			var refillLive = function () {
 				/* the server merge may have brought records from other windows:
-				 * re-fill the list body when the pull settles */
+				 * re-fill the list body when the pull settles (children walk —
+				 * NOT querySelector: the class form must work in the DOM stub
+				 * too, whose querySelector matches by tag) */
 				if (ctxHistory && ctxHistory.isConnected) {
-					var liveList = ctxHistory.querySelector('.dsh-whale-history-list');
+					var liveList = null;
+					for (var li = 0; li < ctxHistory.children.length; li++) {
+						if (ctxHistory.children[li].className === 'dsh-whale-history-list') { liveList = ctxHistory.children[li]; break; }
+					}
 					if (liveList) fillHistoryList(liveList);
 				}
-			});
+			};
+			pullCloudHistory(refillLive);
+			/* 打开期间实时跟随（5s）：桌宠页 re-pull /pet/history，页内 re-pull
+			 * /state 合并其他窗口——两条路都落在 refillLive 重渲染上 */
+			if (ctxHistoryLiveTimer) clearInterval(ctxHistoryLiveTimer);
+			ctxHistoryLiveTimer = setInterval(function () { pullCloudHistory(refillLive); }, 5000);
 			var panel = ctxHistory || document.createElement('div');
 			panel.className = 'dsh-whale-history';
 			panel.textContent = '';
@@ -460,8 +500,20 @@
 					}
 				}
 				bumpClearAt(cutoff === null ? undefined : cutoff);
-				try { safeSet(HISTORY_KEY, history); } catch (e) {}
-				pushCloudHistory();
+				if (PET_MODE) {
+					/* 桌宠（11-05）：本地磁盘零历史——清空直达共享账本（宿主
+					 * clearAt 世代标记，页内/其他窗口下次合并时同步消失） */
+					try {
+						fetch('/api/whale-assistant/pet/ctrl', {
+							method: 'POST',
+							headers: { 'content-type': 'application/json' },
+							body: JSON.stringify({ action: 'clear-history', cutoff: cutoff === null ? null : cutoff })
+						}).catch(function () {});
+					} catch (e) {}
+				} else {
+					try { safeSet(HISTORY_KEY, history); } catch (e) {}
+					pushCloudHistory();
+				}
 				historySearch = '';
 				fillHistoryList(list);
 				clearRow.dataset.armed = '0';
@@ -532,5 +584,7 @@
 			showSidePanel(panel, 280);
 		}
 		function closeCtxHistory() {
+			/* 11-05：实时刷新定时器随抽屉关闭停止（开着才轮询） */
+			if (ctxHistoryLiveTimer) { clearInterval(ctxHistoryLiveTimer); ctxHistoryLiveTimer = null; }
 			if (ctxHistory) ctxHistory.classList.remove('show');
 		}

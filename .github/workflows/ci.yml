@@ -34,6 +34,8 @@ jobs:
         run: node test-chip-gate.js
       - name: Host-half tests (ledger + route fence)
         run: node test-host-store.js
+      - name: Pet asset gate (DLL SHA pins + template sanity, pure node)
+        run: node scripts/check-pet.js
       - name: Static architecture audit (exit-code gated)
         run: node scripts/audit-deps.js
       - name: Built artifacts match src

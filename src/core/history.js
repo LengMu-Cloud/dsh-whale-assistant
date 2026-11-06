@@ -67,6 +67,10 @@
 	/** Fire-and-forget upload of the current list (with the clear marker so
 	 * the server drops cleared records on its side too). */
 	function pushCloudHistory() {
+		/* 桌宠（第一批）：pet 窗口不写共享台账——它的会话是枚举化的合成 id
+		 * (pet-sN)，写进去是纯噪声；清空走 /pet/ctrl clear-history（11-05），
+		 * 记录读取走 /pet/history 枚举路由——写路径保持全关。 */
+		if (PET_MODE) return;
 		if (typeof fetch !== 'function') return;
 		try {
 			fetch('/api/whale-assistant/save', {
@@ -80,24 +84,64 @@
 	/** Pull the server copy and merge it in (union by key). `onDone` fires
 	 * after the merge so the caller can re-render. */
 	function pullCloudHistory(onDone) {
-		if (typeof fetch !== 'function') return;
+		/* 桌宠（11-05 扩容，用户实报「历史任务里面读取不到，桌宠的时候还会
+		 * 出现」）：第一批把读写双门全关（pet profile 磁盘零历史），但菜单
+		 * 「📜 历史任务」入口还在——抽屉永远空而通知照常出，成了半成品。
+		 * 现在读路接通：走 /pet/history 枚举路由（真实 id 不出宿主、字段
+		 * 白名单），**内存态只读渲染——本地磁盘仍然零写入**（safeSet/回写
+		 * 都不发生），清空走 /pet/ctrl clear-history 直达共享账本。 */
+		if (PET_MODE) {
+			if (typeof fetch !== 'function') { if (onDone) onDone(); return; }
+			try {
+				fetch('/api/whale-assistant/pet/history').then(function (response) {
+					return response.ok ? response.json() : null;
+				}).then(function (doc) {
+					if (doc && Array.isArray(doc.history) && doc.history.length) {
+						var merged = mergeHistories(history, doc.history);
+						/* 11-05 与页内分支同款键签名比较——长度守卫在 cap 处失效
+						 * （内存满 50 时新进一条=挤走最旧一条，长度不变 → 丢弃），
+						 * 真机插桩实锤：路由 170 条 top=新记录、抽屉停在旧数据 */
+						var sig = function (list) {
+							var s = '';
+							for (var si = 0; si < list.length; si++) s += dedupeKey(list[si]) + ';';
+							return s;
+						};
+						if (sig(merged) !== sig(history)) history = merged;
+					}
+					if (onDone) onDone();
+				}).catch(function () { if (onDone) onDone(); });
+			} catch (e) { if (onDone) onDone(); }
+			return;
+		}
+		if (typeof fetch !== 'function') { if (onDone) onDone(); return; }
 		try {
 			fetch('/api/whale-assistant/state').then(function (response) {
 				return response.ok ? response.json() : null;
 			}).then(function (doc) {
-				if (!doc || !Array.isArray(doc.history)) return;
-				var merged = mergeHistories(history, doc.history);
-				if (merged.length !== history.length) {
-					history = merged;
-					safeSet(HISTORY_KEY, history);
-					/* write the merge back: a browser whose local history was
-					 * ahead uploads it — this is also how an existing window's
-					 * records migrate to the server on first open */
-					pushCloudHistory();
+				if (doc && Array.isArray(doc.history)) {
+					var merged = mergeHistories(history, doc.history);
+					/* 11-05 用户实报「要退出重启才能同步」真凶：**长度守卫在
+					 * cap 处失效**——内存已被 HISTORY_CAP 截到 50 时，新记录
+					 * 并入=「新进一条挤走最旧一条」，长度不变 → 合并结果被整
+					 * 个丢弃（真机插桩：拉到 169 条 top=03:18，渲染停在
+					 * 02:29）。改为**键签名比较**：任一变化都落地。 */
+					var sig = function (list) {
+						var s = '';
+						for (var si = 0; si < list.length; si++) s += dedupeKey(list[si]) + ';';
+						return s;
+					};
+					if (sig(merged) !== sig(history)) {
+						history = merged;
+						safeSet(HISTORY_KEY, history);
+						/* write the merge back: a browser whose local history was
+						 * ahead uploads it — this is also how an existing window's
+						 * records migrate to the server on first open */
+						pushCloudHistory();
+					}
 				}
 				if (onDone) onDone();
-			}).catch(function () {});
-		} catch (e) {}
+			}).catch(function () { if (onDone) onDone(); });
+		} catch (e) { if (onDone) onDone(); }
 	}
 
 	function loadHistory() {
@@ -110,6 +154,9 @@
 	}
 
 	function pushHistory(entry) {
+		/* 桌宠：合成会话不落历史（抽屉如实显示空；真实记录由休眠中的页面
+		 * 鲸鱼数据管线继续写） */
+		if (PET_MODE) return;
 		if (!entry || typeof entry.sessionId !== 'string') return;
 		history.unshift(entry);
 		if (history.length > HISTORY_CAP) history.length = HISTORY_CAP;

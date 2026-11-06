@@ -72,23 +72,51 @@ function parseStamp(text) {
  *   paging below is DOM-based and engine-agnostic, so it rides on either. */
 function openSessionAt(sessionId, atMs) {
 	if (!sessionId) return false;
-	if (jumpSessions && typeof jumpSessions.open === 'function') {
+	/* 同会话跳转跳过 open（11-06 真机破案）：dispatch 验证 45s 内 ~30 次翻页
+	 * 点击全被 openSession 的异步 replaceMain 重渲染覆盖丢弃（点击落在过渡
+	 * 视图上），页面静止后手工同款 onClick 一次生效——open() 对「当前已打开
+	 * 的会话」本来就是 no-op 切换，跳过它翻页点击直接落在稳定视图上。 */
+	var activeNow = null;
+	try { activeNow = (typeof resolveCurrentSessionId === 'function') ? resolveCurrentSessionId() : null; } catch (e) { activeNow = null; }
+	var sameSession = !!activeNow && activeNow === sessionId;
+	/* 异会话的 open settle 权威信号（11-06 二轮，用户实报「有一些历史行
+	 * 只能跳到对话」）：同会话已 skip open；异会话必须 open——但 replaceMain
+	 * 的异步重渲染会把翻页点击整个覆盖丢弃（真机实锤同会话竞态，异会话
+	 * 同病且更重=历史行大多是异会话）。session 面的 openPromise 是官方
+	 * settle 信号：resolve 前循环只观察不点击，resolve 后点击才落在稳定
+	 * 视图上。桥拿不到（老引擎/形状变化）时立即放行（12s 无进展兜底）。 */
+	var openSettled = sameSession;
+	if (!sameSession) {
 		try {
-			/* atMs forwarded on the call surface (same 2-arg shape as the old
-			 * hook) for observability; the REAL anchor consumer is the paging
-			 * loop below — the official open() ignores the extra arg */
-			jumpSessions.open(sessionId, atMs);
-		} catch (e) {
-			return false; /* open failed: callers fall back to the sidebar */
+			var uwS = jumpUiWorkspace && jumpUiWorkspace.sessions;
+			var uwScope = uwS && uwS.scopes && typeof uwS.scopes.get === 'function' ? uwS.scopes.get(sessionId) : null;
+			var uwSession = uwScope && uwScope.session;
+			if (uwSession && uwSession.openPromise && typeof uwSession.openPromise.then === 'function') {
+				uwSession.openPromise.then(function () { openSettled = true; }, function () { openSettled = true; });
+			} else {
+				openSettled = true;
+			}
+		} catch (e) { openSettled = true; }
+	}
+	if (!sameSession) {
+		if (jumpSessions && typeof jumpSessions.open === 'function') {
+			try {
+				/* atMs forwarded on the call surface (same 2-arg shape as the old
+				 * hook) for observability; the REAL anchor consumer is the paging
+				 * loop below — the official open() ignores the extra arg */
+				jumpSessions.open(sessionId, atMs);
+			} catch (e) {
+				return false; /* open failed: callers fall back to the sidebar */
+			}
+		} else if (jumpUiWorkspace && typeof jumpUiWorkspace.openSession === 'function') {
+			try {
+				jumpUiWorkspace.openSession(sessionId);
+			} catch (e) {
+				return false; /* open failed: callers fall back to the sidebar */
+			}
+		} else {
+			return false; /* no bridge bound */
 		}
-	} else if (jumpUiWorkspace && typeof jumpUiWorkspace.openSession === 'function') {
-		try {
-			jumpUiWorkspace.openSession(sessionId);
-		} catch (e) {
-			return false; /* open failed: callers fall back to the sidebar */
-		}
-	} else {
-		return false; /* no bridge bound */
 	}
 	/* 每窗口归属（P1 2026-10-28）：本窗口主动打开的会话直接钉进本窗口 pin
 	 * （utils/session-key.js）——跳转是归属最确定的一手信号 */
@@ -118,17 +146,54 @@ function openSessionAt(sessionId, atMs) {
 		return out;
 	}
 	function stampMs(el) { return parseStamp((el.textContent || "").trim()); }
-	/* the pager node EXISTS while older history remains — its label flips to
-	 * a loading text mid-flight, so match the node, not the text */
-	function hasMoreNode() {
+	/** oldest already-rendered stamp in ms, or null when nothing renders yet */
+	function renderedOldestMs() {
+		var list = stampEls();
+		var oldest = null;
+		for (var i = 0; i < list.length; i++) {
+			var ms = stampMs(list[i]);
+			if (ms === null) continue;
+			if (oldest === null || ms < oldest) oldest = ms;
+		}
+		return oldest;
+	}
+	/** the「加载更早」pager button element, or null. The pager node EXISTS
+	 * while older history remains — its label flips to a loading text
+	 * mid-flight, so match the node, not the text. */
+	function findOlderButton() {
 		var root = document.querySelector("[data-chat-flow]");
-		if (root && root.querySelector('[class*="older"] button')) return true;
+		if (root) {
+			var b = root.querySelector('[class*="older"] button');
+			if (b) return b;
+		}
 		var btns = document.querySelectorAll("button");
 		for (var i = 0; i < btns.length; i++) {
 			var t = (btns[i].textContent || "").trim();
-			if (t.indexOf("\u52a0\u8f7d") === 0 || /^load/i.test(t)) return true;
+			if (t.indexOf("\u52a0\u8f7d") === 0 || /^load/i.test(t)) return btns[i];
 		}
-		return false;
+		return null;
+	}
+	function hasMoreNode() { return !!findOlderButton(); }
+	/** Fire the pager's React onClick directly (props live on the
+	 * __reactProps$ key): el.click() does NOT reach React's handler on this
+	 * DSH build — 真机实拍 11-06：三次测试 stamps 恒 56 直到 props-onClick
+	 * 触发（56→64）——合成 .click() 在该按钮上是死的。回退=完整
+	 * pointer/mouse 事件序列。 */
+	function clickOlderButton(btn) {
+		try {
+			var k = Object.keys(btn).find(function (key) { return key.indexOf('__reactProps$') === 0; });
+			if (k && btn[k] && typeof btn[k].onClick === 'function') {
+				btn[k].onClick({ preventDefault: function () {}, stopPropagation: function () {} });
+				return true;
+			}
+		} catch (e) { /* fall through to the sequence */ }
+		try {
+			['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(function (t) {
+				var E = t.indexOf('pointer') === 0 ? (window.PointerEvent || MouseEvent) : MouseEvent;
+				btn.dispatchEvent(new E(t, { bubbles: true, cancelable: true, view: window, button: 0 }));
+			});
+			return true;
+		} catch (e) { return false; }
 	}
 	function finish() {
 		if (done) return;
@@ -167,38 +232,84 @@ function openSessionAt(sessionId, atMs) {
 		setTimeout(place, 350);
 		setTimeout(place, 900);
 	}
+	var lastStampSig = '';
+	var lastProgressAt = t0;
+	var viewStableAt = 0;
+	/* 11-06 诊断缝（保留）：翻页循环每拍状态快照，外部经
+	 * window.__dshWhale._jumpDebug() 只读——跳转定位问题的首查入口
+	 * （oldest/pages/clicks/lastAction 一眼定位卡点）。 */
+	var __dbg = { started: false, lastTick: 0, oldest: null, n: 0, sig: '', pages: 0, paged: false, inFlight: 0, clicks: 0, lastAction: '-', t0ms: t0, atMsV: atMs, sameSession: sameSession };
+	if (typeof window !== 'undefined' && window.__dshWhale) {
+		try { window.__dshWhale._jumpDebug = function () { return JSON.parse(JSON.stringify(__dbg)); }; } catch (e) {}
+	}
 	var timer = setInterval(function () {
-		if (jumpRunSeq !== run) { clearInterval(timer); return; }
-		if (pages >= 400 || Date.now() - t0 > 45000) { clearInterval(timer); finish(); return; }
-		if (done) { clearInterval(timer); return; }
+		__dbg.lastTick = Date.now();
+		if (jumpRunSeq !== run) { __dbg.lastAction = 'superseded'; clearInterval(timer); return; }
+		if (pages >= 400 || Date.now() - t0 > 45000) { __dbg.lastAction = 'timeout'; clearInterval(timer); finish(); return; }
+		if (done) { __dbg.lastAction = 'done'; clearInterval(timer); return; }
+		/* 渲染面判定（每拍）：目标时刻已被渲染窗口覆盖 → 收尾定位 */
+		var oldest = renderedOldestMs();
+		__dbg.oldest = oldest; __dbg.n = stampEls().length;
+		if (oldest !== null && oldest <= atMs) { __dbg.lastAction = 'covered'; clearInterval(timer); finish(); return; }
+		/* 无进展检测（11-06）：渲染窗口签名（最早 stamp+条数）12 秒没变化
+		 * =翻页卡死/到底/被竞态吞——收尾，别把 45s 窗口耗在静止上 */
+		var sig = (oldest === null ? '' : oldest) + ':' + stampEls().length;
+		__dbg.sig = sig; __dbg.pages = pages; __dbg.paged = paged; __dbg.inFlight = inFlight;
+		if (sig !== lastStampSig) { lastStampSig = sig; lastProgressAt = Date.now(); viewStableAt = 0; }
+		else {
+			if (!viewStableAt) viewStableAt = Date.now();
+			else if (Date.now() - lastProgressAt > 12000) { clearInterval(timer); finish(); return; }
+		}
+		if (inFlight && Date.now() - inFlight < 1500) return; /* page watchdog (both paths) */
+		/* 视图稳定窗（11-06 真机破案，两段式）：①dispatch 后立即点击的翻页
+		 * 全部无效——openSession 的 replaceMain 是异步重渲染，点击加载的
+		 * older 内容挂在过渡视图上被 settle 后的 tail 重渲染整个覆盖
+		 * （真机：45s 内 ~30 次点击全丢；页面静止后手工同款 onClick 一次
+		 * 生效 56→64）；②固定 2.5s 仍概率性失败（非确定竞态：点击落在
+		 * React 渲染事务中被吞，同构建三次 56 停 vs 并行验证全程 36→56→64
+		 * 成功）。改为**签名稳定 1.5s 才允许点击**——tail 渲染/settle 完全
+		 * 停歇后才出手，配合 1.5s 点击节流=每次点击都落在静默窗口里。 */
+		if (Date.now() - t0 < 2500 || !openSettled || !viewStableAt || Date.now() - viewStableAt < 1500) return;
+		/* 翻页双路线（11-06，用户实报「只跳到对话不跳到节点」根修）：
+		 * 真机取证 0.2.1 桌面 __dshWhaleSessions 桥未绑（inject 闸门挡了
+		 * sessions 服务）——旧循环里 jumpSessions.scope() 每拍 TypeError、
+		 * conv 恒 null、`if (!conv || …) return` 空转 45s 超时 → atMs 有值
+		 * 也无处使，用户看到的=「跳到会话停在默认位置」。现改双路线：
+		 * ①conv.loadOlder() 桥优先（绑上了就用，0.1.x/老引擎原样）；
+		 * ②DOM「加载更早」按钮点击兜底——与用户手动点击同一条路径，
+		 *   版本无关（CDP 实证 0.2.1 的 [class*="older"] button 在）。
+		 * 两条路径都受 1.5s watchdog 节流（DOM 点击后置 inFlight 不清零
+		 * ——React 异步渲染期间连点无效，真机实拍 200ms 全速点击 25 拍
+		 * 就烧完 bail 预算只翻了几页）。 */
 		var conv = null;
 		try {
-			var scoped = jumpSessions.scope(sessionId);
-			conv = scoped && scoped.get("conversation");
-		} catch (e) { conv = null; }
-		if (!conv || typeof conv.loadOlder !== "function") return; /* open still settling */
-		if (paged) {
-			var oldest = Infinity, seen = false;
-			var list = stampEls();
-			for (var i = 0; i < list.length; i++) {
-				var ms = stampMs(list[i]);
-				if (ms === null) continue;
-				seen = true;
-				if (ms < oldest) oldest = ms;
+			if (jumpSessions && typeof jumpSessions.scope === 'function') {
+				var scoped = jumpSessions.scope(sessionId);
+				conv = scoped && scoped.get("conversation");
 			}
-			if (seen && oldest <= atMs) { clearInterval(timer); finish(); return; }
-			if (!hasMoreNode()) { clearInterval(timer); finish(); return; }
+		} catch (e) { conv = null; }
+		if (conv && typeof conv.loadOlder === "function") {
+			inFlight = Date.now();
+			pages++;
+			Promise.resolve(conv.loadOlder()).then(function () {
+				paged = true;
+				inFlight = 0;
+			}, function () {
+				paged = true;
+				inFlight = 0;
+			});
+			return;
 		}
-		if (inFlight && Date.now() - inFlight < 6000) return; /* page watchdog */
-		inFlight = Date.now();
-		pages++;
-		Promise.resolve(conv.loadOlder()).then(function () {
+		var btn = findOlderButton();
+		if (btn) {
+			inFlight = Date.now();   /* watchdog holds: next attempt ≥1.5s later */
+			pages++;
+			__dbg.clicks++; __dbg.lastAction = 'clicked@' + (Date.now() - t0) + 'ms';
+			try { clickOlderButton(btn); } catch (e) { __dbg.lastAction = 'click-err'; }
 			paged = true;
-			inFlight = 0;
-		}, function () {
-			paged = true;
-			inFlight = 0;
-		});
+			return;
+		}
+		if (paged && !hasMoreNode()) { clearInterval(timer); finish(); return; }
 	}, 200);
 	return true;
 }
@@ -261,4 +372,20 @@ if (typeof window !== 'undefined' && (window.__dshWhaleSessions || window.__dshW
 	try {
 		bindJumpSessions(window.__dshWhaleSessions, window.__dshWhaleConversation, window.__dshWhaleUiWorkspace);
 	} catch (e) { /* service shape mismatch — jump unbound until the bridges rebind */ }
+}
+
+/* 桌宠通知双击跳转（11-03）：宿主把合成码反查回真实会话后广播 pet/jump
+ * 帧，server-events（core）派发本事件——这里是唯一执行者（跳转桥+侧栏
+ * 兜底都在 ui 层）。页鲸在桌宠常驻期间处于视觉休眠，但数据管线照跑，
+ * 事件照常到达。载荷坏值只跳过本次，绝不打断监听。
+ * atMs（11-06）：时间锚点透传——openSessionAt 的翻页回溯把桌宠通知/历史
+ * 行所指的那条任务消息滚进视野（跳到任务节点，不再只跳到会话头部）。 */
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+	window.addEventListener('dsh-whale:pet-jump', function (ev) {
+		try {
+			var sid = ev && ev.detail && ev.detail.sessionId;
+			var atMs = ev && ev.detail && ev.detail.atMs;
+			if (sid && typeof openSessionAt === 'function') openSessionAt(sid, typeof atMs === 'number' ? atMs : undefined);
+		} catch (e) { /* a bad payload must not kill the listener */ }
+	});
 }

@@ -70,7 +70,17 @@
 			rep = {
 				server: (sh && (sh.failStreak >= 3 || visibleStale)) ? 'fail' : 'ok',
 				dom: (uh && uh.missStreak >= 3) ? 'fail' : 'ok',
-				jump: jumpReady() ? 'ok' : 'warn' /* 0.4.0: the in-house client-module bridge replaces the injected hook */
+				/* jump probe: the page whale reports its bridge binding (jumpReady);
+				 * the PET whale has NO bridge — its jump runs through the HOST
+				 * channel (POST /pet/ctrl → reverse-lookup → pet/jump broadcast →
+				 * the page whale's own bridge executes), which rides the SAME
+				 * /pet/* routes and token as the notification feed. There the
+				 * server health IS the jump-channel health — reporting jumpReady
+				 * on the pet page would warn forever on a working feature
+				 * (11-03 实机：桌宠健康面板把修好的跳转报成 ⚠️ 不可用）. */
+				jump: PET_MODE
+					? ((sh && sh.failStreak < 3 && !visibleStale) ? 'ok' : 'warn')
+					: (jumpReady() ? 'ok' : 'warn')
 			};
 		}
 		var degraded = rep.server === 'fail' || rep.dom === 'fail';

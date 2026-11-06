@@ -17,12 +17,29 @@ param(
 	[string]$ProfileDir = (Join-Path $env:USERPROFILE '.dsh\profiles\web'),
 	[string]$PluginSource = (Join-Path $PSScriptRoot 'whale-assistant'),
 	[switch]$Check,
-	[switch]$Remove
+	[switch]$Remove,
+	[switch]$Registry
 )
 
 $ErrorActionPreference = 'Stop'
 
 $DepName = '@lengmu-cloud/dsh-whale-assistant'
+
+if ($Registry) {
+	# registry-source install (2026-11-07 plan 2 step 4): the npm package is
+	# the ONLY source whose updates light up the management page's update
+	# badge (updateRefusal refuses non-registry sources outright). One dsh
+	# command; run -Remove first when switching from a link:/git install.
+	if (-not (Get-Command dsh -ErrorAction SilentlyContinue)) {
+		Write-Host '    [MISSING] dsh CLI not on PATH — install the global dsh package first'
+		exit 1
+	}
+	Write-Host '    [registry] adding' $DepName 'via dsh plugin add (npm source)...'
+	& dsh plugin --profile (Split-Path -Leaf $ProfileDir) add $DepName
+	if ($LASTEXITCODE -ne 0) { Write-Host '    [FAIL] dsh plugin add exited' $LASTEXITCODE; exit $LASTEXITCODE }
+	Write-Host '    [OK] registry install complete — update badge now wired to npm releases'
+	exit 0
+}
 
 if ($Check) {
 	# Read-only audit of the three registration pieces; exits 1 when any is
@@ -56,6 +73,18 @@ if ($Check) {
 }
 
 if ($Remove) {
+	# Kill the pet process tree FIRST (first batch): the pet host keeps the
+	# WebView2 fixed-version DLLs loaded — removing files under a live pet
+	# turns the install into a ghost directory. Match on the pet.ps1 path in
+	# the command line (any install location), exclude this own process.
+	try {
+		$petProcs = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
+			Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and ($_.CommandLine -match 'pet\.ps1' -or $_.CommandLine -match 'whale-pet') }
+		foreach ($p in $petProcs) {
+			Write-Host '    stopping pet process tree (pid' $p.ProcessId ')'
+			cmd /c taskkill /T /F /PID $p.ProcessId | Out-Null
+		}
+	} catch { Write-Host '    [WARN] pet tree sweep failed:' $_.Exception.Message }
 	# Symmetric uninstall: dependency row + bundles row + junction. Backs the
 	# package.json up first; aborts without writing if the edit breaks JSON.
 	$pkgPath = Join-Path $ProfileDir 'package.json'

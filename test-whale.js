@@ -2753,8 +2753,8 @@ async function main() {
 	assert.strictEqual(CG.CONFIG.notifyOnStart, true, 'default: notify-on-start ON (contract unchanged)');
 	assert.strictEqual(CG.CONFIG.volume, 1, 'default volume 100%');
 	assert.strictEqual(CG.CONFIG.toolStuckMs, 15000, 'default tool-stuck threshold 15s (slow tools must not nag at 8s)');
-	/* M5.1: version seam — semver-shaped, surfaced in the help panel */
-	assert.ok(/^\d+\.\d+\.\d+$/.test(CG.version || ''), `version seam semver: ${CG.version}`);
+	/* M5.1: version seam — semver-shaped (prerelease suffix allowed, 0.4.3-rc.1), surfaced in the help panel */
+	assert.ok(/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(CG.version || ''), `version seam semver: ${CG.version}`);
 	/* toggle via applyConfig (what the settings panel does) and persist */
 	assert.ok(CG.applyConfig({ notifyOnStart: false }), 'toggle accepted');
 	CG.saveConfig();

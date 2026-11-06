@@ -824,6 +824,24 @@ function killTree(pid) {
 						}
 						return;
 					}
+					if (action === 'reload-page') {
+						/* 刷新 DSH 页面（11-07，用户实报「桌宠的刷新页面失效」）：
+						 * 桌宠菜单旧实现的刷新刷的是桌宠自己的页面——用户要的是
+						 * 刷 DSH 页（插件更新加载/页面过期恢复）。宿主广播
+						 * pet/reload-page 帧，页鲸（数据管线常活）收到即执行
+						 * location.reload()；页鲸不在场（窗口关着）时回
+						 * delivered=false，桌宠提示而不是假装成功。 */
+						try {
+							if (typeof deps.pushFrame === 'function') {
+								deps.pushFrame({ type: 'pet/reload-page', time: Date.now() });
+							}
+							const delivered = typeof deps.hasPageClients === 'function' ? !!deps.hasPageClients() : true;
+							plain(res, 200, JSON.stringify({ ok: true, delivered: delivered }));
+						} catch (e) {
+							plain(res, 500, JSON.stringify({ ok: false, error: String(e && e.message || e) }));
+						}
+						return;
+					}
 					if (action === 'clear-history') {
 						/* 桌宠历史抽屉的清空（11-05）：清的就是共享账本——与页内
 						 * 清空同一份数据（抽屉读的也是它）。cutoff=null=清空全部；

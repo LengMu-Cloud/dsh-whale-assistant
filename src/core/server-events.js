@@ -444,6 +444,19 @@
 				}
 				continue;
 			}
+			/* 刷新 DSH 页面（11-07，桌宠菜单语义拆分）：桌宠菜单「🔄 刷新 DSH
+			 * 页面」→宿主广播 pet/reload-page→**本页（页鲸）执行真正的
+			 * location.reload()**——桌宠页自己没有 DSH DOM，只能借道。10s 内
+			 * 的新帧才执行（重放缓冲里的旧指令一律忽略，与 pet/jump 同闸）；
+			 * PET_MODE 短路（桌宠页绝不因这条帧自我刷新，否则回环）。 */
+			if (f && f.type === 'pet/reload-page') {
+				var rpTime = f.time || 0;
+				if (!PET_MODE && Date.now() - rpTime < 10000 &&
+					typeof window !== 'undefined' && window.location && typeof window.location.reload === 'function') {
+					try { setTimeout(function () { window.location.reload(); }, 80); } catch (e) {}
+				}
+				continue;
+			}
 			if (!f || typeof f.seq !== 'number' || f.seq <= lastSeq) continue;
 			rememberSeq(f.seq);
 			/* a fresh page must not replay the buffer's history — same

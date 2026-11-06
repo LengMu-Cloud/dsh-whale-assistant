@@ -328,13 +328,38 @@
 			menu.appendChild(settingsItem);
 			/* refresh (B-2 desktop): the official desktop binds NO F5/Ctrl+R —
 			 * plugin updates and recovery both need a page reload, and the
-			 * whale menu is the reachable way to get one */
+			 * whale menu is the reachable way to get one.
+			 * 11-07 语义拆分（用户实报「桌宠的刷新页面失效」）：页鲸菜单的刷新
+			 * =刷 DSH 页（location.reload，本页就是 DSH 页 ✓）；桌宠菜单的刷新
+			 * 旧实现刷的是**桌宠自己的页面**（桌宠鲸闪一下重载，DSH 页原封不动
+			 * =用户眼中的「失效」）。现桌宠分支改走宿主广播：POST /pet/ctrl
+			 * reload-page → pet/reload-page 帧 → 页鲸执行真正的 reload；页鲸
+			 * 不在场（DSH 窗口关着）时宿主回 delivered=false，桌宠提示而不是
+			 * 假装刷新成功。 */
 			var refreshItem = document.createElement('div');
 			refreshItem.className = 'dsh-whale-menu-item';
-			setIconLabel(refreshItem, '🔄 刷新页面');
+			setIconLabel(refreshItem, PET_MODE ? '🔄 刷新 DSH 页面' : '🔄 刷新页面');
 			refreshItem.addEventListener('click', function (event) {
 				event.stopPropagation();
 				closeCtxMenu();
+				if (PET_MODE) {
+					try {
+						fetch('/api/whale-assistant/pet/ctrl', {
+							method: 'POST',
+							headers: { 'content-type': 'application/json' },
+							body: JSON.stringify({ action: 'reload-page' })
+						}).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (out) {
+							if (out && out.ok === true && out.delivered === false) {
+								uiSay('DSH 窗口已关闭——打开 DSH 后页面会自动加载新版 🐳', 3500);
+							} else if (out && out.ok === true) {
+								uiSay('已让 DSH 页面刷新 🐳', 2000);
+							} else {
+								uiSay('刷新指令没有送达，稍后再试 🥲', 2500);
+							}
+						}).catch(function () { uiSay('刷新指令没有送达，稍后再试 🥲', 2500); });
+					} catch (e) { uiSay('刷新失败，稍后再试 🥲', 2500); }
+					return;
+				}
 				setTimeout(function () { location.reload(); }, 80);
 			});
 			menu.appendChild(refreshItem);

@@ -150,7 +150,7 @@
 
 		/* no hover tooltip (user request): the native title flashed its
 		 * gesture list on every accidental hover — the same list now lives
-		 * in 设置 → ❓ 操作说明, which also stays in sync with the help panel */
+		 * in the 右键菜单 → 📖 使用说明 drawer (menu.js openHelp) */
 
 		loadPos();
 

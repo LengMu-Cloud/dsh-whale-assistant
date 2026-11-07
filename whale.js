@@ -5841,13 +5841,30 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				var rows = list.children;
 				var n = 0;
 				var first = null;
+				/* 批B：搜索先展开全部分区（过滤与折叠共用 display 隐藏，混用
+				 * 会互相打架），清空查询后按记忆恢复折叠态 */
+				for (var k = 0; k < rows.length; k++) {
+					rows[k].classList.remove('dsh-whale-manual-folded');
+				}
+				if (q) {
+					for (var k2 = 0; k2 < manualSecEls.length; k2++) {
+						manualSecEls[k2].el.setAttribute('data-folded', '0');
+					}
+				} else {
+					applyManualFolds();
+				}
+				var secHits = [];
+				for (var s2 = 0; s2 < manualSecEls.length; s2++) secHits.push(0);
 				for (var i = 0; i < rows.length; i++) {
 					var el = rows[i];
-					/* section headers always stay visible */
+					/* section headers: visibility handled below（批C 孤头隐藏） */
 					if (el.className.indexOf('dsh-whale-manual-sec') === 0) continue;
 					if (!q) {
 						el.classList.remove('dsh-whale-hide');
 						el.classList.remove('dsh-whale-help-hit');
+						if (el._mT) el._mT.textContent = el._mTerm;
+						if (el._mD) el._mD.textContent = el._mDesc;
+						if (el._mG) el._mG.textContent = el._mTerm;
 						continue;
 					}
 					var hit = indexOfCI(el.textContent, q) >= 0;
@@ -5855,19 +5872,53 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					el.classList.toggle('dsh-whale-help-hit', hit);
 					if (hit) {
 						n++;
+						if (rowSection && rowSection[i] >= 0 && rowSection[i] < secHits.length) secHits[rowSection[i]]++;
+						if (el._mG) highlightAll(el._mG, el._mTerm, q);
+						else {
+							if (el._mT) highlightAll(el._mT, el._mTerm, q);
+							if (el._mD) highlightAll(el._mD, el._mDesc, q);
+						}
 						if (!first) first = el;
 					}
+				}
+				/* 批C：搜索时隐藏零命中分区头（消孤头）；空查询全恢复 */
+				for (var s3 = 0; s3 < manualSecEls.length; s3++) {
+					manualSecEls[s3].el.classList.toggle('dsh-whale-hide', !!q && secHits[s3] === 0);
 				}
 				mStatus.textContent = q ? (n > 0 ? '找到 ' + n + ' 条相关内容' : '未找到相关内容 🔍') : '';
 				if (first && typeof first.scrollIntoView === 'function') {
 					first.scrollIntoView({ block: 'nearest' });
 				}
 			});
+			/* 批B（11-08 可读性）：折叠记忆跨开关保留；缺省=收起（目录即
+			 * 界面——9 个分区头本身就是导航）。独立类名 dsh-whale-manual-folded
+			 * 与搜索过滤的 dsh-whale-hide 互不干扰（空查询断言只数后者）。 */
+			var manualFoldMemo = {};
+			var manualSecEls = [];
+			function applyManualFolds() {
+				for (var i = 0; i < manualSecEls.length; i++) {
+					var s = manualSecEls[i];
+					var folded = manualFoldMemo[s.title] !== false;
+					s.el.setAttribute('data-folded', folded ? '1' : '0');
+					var end = i + 1 < manualSecEls.length ? manualSecEls[i + 1].start : list.children.length;
+					for (var j = s.start + 1; j < end; j++) {
+						list.children[j].classList.toggle('dsh-whale-manual-folded', folded);
+					}
+				}
+			}
 			var sec = function (t) {
 				var el = document.createElement('div');
 				el.className = 'dsh-whale-manual-sec';
 				el.textContent = t;
+				/* 点击分区头折叠/展开该组：扁平结构不变（行仍是 list 直接
+				 * 子元素），搜索断言遍历 children 的契约不破 */
+				el.addEventListener('click', function (event) {
+					event.stopPropagation();
+					manualFoldMemo[t] = manualFoldMemo[t] === false ? true : false;
+					applyManualFolds();
+				});
 				list.appendChild(el);
+				manualSecEls.push({ title: t, el: el, start: list.children.length - 1 });
 			};
 			var item = function (term, desc) {
 				var el = document.createElement('div');
@@ -5882,6 +5933,12 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					d.textContent = desc;
 					el.appendChild(d);
 				}
+				/* 批C：原文与节点引用留在行上——搜索高亮/恢复用（mark 拆分
+				 * 文本节点后 textContent 仍是原文拼接，锁定断言不受影响） */
+				el._mTerm = term;
+				el._mDesc = desc || '';
+				el._mT = t;
+				el._mD = desc ? d : null;
 				list.appendChild(el);
 			};
 			var gesture = function (n, text) {
@@ -5895,31 +5952,47 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				text2.textContent = text;
 				row.appendChild(num);
 				row.appendChild(text2);
+				row._mTerm = text;
+				row._mG = text2;
 				list.appendChild(row);
 			};
+			/* 批C：命中词全量高亮（不复用 history 的窗口截断版——手册条目
+			 * 要保全文可读） */
+			function highlightAll(el, text, q) {
+				if (!q) { el.textContent = text; return; }
+				var lower = (text || '').toLowerCase();
+				var ql = q.toLowerCase();
+				el.textContent = '';
+				var i = 0;
+				for (;;) {
+					var hitAt = lower.indexOf(ql, i);
+					if (hitAt < 0) {
+						el.appendChild(document.createTextNode((text || '').slice(i)));
+						break;
+					}
+					if (hitAt > i) el.appendChild(document.createTextNode(text.slice(i, hitAt)));
+					var mk = document.createElement('mark');
+					mk.textContent = text.substr(hitAt, q.length);
+					el.appendChild(mk);
+					i = hitAt + q.length;
+				}
+			}
 			sec('🚀 快速上手');
 			item('右键点我：打开菜单', '所有功能都在右键菜单里——提醒我、装扮、历史任务、设置、使用说明。先记住这一个手势就够了。');
 			item('点我一下：读通知', '有未读就逐条读给你（红标数字会减）；没有未读就陪我聊一句。');
-			item('双击通知气泡：跳回对话', '任何完成/失败/提问通知，双击就能回到那条对话现场。');
-			item('拖着我走：位置会记住', '按住我拖到喜欢的角落，刷新后还在这。');
+			item('拖着我走：位置会记住', '按住我拖到喜欢的角落，刷新后还在这。跳回对话的手势看下面「交互手势」。');
 			sec('🐳 我是什么');
-			item('打工小鲸鱼，住在 DeepSeek Harness 右下角', '只读任务事件做播报和记录，不拦截、不修改任何任务行为，随便折腾不影响工作。任务在后台跑我也会看着，跑完 3 秒内告诉你。');
-			sec('🐋 桌宠模式（桌面上的独立小鲸鱼）');
-			item('开机常驻：住在桌面上，不只在 DSH 里', '小鲸鱼开机就出现在桌面右下角，DSH 最小化也在。它在时 DSH 页里那只小金鱼会休息（页鲸休眠）；桌宠万一出意外，小金鱼会自动回来顶班，修好后自己回去。');
-			item('右键小鲸鱼：三种形态', '🐋 完整形态（日常）/ 🫧 缩成气泡 / 🙈 隐藏小鲸鱼＝躲猫猫：游到右下角收成一只小气泡，点一下气泡就破、鲸鱼冒出来。');
-			item('通知、红标、用量：页内同款', '桌宠上的通知与页内完全同一套——真名播报、红标未读、三行用量、读回；双击通知气泡直接跳回 DSH 对应对话并把窗口拉到前台。');
-			item('📜 历史任务：同一份账本', '桌宠菜单里的历史与页内共用一份记录（最近 50 条）：可搜索、可清空、可导出，点任意记录跳回对话。');
-			item('意外消失会自己回来', '小鲸鱼进程意外退出时，宿主每 30 秒体检一次，最多 1 分钟自动重生，不用重启 DSH。');
+			item('打工小鲸鱼，住在 DeepSeek Harness 右下角', '只读任务事件做播报和记录，不拦截、不修改任何任务行为，随便折腾不影响工作。任务在后台跑我也会看着，跑完立刻播报（取名慢时最多等 3 秒）。');
 			sec('🔔 通知一览');
 			item('[对话名]开工了 …', '任务开始跑。不进红标（不算未读）。');
 			item('[对话名]完成了 …', '正常结束：响一声 + 红标 +1，下方同时弹出用量面板（本次消耗 / 全对话累计 / 上下文占用），和气泡同生同灭。');
 			item('[对话名]失败了 …', '出错了：低沉音 + 红标 +1。双击通知气泡可回去看看。');
-			item('[对话名]被截断了 …', '回复顶到 max tokens 上限，任务本身没坏。');
-			item('[对话名]被中止了 ✋', '你手动停了任务，不算失败。');
+			item('[对话名]被截断了 …', '回复顶到 max tokens 上限：按完成处理（完成音 + 红标 +1 + 用量面板），任务本身没坏，只是内容被切短了。');
+			item('[对话名]被中止了 ✋', '你手动停了任务：不算失败，但也会计入红标。');
 			item('🤔 [对话名]需要你选择', '模型在等你作答：响铃 + 红标 +1。回到对话作答即收尾；任务还没跑完，用量等完成通知再统一看。');
 			item('⚠️ [对话名]需要你审核', '有工具调用等你批准：同上。');
 			item('上下文快挤爆了…建议 /compact', '上下文占用达到压力阈值时提醒一次。');
-			item('⏰ 定时提醒', '右键菜单设的闹钟到点播报（会计入红标，不带用量面板）。');
+			item('⏰ 定时提醒', '右键菜单设的闹钟到点播报（会计入红标，不带用量面板）；免打扰时段也照常响——自己定的闹钟不受免打扰约束。');
 			sec('🐾 交互手势');
 			gesture(1, '左键拖动：移动我');
 			gesture(2, '左键单击：进行互动（读通知）');
@@ -5929,33 +6002,47 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			gesture(6, '左键双击红标数字：通知清空');
 			gesture(7, '右键：打开菜单');
 			gesture(8, '右键双击：触发摸摸头');
+			sec('🐋 桌宠模式（桌面上的独立小鲸鱼）');
+			item('常驻桌面：跟着 DSH 走，关窗≠退出', '打开 DSH 桌宠就出现在桌面右下角（PC 重启后再开 DSH 才有）；DSH 最小化也在场。它在时页内小金鱼休息（休眠）；万一出意外，宿主每 30 秒体检一次，最长约 1 分钟自动重生，不用重启 DSH。');
+			item('右键小鲸鱼：三种形态', '🐋 完整形态（日常）/ 🫧 缩成气泡 / 🙈 隐藏小鲸鱼＝躲猫猫：游到右下角收成一只小气泡，点一下气泡就破、鲸鱼冒出来。');
+			item('通知、红标、用量：页内同款', '桌宠上的通知与页内完全同一套——真名播报、红标未读、三行用量、读回；双击通知气泡直接跳回 DSH 对应对话并把窗口拉到前台。');
+			item('怎么"关掉"桌宠？', '右键 → 🙈 隐藏小鲸鱼（躲猫猫）就是它的"关"——桌面只剩一颗小气泡，点一下随时召回。它跟着 DSH 宿主走：彻底退出关掉 DSH 即可，没有常驻后台进程。');
 			sec('🎛️ 设置项详解');
 			item('🔔 开工通知（开/关）', '关掉后"开工了"不再播报，其余通知不受影响。');
-			item('🌙 免打扰', '时段内完成/失败不弹泡不响铃，只记红标；需要你动手的选择/审核照常提醒，急事不瞒你。');
+			item('🌙 免打扰', '从 4 组时段预设里循环选（不能任填时间）。时段内完成/失败静音且不弹泡、只记红标；需要你动手的选择/审核照常提醒——急事不瞒你。');
 			item('🔊 音量', '提示音音量，5 档循环。');
-			item('🎵 音色（按通知设置）', '完成/失败/提问、定时提醒四类通知各选各的音效：单声叮 / 叮叮两连击 / 清脆上行 / 低沉下行 / 静音，下拉选中即生效并现场试听。');
-			item('⏱️ 工具超时', '某个工具跑超过该时长时提示一次"可能卡住了"（只是提醒，不会打断任务）。');
+			item('🎵 音色（按通知设置）', '完成/失败/提问、定时提醒四类通知各选各的音效：单声叮 / 叮叮两连击 / 清脆上行 / 低沉下行 / 静音，下拉选中即生效并现场试听（各类可选项略有差异，如完成类没有低沉下行）。');
+			item('⏱️ 工具超时', '某个工具跑超过该时长时，鲸鱼下方的状态面板会持续显示「⚠️ [对话名] 工具已运行 Ns」并逐秒读数（只是提醒，不会打断任务）。');
 			item('🚨 压力提醒', '上下文占用达到该百分比时提醒 /compact；回降到 50% 以下后重新武装。');
 			item('📊 任务周报', '近 7 天按日统计任务数（完成/失败/中止/提问）与 token 消耗。');
 			item('📤 导出历史', 'Markdown：复制全部历史到剪贴板；CSV：下载表格文件。');
 			item('🩺 运行状态', '鲸鱼自查各条通知链路（后台通知/用量读取/跳转）；平时全部正常、不打扰，出问题我头上会亮 ⚠️，设置里点"运行状态"能看是哪一条。');
 			item('🩺 调试模式', '排障用：开启后往控制台输出调试信息，并把取证数据写进 ~/.dsh/whale-assistant.json 的 _debug 键，平时保持关闭。');
+			item('怎么没有声音？', '依次看：右键菜单 🔊 声音是否开 → 设置里音量 → 🎵 音色里对应通知是否选了"静音" → 是否在免打扰时段（完成/失败静音，选择/审核/提醒照常）。');
 			sec('📜 历史与红标');
-			item('红标数字 = 未读通知数', '左键单击读一条（读过的消失），双击一键清空。完成/失败/提问/审核/提醒计入，开工不计入。');
-			item('📜 历史任务（右键菜单）', '保留最近 50 条：本地 + 服务器双存储，桌面壳和别的浏览器窗口看到同一份；支持搜索、清空、导出。想彻底遗忘某个对话：先清历史、再「清空通讯录」（历史里存的名字快照会在下次加载时回流，两步都做才真正遗忘）。');
+			item('红标数字 = 未读通知数', '左键单击读一条（读过的消失），双击一键清空。完成/失败/被截断/被中止/提问/审核/定时提醒计入；开工、上下文压力提醒、工具运行提示不计入。超过 99+ 封顶显示。');
+			item('📜 历史任务（右键菜单）', '保留最近 50 条：本地 + 服务器双存储，桌面壳和别的浏览器窗口看到同一份；支持搜索、清空、导出。');
+			item('想彻底遗忘某个对话？', '两步：先清历史、再「清空通讯录」——历史里存的名字快照会在下次加载时回流，两步都做才真正遗忘。');
+			item('换浏览器历史还在吗？', '在——历史跟服务端走，同一台机器的桌面壳和各浏览器窗口看到同一份；跨机器不同步。');
+			item('历史突然变空了？', '极少数情况下账本文件损坏会自动隔离重建，~/.dsh/ 下会出现 whale-assistant.json.corrupt-时间戳 备份文件。想救回：先关 DSH，把文件名末尾的 .corrupt-时间戳 后缀删掉、恢复原名，再启动。');
 			item('跳回对话', '双击通知气泡，或点历史抽屉里的任意一条记录。');
 			sec('❤️ 陪伴小彩蛋');
 			item('摸摸头', '右键双击我：好感 +1，还有小心心飘出。');
 			item('状态与情绪', '任务越多我越累、会打瞌睡（拖一拖或双击我就醒）；右键菜单标题能看当前心情和进行中的任务数。');
-			item('装扮与成就', '完成任务攒进度，解锁新装扮后去 右键菜单 → 🎨我的装扮 查看。');
+			item('装扮与成就', '完成任务攒进度，解锁新装扮后去 右键菜单 → 🎨我的装扮 查看（面板里能看到还差几个任务）。');
 			sec('🙋 常见问题');
-			item('怎么没有声音？', '依次看：右键菜单 🔊 声音是否开 → 设置里音量 → 🎵 音色里对应通知是否选了"静音" → 是否在免打扰时段（深夜只记红标不出声）。');
 			item('通知突然不来了？', '多半是页面放久了过期：刷新页面即可恢复——官方桌面端没有 F5，用我的右键菜单 🔄 刷新页面；浏览器里按 Ctrl+F5。我自己的链路自检在 设置 → 🩺 运行状态 里，哪条失效会明说。');
 			item('插件更新了怎么加载新版？', '同样刷新页面：右键菜单 🔄 刷新页面（桌面端）或 Ctrl+F5（浏览器）——新版本在下次加载时自动生效。');
-			item('后台任务会打扰我吗？', '不会：只有完成/失败/需要你动手时才提醒，中间过程只在状态面板安静展示；深夜时段只记红标不出声。');
-			item('换浏览器历史还在吗？', '在——历史跟服务端走，同一台机器的桌面壳和各浏览器窗口看到同一份；跨机器不同步。');
-			item('历史突然变空了？', '极少数情况下账本文件损坏会自动隔离重建，~/.dsh/ 下会出现 whale-assistant.json.corrupt-时间戳 备份文件。想救回：先关 DSH，把文件名末尾的 .corrupt-时间戳 后缀删掉、恢复原名，再启动。');
+			item('后台任务会打扰我吗？', '不会：只有完成/失败/需要你动手时才响铃，中间过程只在状态面板安静展示。免打扰时段里完成/失败静音且不弹泡、只记红标；开工气泡与你自己定的定时提醒照常——急事不瞒你。');
 			panel.appendChild(list);
+			applyManualFolds(); /* 批B：首开默认全收起=目录态 */
+			/* 批C：每行归属的分区序号（孤头隐藏用；行序静态，构建期算一次） */
+			var rowSection = [];
+			var curSec = -1;
+			for (var si = 0; si < list.children.length; si++) {
+				if (list.children[si].className.indexOf('dsh-whale-manual-sec') === 0) curSec++;
+				rowSection.push(curSec);
+			}
 			mkPanelFoot(panel, closeCtxHistory, true); /* ← 返回菜单 / ✕ 关闭 — 与其他子面板统一 */
 			if (!ctxHistory) document.body.appendChild(panel);
 			ctxHistory = panel;
@@ -7312,7 +7399,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 
 		/* no hover tooltip (user request): the native title flashed its
 		 * gesture list on every accidental hover — the same list now lives
-		 * in 设置 → ❓ 操作说明, which also stays in sync with the help panel */
+		 * in the 右键菜单 → 📖 使用说明 drawer (menu.js openHelp) */
 
 		loadPos();
 

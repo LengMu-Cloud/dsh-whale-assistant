@@ -752,6 +752,12 @@
 .dsh-whale-manual {
 	width: 380px;
 }
+/* 使用说明批B（11-08 可读性）：列表吃满抽屉高度——372px 是历史抽屉的
+   定高语义，manual 作用域覆盖（历史抽屉零波及）；约 2500px 内容在 372px
+   窗里要滚 6.8 屏 =「看起来不方便」的物理根源 */
+.dsh-whale-manual .dsh-whale-history-list {
+	max-height: calc(100vh - 132px);
+}
 .dsh-whale-manual-sec {
 	margin: 9px 10px 3px;
 	padding: 2px 4px;
@@ -759,6 +765,28 @@
 	font-weight: 600;
 	color: var(--dsw-panel-head);
 	border-bottom: 1px solid rgba(99, 150, 255, 0.18);
+	/* 吸顶分区头（批B）：滚动时始终知道自己在哪个分区。同底色+自模糊=
+	 * 与面板一致的实底观感，下层滚过的文字透不上来 */
+	position: sticky;
+	top: -1px;
+	z-index: 1;
+	cursor: pointer;
+	background: var(--dsw-panel-bg);
+	-webkit-backdrop-filter: var(--dsw-glass);
+	backdrop-filter: var(--dsw-glass);
+	border-radius: var(--dsw-radius-s);
+}
+.dsh-whale-manual-sec::after {
+	content: '▾';
+	float: right;
+	opacity: 0.7;
+}
+.dsh-whale-manual-sec[data-folded="1"]::after {
+	content: '▸';
+}
+/* 折叠行（批B）：独立类名——搜索过滤用 dsh-whale-hide，两套互不干扰 */
+.dsh-whale-manual-folded {
+	display: none;
 }
 .dsh-whale-manual-item {
 	padding: 5px 10px 3px;
@@ -893,7 +921,8 @@
 
 /* history search highlight (#7) */
 .dsh-whale-history-text mark,
-.dsh-whale-manual-item mark {
+.dsh-whale-manual-item mark,
+.dsh-whale-help-text mark {
 	background: #ffe58f;
 	color: #1f2a44;
 	border-radius: 2px;

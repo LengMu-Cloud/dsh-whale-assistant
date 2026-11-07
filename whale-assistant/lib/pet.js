@@ -483,6 +483,19 @@ function killTree(pid) {
 		return killTree(pid);
 	}
 
+	/* 评估 P1-1（11-08）：三条环境性早退（WebView2 缺失/资产缺失/端口缺失）
+	 * 必须落 spawning=false 并广播 up:false——否则 spawning 卡 true 双重死锁：
+	 * 心跳门（heartbeatGate 要求 !spawning）永不重试，页端 petDormantOf 判
+	 * 「up=false 且 spawning」=页鲸也永久休眠 → 无 WebView2 的干净机器首装
+	 * 一屏无鱼且重启前无自愈。15s readyTimer 帮不上：它在这三个 return 之后
+	 * 才挂载。广播语义=「真死亡」而非「窗口期」：页鲸立即顶班（永不无鱼）。 */
+	function abortSpawn(why) {
+		log(why);
+		spawning = false;
+		petUp = false;
+		broadcastPetState();
+	}
+
 	async function spawnPet() {
 		if (!supported || spawning) return;
 		spawning = true;
@@ -490,18 +503,18 @@ function killTree(pid) {
 		try {
 			const runtime = detectWebView2Runtime();
 			if (!runtime) {
-				log('WebView2 Runtime not found — pet stays off (install the Evergreen Runtime to enable)');
+				abortSpawn('WebView2 Runtime not found — pet stays off (install the Evergreen Runtime to enable)');
 				return;
 			}
 			const dllDir = join(petAssetsDir(), 'dlls');
 			const ps1 = join(petAssetsDir(), 'pet.ps1');
 			if (!existsSync(ps1) || !existsSync(join(dllDir, 'Microsoft.Web.WebView2.Wpf.dll'))) {
-				log('pet assets incomplete (pet.ps1 / dlls missing) — pet stays off');
+				abortSpawn('pet assets incomplete (pet.ps1 / dlls missing) — pet stays off');
 				return;
 			}
 			const port = ctx && ctx.webServer && Number(ctx.webServer.port);
 			if (!port || port <= 0) {
-				log('webServer port unavailable — pet stays off');
+				abortSpawn('webServer port unavailable — pet stays off');
 				return;
 			}
 			const run = petRunDir();
@@ -596,8 +609,12 @@ function killTree(pid) {
 			log('spawn failed: ' + String(e && e.message || e));
 			/* 同步失败（11-05）：spawning 必须落回 false——页鲸靠
 			 * 「up:false 且非 spawning」苏醒兜底；卡在 true 会把页鲸
-			 * 永久藏住（一屏无鱼）。 */
+			 * 永久藏住（一屏无鱼）。广播补全（评估 P1-1，11-08）：光落
+			 * 标志不推帧，SSE 页面拿不到唤醒信号——与三条环境性早退
+			 * 同契约（真死亡语义，页鲸立即顶班）。 */
 			spawning = false;
+			petUp = false;
+			broadcastPetState();
 		}
 	}
 

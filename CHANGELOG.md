@@ -7,6 +7,10 @@
 
 > **桌宠第一批（屏幕级常驻小鲸鱼，仅 Windows）**：架构 v6 插件落地——`whale-assistant/pet/`（pet.ps1 宿主窗口进程 + page.html 页面模板 + WebView2 固定版 DLL 三件官方 NuGet 进货+SHA 门禁）与 `whale-assistant/lib/pet.js` 宿主模块（token env+头注入、/pet 路由枚举化 feed、ledger 开关）。**宿主半区与页面半区都有改动——升级后需重启 DSH 服务**。
 
+### 修复（评估 P1-1，11-08）
+
+- **桌宠首装环境无鲸且不自愈**：spawnPet 三条环境性早退（WebView2 Runtime 缺失/资产缺失/webServer 端口缺失）此前把 `spawning` 永久卡在 true——心跳门（要求 `!spawning`）永不重试，页端又把「up:false 且 spawning」判为休眠 → 无 WebView2 的干净机器首装一屏无鱼、重启前无自愈（15s readyTimer 对这三条路径不生效：它们发生在定时器挂载之前）。现统一落 `spawning=false` 并广播 `up:false`（abortSpawn 助手），页鲸立即顶班；spawn 同步抛错的 catch 路径同样补上广播（此前只落标志不推帧，SSE 页面拿不到唤醒信号）
+
 ### 新增（第三轮实测修复，11-06）
 
 - **npm 预发布包就绪（0.4.3-rc.1，方案②）**：package.json 翻 private+files 白名单（含 pet/ 全资产，桌面端运行时完整）+registry 源安装开关（ensure -Registry）——publish 与 registry 重装在用户终端执行后，管理页更新提示/安装前详情预览/版本兼容事实三链点亮；v0.4.3 正式版待稳定后发布（--tag rc 不占 latest 位）

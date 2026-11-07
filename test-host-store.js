@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadStore, mergeHistory, saveStoreAtomic, storePath } from './whale-assistant/lib/store.js';
 import { isTrustedRequest } from './whale-assistant/lib/index.js';
-import { checkPetToken, enumerateFrames, enumerateHistory, normalizePetDoc, resolvePetCode, PET_FORMS, heartbeatGate } from './whale-assistant/lib/pet.js';
+import { applyPet, checkPetToken, enumerateFrames, enumerateHistory, normalizePetDoc, resolvePetCode, PET_FORMS, heartbeatGate } from './whale-assistant/lib/pet.js';
 
 let passed = 0;
 function ok(cond, msg) { passed++; assert.ok(cond, msg); }
@@ -248,6 +248,22 @@ ok(heartbeatGate({ supported: true, enabled: true, spawning: false, childAlive: 
 ok(heartbeatGate({ supported: true, enabled: false, spawning: false, childAlive: false, lastSpawnAt: Date.now() - 61000 }, Date.now()) === false, 'heartbeat: disposed (enabled=false) -> never respawn (real-exit guard)');
 ok(heartbeatGate({ supported: false, enabled: true, spawning: false, childAlive: false, lastSpawnAt: Date.now() - 61000 }, Date.now()) === false, 'heartbeat: non-win32 -> never');
 ok(heartbeatGate(null, Date.now()) === false && heartbeatGate({ supported: true, enabled: true, spawning: false, childAlive: false, lastSpawnAt: Date.now() - 61000 }, 'not-a-number') === false, 'heartbeat: malformed args -> false');
+
+/* ---- 评估 P1-1（2026-11-08）：环境性 spawn 早退（WebView2 缺失/资产缺失/
+ * 端口缺失）必须落 spawning=false 并广播 up:false——spawning 卡 true 双死锁
+ * （心跳门永不重试+页鲸判休眠=无 WebView2 的干净机器首装一屏无鱼）。
+ * fake ctx 无 webServer → 本机（win32）走端口缺失路径；win32 门控=CI
+ * (ubuntu) supported=false 不 spawn 不广播。三条路径共用 abortSpawn 助手，
+ * 此处断言的是它们的共同契约帧。 ---- */
+if (process.platform === 'win32') {
+	const petFrames = [];
+	applyPet(
+		{ webServer: { register: () => () => {} } },
+		{ pushFrame: (f) => petFrames.push(f) }
+	);
+	const st = petFrames.find((f) => f && f.type === 'pet/state');
+	ok(st && st.up === false && st.spawning === false, 'pet/spawn: env-failure early return broadcasts up:false + spawning:false (P1-1: page whale wakes, heartbeat gate unblocked)');
+}
 
 /* ---- 桌宠历史抽屉枚举（11-05，用户实报「历史任务读取不到」）：共享账本
  * 经白名单下发给桌宠页——真实 id 不出宿主、字段剥离、clearAt 过滤、上限

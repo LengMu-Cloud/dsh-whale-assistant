@@ -595,6 +595,7 @@
 					manualSecEls[s3].el.classList.toggle('dsh-whale-hide', !!q && secHits[s3] === 0);
 				}
 				mStatus.textContent = q ? (n > 0 ? '找到 ' + n + ' 条相关内容' : '未找到相关内容 🔍') : '';
+				clampManualToViewport();
 				if (first && typeof first.scrollIntoView === 'function') {
 					first.scrollIntoView({ block: 'nearest' });
 				}
@@ -615,6 +616,30 @@
 					}
 				}
 			}
+			/* 批B 追修（用户真机反馈：桌宠停右下角时展开分区把内容顶出屏幕）：
+			 * 列表=唯一滚动区。showSidePanel 是顶部锚定+一次性测高，面板比屏
+			 * 高时底边必然出界；按抽屉实际渲染位置实测「顶→屏幕底」的可用高
+			 * 度，减去标题/搜索/页脚的实测占用给列表封顶——展开再多内容都只
+			 * 在列表里滚，标题与搜索恒在视野。折叠/搜索每次重算。 */
+			function clampManualToViewport() {
+				if (typeof panel.getBoundingClientRect !== 'function') return; /* vm 测试桩 */
+				var vh = window.innerHeight || 0;
+				if (!vh) return;
+				var rect = panel.getBoundingClientRect();
+				/* 桌宠页窗口盖住任务栏（innerHeight=全屏高，真机实测抽屉延伸
+				 * 到任务条后面）——桌宠态底部让出任务带高度；DSH 页内 10px
+				 * 边距即可 */
+				var bottomReserve = PET_MODE ? 56 : 10;
+				var availPanel = vh - bottomReserve - rect.top;
+				if (availPanel < 220) availPanel = 220;
+				var chrome = panel.offsetHeight - list.offsetHeight;
+				var availList = Math.round(availPanel - chrome);
+				if (availList < 180) availList = 180;
+				/* 框本体=内容自适应（不填满可视高度）：折叠目录天然紧凑，
+				 * 展开才长高、到屏幕边界为止（上面的 maxHeight 封顶），
+				 * 超出部分只在列表内滚 */
+				list.style.maxHeight = availList + 'px';
+			}
 			var sec = function (t) {
 				var el = document.createElement('div');
 				el.className = 'dsh-whale-manual-sec';
@@ -625,6 +650,7 @@
 					event.stopPropagation();
 					manualFoldMemo[t] = manualFoldMemo[t] === false ? true : false;
 					applyManualFolds();
+					clampManualToViewport();
 				});
 				list.appendChild(el);
 				manualSecEls.push({ title: t, el: el, start: list.children.length - 1 });
@@ -756,6 +782,7 @@
 			if (!ctxHistory) document.body.appendChild(panel);
 			ctxHistory = panel;
 			showSidePanel(panel, 380);
+			clampManualToViewport(); /* 展开后超出屏幕时按实测位置给列表封顶（框本体仍跟随鲸鱼摆放） */
 		}
 
 		/* ———— 历史抽屉群已拆至 ui/drawers.js（§7 触发线到达，2026-10-27 K3） ———— */

@@ -41,6 +41,7 @@ const MANIFEST = [
 	{ file: 'src/ui/bootstrap.js',      start: 1565, end: 1724 }, /* uiInit head: bubble/badge/zzz/gestures */
 	{ file: 'src/ui/menu.js',           start: 1725, end: 2107 }, /* right-click menu / pet / wardrobe / help */
 	{ inline: true, file: 'src/ui/drawers.js' },                  /* history-drawer group (split out of menu.js 2026-10-27, §7): reminders/report/export/history — still inside the uiInit closure body */
+	{ inline: true, file: 'src/ui/panel-page.js' },              /* 小鲸鱼助手侧边栏页（11-08）：uiInit 闭包内（可直接调抽屉函数）+ window.__dshWhalePanel 挂载面，client.js slots 注册的 React 包装调进来 */
 	{ file: 'src/input/swim.js',        start: 2108, end: 2216 }, /* swim-back animation + catch */
 	{ file: 'src/input/drag.js',        start: 2217, end: 2394 }, /* drag / click-summary / sleep timer / uiInit close */
 	{ inline: true, file: 'src/ui/session-jump.js' },           /* session jump: bridge-driven open+page+scroll (AFTER the uiInit closure — depth 1 for exports) */

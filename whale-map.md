@@ -3,7 +3,7 @@
 > 由 node build-whale.js 产出：每个模块的职责（取文件头注释首段）与顶层函数清单。
 > 改代码前先在这里定位模块，再进 src/ 对应文件；改完重新构建本表自动更新。
 
-共 34 个模块（构建产物为单文件 IIFE，全部模块共享同一作用域）。
+共 35 个模块（构建产物为单文件 IIFE，全部模块共享同一作用域）。
 
 ## **src/index.js**（行切片）
 
@@ -166,6 +166,8 @@
 ## **src/ui/drawers.js**
 
 > History drawer: recent finished tasks (newest first), each row can jump back to its conversation via the session-opening hook. Uses a separate panel slot so it can be wider and left-anchored.
+
+## **src/ui/panel-page.js**
 
 ## **src/input/swim.js**（行切片）
 

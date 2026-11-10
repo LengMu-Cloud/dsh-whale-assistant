@@ -2045,15 +2045,14 @@ async function main() {
 	const mEl = ctxMenuEl();
 	assert.ok(mEl, 'menu element exists');
 	const mItems = mEl.children.filter((c) => c.className === 'dsh-whale-menu-item').map((c) => c.textContent);
-	assert.strictEqual(mItems.length, 7, `7 menu items: ${mItems.join(' | ')}`);
+	assert.strictEqual(mItems.length, 5, `5 menu items (设置+使用说明 retired to the sidebar page 11-08): ${mItems.join(' | ')}`);
 	assert.ok(mEl.children.some((c) => c.className === 'dsh-whale-menu-sep'), 'group separator present (#4)');
 	assert.ok(mItems[0].includes('提醒'), 'reminder first in the quick group (#4)');
 	assert.ok(mItems[1].includes('声音'), 'sound toggle present');
-	assert.ok(mItems[2].includes('使用说明'), 'manual entry present (renamed from 操作说明)');
-	assert.ok(mItems[3].includes('装扮'), 'wardrobe entry present');
-	assert.ok(mItems[4].includes('历史'), 'history entry present');
-	assert.ok(mItems[5].includes('设置'), 'settings entry present');
-	assert.ok(mItems[6].includes('刷新页面'), 'refresh row present (0.2.0 desktop has no F5)');
+	assert.ok(mItems[2].includes('装扮'), 'wardrobe entry present');
+	assert.ok(mItems[3].includes('历史'), 'history entry present');
+	assert.ok(mItems[4].includes('刷新页面'), 'refresh row present (0.2.0 desktop has no F5)');
+	assert.ok(mItems.every((c) => !c.includes('设置') && !c.includes('使用说明')), 'no settings/manual rows in the menu (sidebar page owns both, 11-08)');
 	const mHead = mEl.children.find((c) => c.className === 'dsh-whale-menu-head');
 	assert.ok(mHead.textContent.includes('🐳') && mHead.textContent.includes('待命中'), `mood header: ${mHead.textContent}`);
 	/* clicking outside closes the menu */
@@ -2085,17 +2084,58 @@ async function main() {
 	const wFoot = wEl.children.find((c) => c.className === 'dsh-whale-panel-foot');
 	wFoot.children.find((c) => c.className === 'dsh-whale-wardrobe-close')._fire('click', { stopPropagation() {} });
 	assert.ok(!CTX.panelOpen(), 'wardrobe closes via its close button');
-	/* 📖 使用说明: the FULL manual in the side-drawer slot (was an 8-line
-	 * gesture cheat sheet in the floating-panel slot; moved out of settings,
-	 * renamed from 操作说明 — user request 2026-09-04) */
-	await singleRClick(100, 100);
-	ctxMenuEl().children.find((c) => c.className === 'dsh-whale-menu-item' && c.textContent.includes('使用说明'))
-		._fire('click', { stopPropagation() {} });
-	assert.ok(CTX.drawerOpen(), 'manual drawer opens');
-	const hEl = CTX.drawerEl();
-	assert.strictEqual(hEl.className, 'dsh-whale-history dsh-whale-manual', 'manual uses the wide drawer class');
-	const hListM = hEl.children.find((c) => c.className === 'dsh-whale-history-list');
-	assert.ok(hListM, 'manual list is INSIDE the drawer (content actually renders)');
+	/* 📖 使用说明 + ⚙️ 设置 + 🐋 桌宠: all three live on the sidebar panel
+	 * page now (11-08 — the right-click menu keeps only 快捷操作/gesture
+	 * rows; the manual and settings drawers retired with their menu items) */
+	assert.ok(typeof envCtx.sandbox.window.__dshWhalePanel === 'object' && typeof envCtx.sandbox.window.__dshWhalePanel.mount === 'function', 'panel page mount seam published');
+	const ppHost = envCtx.sandbox.document.createElement('div');
+	envCtx.sandbox.window.__dshWhalePanel.mount(ppHost);
+	assert.ok(ppHost.textContent.includes('⚙️ 设置') && ppHost.textContent.includes('🐋 桌宠') && ppHost.textContent.includes('📊 周报') && ppHost.textContent.includes('📖 使用说明'), 'four tabs rendered');
+	assert.ok(ppHost.textContent.includes('🔔 开工通知'), 'panel settings rows render from CONFIG');
+	const findPpRow = (node, needle) => {
+		if ((node.className || '').indexOf('dsh-whale-pp-row') >= 0 && (node.textContent || '').indexOf(needle) >= 0) return node;
+		for (const c of node.children || []) {
+			const hit = findPpRow(c, needle);
+			if (hit) return hit;
+		}
+		return null;
+	};
+	const ppNotify = findPpRow(ppHost, '🔔 开工通知');
+	assert.ok(ppNotify, 'panel notify row found');
+	const ppNotifyBefore = ppNotify.textContent.includes('开') && !ppNotify.textContent.includes('关');
+	ppNotify._fire('click', { stopPropagation() {} });
+	const ppNotify2 = findPpRow(ppHost, '🔔 开工通知');
+	assert.ok(ppNotify2 && ppNotify2 !== ppNotify, 'panel row re-renders after toggle');
+	assert.ok(ppNotify2.textContent.includes(ppNotifyBefore ? '关' : '开'), 'panel notify toggle flips CONFIG');
+	ppNotify2._fire('click', { stopPropagation() {} }); /* restore for downstream groups */
+	/* 免打扰循环修复（11-09）：关态第一次点击必须直达首个时段（旧逻辑
+	 * dndIdx=-1 回到 null 档=永远点不开），循环一圈后回关 */
+	const ppDnd = findPpRow(ppHost, '🌙 免打扰');
+	assert.ok(ppDnd.textContent.includes('关'), 'dnd row starts off');
+	ppDnd._fire('click', { stopPropagation() {} });
+	const ppDnd2 = findPpRow(ppHost, '🌙 免打扰');
+	assert.ok(ppDnd2.textContent.includes('23:00') && ppDnd2.textContent.includes('08:00'), 'dnd off -> first time preset (cycle fix)');
+	ppDnd2._fire('click', { stopPropagation() {} });
+	findPpRow(ppHost, '🌙 免打扰')._fire('click', { stopPropagation() {} });
+	findPpRow(ppHost, '🌙 免打扰')._fire('click', { stopPropagation() {} });
+	findPpRow(ppHost, '🌙 免打扰')._fire('click', { stopPropagation() {} });
+	assert.ok(findPpRow(ppHost, '🌙 免打扰').textContent.includes('关'), 'dnd cycles back to off after the last preset');
+	const ppTabsEl = ppHost.children.find((c) => (c.className || '').indexOf('dsh-whale-pp-tabs') >= 0);
+	const ppPetTab = ppTabsEl.children.find((c) => (c.textContent || '').indexOf('🐋 桌宠') >= 0);
+	ppPetTab._fire('click', { stopPropagation() {} });
+	assert.ok(ppHost.textContent.includes('🐋 完整形态') && ppHost.textContent.includes('躲猫猫'), 'panel pet tab renders form buttons');
+	/* 📖 manual tab: the FULL manual content (ported from the drawer group —
+	 * every content lock below is the original drawer assertion, scoped to
+	 * the tab content) */
+	const helpTab = ppTabsEl.children.find((c) => (c.textContent || '').indexOf('📖 使用说明') >= 0);
+	helpTab._fire('click', { stopPropagation() {} });
+	assert.ok(helpTab.classList.contains('on'), 'manual tab activates');
+	const hEl = ppHost.children.find((c) => (c.className || '').indexOf('dsh-whale-pp-content') >= 0);
+	assert.ok(hEl, 'manual tab content area exists');
+	const hWrap = hEl.children.find((c) => (c.className || '').indexOf('dsh-whale-pp-manual') >= 0);
+	assert.ok(hWrap, 'manual fixed-height scroll region exists');
+	const hListM = hWrap.children.find((c) => c.className === 'dsh-whale-history-list');
+	assert.ok(hListM, 'manual list is INSIDE the tab scroll region (content actually renders)');
 	assert.ok(hEl.textContent.includes('我是什么'), 'what-it-is section');
 	assert.ok(hEl.textContent.includes('通知一览'), 'notifications section');
 	assert.ok(hEl.textContent.includes('完成了'), 'completion explained');
@@ -2115,13 +2155,6 @@ async function main() {
 	assert.ok(hEl.textContent.includes('常见问题'), 'FAQ section present');
 	assert.ok(hEl.textContent.includes('红标'), 'badge semantics explained');
 	assert.ok(hEl.textContent.includes('好感'), 'companion section present');
-	assert.ok(hEl.children.some((c) => c.className === 'dsh-whale-panel-foot'), 'manual has the shared footer');
-	assert.ok(hEl.textContent.includes('← 返回菜单'), 'manual back goes to the MENU');
-	const hFoot = hEl.children.find((c) => c.className === 'dsh-whale-panel-foot');
-	hFoot.children.find((c) => c.className.indexOf('dsh-whale-panel-back') >= 0)._fire('click', { stopPropagation() {} });
-	await sleep(30);
-	assert.ok(CTX.ctxMenuOpen(), 'manual back button reopens the menu');
-	assert.ok(!CTX.drawerOpen(), 'manual back closed the drawer');
 	/* double right-click pets: +1 affection, reaction line, hearts, bounce */
 	assert.strictEqual(CTX.affection(), 0, 'affection starts at 0');
 	await singleRClick(200, 200); /* first click: opens the menu */
@@ -2769,39 +2802,41 @@ async function main() {
 	muxpCg({ type: 'session/event', sessionId: 'session-cg1', event: { type: 'turn/end', seq: 2, time: 1, data: {} } });
 	assert.ok(envCfg.bubble().textContent.includes('完成了'), 'end report still shown when starts are muted');
 	assert.strictEqual(CG.unreadCount(), 1, 'end unread counted');
-	/* threshold cycle via the settings panel (TOOL_PRESETS: 5000..60000) */
-	CG.openSettings();
+	/* threshold/volume cycles via the sidebar panel page (设置 tab; 11-08 the
+	 * settings drawer retired — the rows live on the panel page now) */
+	const ppCfg = envCfg.sandbox.document.createElement('div');
+	envCfg.sandbox.window.__dshWhalePanel.mount(ppCfg);
+	/* floating-panel finder kept: the sound picker still renders into the
+	 * whale-anchored floating panel (same class family as the old drawer) */
 	const sPanel = () => envCfg.sandbox.document.body.children.find((c) => (c.className || '').indexOf('dsh-whale-settings') === 0) || null;
-	const sp = sPanel();
-	assert.ok(sp && sp.classList.contains('show'), 'settings panel opens');
-	const cfgRows = sp.children.filter((c) => c.className === 'dsh-whale-settings-row');
-	assert.strictEqual(cfgRows.length, 11, 'eleven settings rows (操作说明 moved to the menu as 使用说明; 运行状态 added, #14)');
-	const stuckRow = cfgRows.find((r) => r.textContent.includes('工具超时'));
+	const stuckRow = findPpRow(ppCfg, '工具超时');
 	assert.ok(stuckRow.textContent.includes('15s'), `stuck row shows default 15s: ${stuckRow.textContent}`);
 	stuckRow._fire('click', { stopPropagation() {} });
 	assert.strictEqual(CG.CONFIG.toolStuckMs, 30000, 'tool threshold cycled to 30s');
 	/* volume cycle (VOL_STEPS 0..1) */
-	const volRow = sPanel().children.find((c) => c.className === 'dsh-whale-settings-row' && c.textContent.includes('音量'));
+	const volRow = findPpRow(ppCfg, '音量');
 	volRow._fire('click', { stopPropagation() {} });
 	assert.strictEqual(CG.CONFIG.volume, 0, 'volume cycled to 0% (VOL_STEPS wraps 1->0)');
 	assert.strictEqual(JSON.parse(envCfg.sandbox.localStorage.getItem('dsh-whale:config')).data.volume, 0, 'volume persisted');
-	/* 41b. sound picker regression: the tone row must OPEN the picker and
-	 * stay on it (the settings rebuild used to paint straight over it —
-	 * user-reported "点了没办法"), and an option click applies + persists
-	 * the per-kind sound and moves the ✔ marker */
-	CG.openSettings();
-	const toneRow = sPanel().children.find((c) => c.className === 'dsh-whale-settings-row' && c.textContent.includes('音色'));
+	/* 41b. per-kind sound dropdowns: INLINE detail under the 音色 row (11-09
+	 * the floating picker retired) — an option change applies + persists the
+	 * per-kind sound */
+	const toneRow = findPpRow(ppCfg, '音色');
 	toneRow._fire('click', { stopPropagation() {} });
-	let pickPanel = sPanel();
-	assert.ok(pickPanel && pickPanel.classList.contains('show'), 'sound picker opens from the settings row');
-	assert.ok(pickPanel.textContent.includes('完成通知') && pickPanel.textContent.includes('失败通知'), 'picker lists per-kind rows');
-	const pickRows = pickPanel.children.filter((c) => c.className === 'dsh-whale-settings-row');
-	const sndSels = pickRows.map((r) => r.children.find((ch) => (ch.className || '').indexOf('dsh-whale-sound-sel') >= 0)).filter(Boolean);
+	const ppContentCfg = ppCfg.children.find((c) => (c.className || '') === 'dsh-whale-pp-content');
+	const toneDet = ppContentCfg && ppContentCfg.children.find((c) => (c.className || '') === 'dsh-whale-pp-tone-detail');
+	assert.ok(toneDet && toneDet.style.display === 'block', 'tone detail expands under the 音色 row');
+	assert.ok(toneDet.textContent.includes('完成通知') && toneDet.textContent.includes('失败通知'), 'detail lists per-kind rows');
+	const sndSels = [];
+	(function walkSels(node) {
+		(node.children || []).forEach((c) => {
+			if ((c.className || '') === 'dsh-whale-sound-sel') sndSels.push(c);
+			walkSels(c);
+		});
+	})(toneDet);
 	assert.strictEqual(sndSels.length, 4, 'four per-kind dropdowns (done/fail/attn/remind)');
 	assert.strictEqual(sndSels[1].children.length, 5, 'fail dropdown carries 5 options');
 	assert.strictEqual(sndSels[3].value, 'bell', 'remind sound defaults to bell');
-	const pickFoot = pickPanel.children.find((c) => c.className === 'dsh-whale-panel-foot');
-	assert.ok(pickFoot && pickFoot.children.some((c) => (c.className || '').indexOf('dsh-whale-panel-back') >= 0), 'sound picker carries a back button');
 	sndSels[1].value = 'chime';
 	sndSels[1]._fire('change', {});
 	assert.strictEqual(CG.CONFIG.soundFail, 'chime', 'fail sound switched to chime via dropdown');
@@ -2812,8 +2847,8 @@ async function main() {
 	sndSels[3]._fire('change', {});
 	assert.strictEqual(CG.CONFIG.soundRemind, 'thud', 'remind sound switched to thud via dropdown');
 	assert.strictEqual(JSON.parse(envCfg.sandbox.localStorage.getItem('dsh-whale:config')).data.soundRemind, 'thud', 'remind sound persisted');
-	pickPanel = sPanel();
-	assert.ok(pickPanel.textContent.includes('完成通知'), 'picker still open after a pick (no rebuild)');
+	toneRow._fire('click', { stopPropagation() {} });
+	assert.strictEqual(toneDet.style.display, 'none', 'tone detail collapses on second click');
 	/* 41c. 1:1 panel lifecycle: a completion shows the token panel; attention
 	 * requests show NO panel at all (09-05 用户反馈 — the task is still
 	 * running, a usage readout is premature; the old paired-panel behavior
@@ -2840,25 +2875,18 @@ async function main() {
 	 * panels never stack (the settings panel used to cover the drawer). */
 	CG.pushHistory({ title: '周报任务A', sessionId: 'session-r1', kind: 'done', at: Date.now(), endTime: Date.now(), turnTokens: 1234 });
 	CG.pushHistory({ title: '周报任务B', sessionId: 'session-r2', kind: 'question', at: Date.now(), endTime: Date.now(), turnTokens: null });
-	CG.openReport();
-	const rDrawer = () => envCfg.sandbox.document.body.children.find((c) => (c.className || '').indexOf('dsh-whale-history') === 0) || null;
-	assert.ok(rDrawer() && rDrawer().classList.contains('show'), 'weekly report drawer opens');
-	const rList = rDrawer().children.find((c) => c.className === 'dsh-whale-history-list');
-	assert.ok(rList, 'report list is INSIDE the drawer (missing appendChild fixed)');
+	/* 📊 周报 Tab (11-09 the report drawer retired — the sidebar page owns it) */
+	const ppRep = envCfg.sandbox.document.createElement('div');
+	envCfg.sandbox.window.__dshWhalePanel.mount(ppRep);
+	ppRep.children.find((c) => (c.className || '').indexOf('dsh-whale-pp-tabs') >= 0)
+		.children.find((c) => (c.textContent || '').indexOf('📊 周报') >= 0)._fire('click', { stopPropagation() {} });
+	const rCard = ppRep.children.find((c) => (c.className || '').indexOf('dsh-whale-pp-content') >= 0)
+		.children.find((c) => (c.className || '') === 'dsh-whale-pp-report');
+	assert.ok(rCard, 'report card container renders');
+	const rList = rCard.children.find((c) => c.className === 'dsh-whale-history-list');
+	assert.ok(rList, 'report list renders INSIDE the card (missing appendChild fixed)');
 	assert.ok(rList.textContent.includes('本周：✅') && rList.textContent.includes('❓'), 'done+question buckets counted (records from the flows above included)');
 	assert.ok(rList.textContent.includes('1K tok'), 'token bucket summed (the 1234 pushed record dominates the rounding)');
-	assert.strictEqual(CG.panelOpen(), false, 'opening the weekly report closed the settings panel (no stacking)');
-	CG.openSettings();
-	assert.ok(CG.panelOpen(), 'settings reopens');
-	assert.strictEqual(CG.drawerOpen(), false, 'opening settings closed the weekly report (mutual exclusion)');
-	const repRow = sPanel().children.find((c) => c.className === 'dsh-whale-settings-row' && c.textContent.includes('任务周报'));
-	repRow._fire('click', { stopPropagation() {} });
-	assert.ok(CG.drawerOpen() && !CG.panelOpen(), 'the settings 周报 row swaps to the drawer in place');
-	/* weekly report also carries the back/close footer (settings-entered) */
-	const repFootEl = rDrawer().children.find((c) => c.className === 'dsh-whale-panel-foot');
-	assert.ok(repFootEl && repFootEl.children.some((c) => (c.className || '').indexOf('dsh-whale-panel-back') >= 0), 'weekly report carries a back button');
-	repFootEl.children.find((c) => (c.className || '').indexOf('dsh-whale-panel-back') >= 0)._fire('click', { stopPropagation() {} });
-	assert.ok(CG.panelOpen() && !CG.drawerOpen(), 'report back returns to the settings panel');
 	/* legacy-default migration: a stored 8000 (the pre-M4 default that older
 	 * panel saves wrote wholesale) adopts the new 15s default on load, while
 	 * deliberately-chosen values (e.g. 30000) are respected */
@@ -3223,48 +3251,35 @@ async function main() {
 		const noteEl = envT.whale.children.find((c) => (c.className || '') === 'dsh-whale-note');
 		assert.ok(noteEl, 'whale note appended to the whale');
 		assert.strictEqual(noteEl.textContent, '已清空 7 条通知', 'note carries the cleared count');
-		/* #6/#14/#15 settings: renames, (?) explainers, 运行状态 entry */
-		BT.openSettings();
+		/* #6/#14/#15 settings semantics now live on the sidebar panel page
+		 * (the drawer retired 11-08): renames + row set ported to the mount;
+		 * hint explainers retired with the drawer (使用说明 owns the docs) */
+		const ppT = envT.sandbox.document.createElement('div');
+		envT.sandbox.window.__dshWhalePanel.mount(ppT);
 		const sPanelT = () => envT.sandbox.document.body.children.find((c) => c.className === 'dsh-whale-settings');
-		assert.ok(sPanelT(), 'settings opens');
-		assert.ok(!sPanelT().textContent.includes('诊断模式'), 'old 诊断模式 label gone (#15)');
-		assert.ok(!sPanelT().textContent.includes('健康自检'), 'old 健康自检 label gone (#14)');
-		assert.ok(sPanelT().textContent.includes('调试模式'), '调试模式 row present (#15)');
-		const rowsT = sPanelT().children.filter((c) => c.className === 'dsh-whale-settings-row');
-		assert.strictEqual(rowsT.length, 11, 'eleven settings rows');
-		assert.strictEqual(rowsT.filter((r) => r.children.some((ch) => ch.className === 'dsh-whale-settings-q')).length, 11,
-			'every row carries a (?) explainer (#6)');
-		const runRow = rowsT.find((r) => r.textContent.includes('运行状态'));
-		assert.ok(runRow, '运行状态 entry row exists (#14)');
-		const runQ = runRow.children.find((ch) => ch.className === 'dsh-whale-settings-q');
-		const runTip = runRow.children.find((ch) => ch.className === 'dsh-whale-settings-hint');
-		assert.ok(runTip && !runTip.classList.contains('show'), 'hint hidden by default');
-		runQ._fire('click', { stopPropagation() {} });
-		assert.ok(runTip.classList.contains('show'), 'hint shows on (?) click');
-		const runX = runTip.children.find((ch) => ch.className === 'dsh-whale-settings-hint-x');
-		assert.ok(runX && runX.textContent.includes('收起'), 'expanded hint carries a 收起 button');
-		runX._fire('click', { stopPropagation() {} });
-		assert.ok(!runTip.classList.contains('show'), '收起 button collapses the hint');
-		assert.strictEqual(sPanelT().children.filter((c) => c.className === 'dsh-whale-settings-row').length, 11,
-			'toggle/collapse never rebuild the panel (stopPropagation)');
-		/* 设置 itself is menu-entered: bottom-left 返回菜单 reopens the menu */
-		const setFoot = sPanelT().children.find((c) => c.className === 'dsh-whale-panel-foot');
-		const setBack = setFoot && setFoot.children.find((c) => c.textContent.indexOf('返回菜单') >= 0);
-		assert.ok(setBack, 'settings panel carries a 返回菜单 back button (bottom-left)');
-		setBack._fire('click', { stopPropagation() {} });
-		assert.ok(envT.sandbox.document.body.children.find((c) => c.className === 'dsh-whale-menu'),
-			'settings back reopens the right-click menu');
-		/* 运行状态 row opens the renamed health panel (DOM assembly asserted) */
-		runRow._fire('click', { stopPropagation() {} });
-		const hpT = sPanelT();
-		assert.ok(hpT.textContent.includes('运行状态'), 'health panel titled 运行状态 (#14)');
-		assert.ok(hpT.textContent.includes('后台通知通道'), 'health detail rows render');
-		/* ← 返回设置: back into settings without close-and-reopen */
-		const footT = hpT.children.find((c) => c.className === 'dsh-whale-panel-foot');
-		const backBtnT = footT && footT.children.find((c) => (c.className || '').indexOf('dsh-whale-panel-back') >= 0);
-		assert.ok(backBtnT && backBtnT.textContent.includes('返回'), 'health panel carries a back button');
-		backBtnT._fire('click', { stopPropagation() {} });
-		assert.ok(sPanelT().textContent.includes('⚙️ 设置'), 'back returns to the settings panel');
+		assert.ok(!ppT.textContent.includes('诊断模式'), 'old 诊断模式 label gone (#15)');
+		assert.ok(!ppT.textContent.includes('健康自检'), 'old 健康自检 label gone (#14)');
+		assert.ok(ppT.textContent.includes('调试模式'), '调试模式 row present (#15)');
+		const rowsT = [];
+		(function walkRows(node) {
+			(node.children || []).forEach((c) => {
+				if (c.className === 'dsh-whale-pp-row') rowsT.push(c);
+				walkRows(c);
+			});
+		})(ppT);
+		/* rows include the detail containers' children too — assert presence
+		 * per item instead of a brittle total count */
+		['开工通知', '免打扰', '音量', '音色', '工具超时', '压力提醒', '导出历史', '调试模式'].forEach((n) => {
+			assert.ok(rowsT.some((r) => r.textContent.indexOf(n) >= 0), `panel row present: ${n}`);
+		});
+		/* 11-11: export split back to two rows (Markdown/CSV) — the merged
+		 * single row silently lost the CSV path */
+		assert.strictEqual(rowsT.filter((r) => r.textContent.indexOf('导出历史') >= 0).length, 2, 'export rows split: Markdown + CSV');
+		assert.ok(rowsT.some((r) => r.textContent.indexOf('CSV → 下载文件') >= 0), 'CSV path reachable again');
+		/* 11-09 用户拍板：详细自查展开区与状态条重复——砍掉，恢复提示常驻
+		 * 在三个状态下面（浮层只留给鲸鱼 ⚠️ chip） */
+		assert.ok(!ppT.textContent.includes('详细自查'), 'redundant 详细自查 button gone');
+		assert.ok(ppT.textContent.includes('多数失效是页面过期'), 'health recovery hint sits under the strip (#14)');
 	}
 
 	/* ============ 51 · 批2：闲置引导 / 好感度爱心里程碑 / 手册搜索 / 历史高亮 ============ */
@@ -3308,13 +3323,18 @@ async function main() {
 		/* hearts branch of the idle tick now that affection >= 10 */
 		BG._idleGuide.tick(true);
 		assert.strictEqual(BG._idleGuide.count(), 4, 'hearts tick consumes the counter too');
-		/* #5 manual search: filter + status + restore */
-		BG.openHelp();
-		const mDrawer = bodyG.children.find((c) => (c.className || '').indexOf('dsh-whale-manual') >= 0);
-		assert.ok(mDrawer, 'manual drawer open');
-		const mIn = mDrawer.children.find((c) => (c.className || '').indexOf('dsh-whale-manual-search') >= 0);
-		const mStatus = mDrawer.children.find((c) => c.className === 'dsh-whale-manual-status');
-		const mList = mDrawer.children.find((c) => c.className === 'dsh-whale-history-list');
+		/* #5 manual search: filter + status + restore (11-08 the manual lives
+		 * on the sidebar panel page help tab — mounted fresh here) */
+		const ppHelpG = envG.sandbox.document.createElement('div');
+		envG.sandbox.window.__dshWhalePanel.mount(ppHelpG);
+		ppHelpG.children.find((c) => (c.className || '').indexOf('dsh-whale-pp-tabs') >= 0)
+			.children.find((c) => (c.textContent || '').indexOf('📖 使用说明') >= 0)._fire('click', { stopPropagation() {} });
+		const mDrawer = ppHelpG.children.find((c) => (c.className || '').indexOf('dsh-whale-pp-content') >= 0);
+		assert.ok(mDrawer && mDrawer.textContent.includes('我是什么'), 'manual tab content renders');
+		const mWrap = mDrawer.children.find((c) => (c.className || '').indexOf('dsh-whale-pp-manual') >= 0);
+		const mIn = mWrap.children.find((c) => (c.className || '').indexOf('dsh-whale-manual-search') >= 0);
+		const mStatus = mWrap.children.find((c) => c.className === 'dsh-whale-manual-status');
+		const mList = mWrap.children.find((c) => c.className === 'dsh-whale-history-list');
 		const totalRows = mList.children.length;
 		mIn.value = '红标';
 		mIn._fire('input', {});
@@ -3329,8 +3349,6 @@ async function main() {
 		mIn._fire('input', {});
 		assert.strictEqual(mStatus.textContent, '', 'status cleared on empty query');
 		assert.strictEqual(mList.children.filter((c) => c.classList.contains('dsh-whale-hide')).length, 0, 'all rows restored');
-		mDrawer.children.find((c) => c.className === 'dsh-whale-panel-foot')
-			.children.find((c) => c.className === 'dsh-whale-wardrobe-close')._fire('click', { stopPropagation() {} });
 		/* #7 history search: highlight + "找到 N 条记录" */
 		BG.pushHistory({ title: '修复登录页 bug', sessionId: 'session-h1', kind: 'done', at: Date.now() });
 		BG.pushHistory({ title: '写周报并同步', sessionId: 'session-h2', kind: 'done', at: Date.now() });
@@ -3587,8 +3605,8 @@ async function main() {
 		assert.ok(svgI.children.length >= 2 && svgI.children.every((p) => p._attrs && p._attrs['stroke-width'] === '1.6'), 'svg paths carry the stroke defaults');
 		const ghostI = icoI.children.find((k) => k.className === 'dsh-whale-ico-ghost');
 		assert.ok(ghostI && ghostI.textContent === '⏰', 'emoji ghost keeps the glyph in the DOM text');
-		const setI = itemsI.find((it) => it.textContent.indexOf('设置') >= 0);
-		assert.ok(setI && setI.textContent.includes('⚙️ 设置'), 'settings text byte-identical (includes passes as before)');
+		const setI = itemsI.find((it) => it.textContent.indexOf('历史任务') >= 0);
+		assert.ok(setI && setI.textContent.includes('📜 历史任务'), 'history text byte-identical (includes passes as before; the 设置/使用说明 items retired to the sidebar page 11-08)');
 
 		/* --- 54b. 每窗口归属 pin：pin 优先 / 全局改写不串户 / 活动快照自愈 --- */
 		const envP = makeEnv(new Map([['dsh.sessions.current', JSON.stringify({ sessionId: 'session-globalA' })]]));

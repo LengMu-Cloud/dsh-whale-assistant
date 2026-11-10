@@ -187,10 +187,9 @@
 		window.__dshWhale.panelEl = function () {
 			return ctxPanel;
 		};
-		window.__dshWhale.openHelp = openHelp;
 		window.__dshWhale.openHistory = openHistory;
-		window.__dshWhale.openSettings = openSettings;
-		window.__dshWhale.openReport = openReport;
+		/* openSettings export retired (11-08): the drawer is gone — settings
+		 * live on the sidebar page (panel-page.js via window.__dshWhalePanel) */
 		window.__dshWhale.openReminders = openReminders;
 		window.__dshWhale.openHealthPanel = openHealthPanel;
 		/* heart spawner lives in the uiInit closure — mood.js idle hearts and

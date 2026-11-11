@@ -203,6 +203,7 @@
   var currentForm = 'full';
   var morphUntil = 0;   /* 形变动画期间 d 报 1（宿主区域冻结，防 60Hz 贴身重建闪烁） */
   var readySent = false;   /* ready 握手只发一次 */
+  var lastPetCfg = '';     /* 设置 relay 差分指纹（11-11 真机修复轮） */
 
   function sendCtrl(obj) {
     try { if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage(obj); } catch (e) { }
@@ -274,6 +275,26 @@
         return r.ok ? r.json() : null;
       }).then(function (doc) {
         if (doc && doc.form && doc.form !== currentForm) applyForm(doc.form);
+        /* ---- 设置 relay（11-11 真机修复轮）：页面半区的 CONFIG/总静音经
+           宿主 /pet/config 汇聚、随 state 轮询下发——桌宠 WebView2 是独立
+           localStorage 分区，此前页面设置永远到不了桌宠（用户实报「设置了
+           叮叮，桌宠响单声叮」）。差分应用，约 2s 内生效。早到序（响应先于
+           whale.js 就绪）由文件尾部的补拍脚本兜底。 ---- */
+        if (doc && doc.petConfig) {
+          try { if (window.__dshPetHost) window.__dshPetHost.petConfig = doc.petConfig; } catch (e0) { }
+          var cfgStr = JSON.stringify(doc.petConfig);
+          if (cfgStr !== lastPetCfg) {
+            lastPetCfg = cfgStr;
+            try {
+              if (window.__dshWhale && typeof window.__dshWhale.applyConfig === 'function') {
+                window.__dshWhale.applyConfig(doc.petConfig.config || {});
+                if (typeof window.__dshWhale.setSoundMuted === 'function') {
+                  window.__dshWhale.setSoundMuted(doc.petConfig.sound === 'off');
+                }
+              }
+            } catch (e1) { }
+          }
+        }
       }).catch(function () { });
     } catch (e) { }
   }
@@ -535,5 +556,19 @@
 })();
 </script>
 <script src="whale.js"></script>
+<script>
+/* 设置 relay 早到序兜底（11-11 真机修复轮）：state 轮询若在 whale.js 就绪
+ * 前已带回 petConfig（缓存的极快响应），上面轮询块的 applyConfig 会因
+ * __dshWhale 缺席而空过——这里补一拍应用（幂等，与轮询差分互不冲突）。 */
+try {
+  var pc0 = window.__dshPetHost && window.__dshPetHost.petConfig;
+  if (pc0 && window.__dshWhale && typeof window.__dshWhale.applyConfig === 'function') {
+    window.__dshWhale.applyConfig(pc0.config || {});
+    if (typeof window.__dshWhale.setSoundMuted === 'function') {
+      window.__dshWhale.setSoundMuted(pc0.sound === 'off');
+    }
+  }
+} catch (e) { }
+</script>
 </body>
 </html>

@@ -384,6 +384,12 @@ function killTree(pid) {
 		 * ——把「无限闪现」变成「最多闪两次然后页鲸稳定接管」。 */
 		let rapidDeaths = [];
 		const book = newCodeBook();
+		/* 设置 relay（11-11 真机修复轮）：页面半区的 CONFIG/总静音快照——
+		 * 页面 POST /pet/config 写入（fence-only，与 /pet/ctrl 同信任级），
+		 * /pet/state 随 2s 轮询下发，桌宠页差分应用。ledger 持久化：宿主
+		 * 重启后桌宠 boot 也能拿到（页面 boot 也会补推一拍）。只含设置
+		 * 不含会话内容——枚举化边界不破。 */
+		let petRelay = null;
 
 		/** Broadcast a pet/state frame through the host's event pipeline:
 		 * lands in recentFrames (pollers) AND fans out to every live SSE
@@ -539,7 +545,14 @@ function killTree(pid) {
 				DSH_PET_DLLDIR: dllDir,
 				DSH_PET_USERDATA: join(run, 'webview'),
 				DSH_PET_LOG: logFile,
-				WEBVIEW2_DEFAULT_BACKGROUND_COLOR: '00FFFFFF'
+				WEBVIEW2_DEFAULT_BACKGROUND_COLOR: '00FFFFFF',
+				/* 11-11 三轮（用户实报「第一条通知无声，双击红标后恢复」）：
+				 * 桌宠 WebView2 默认 autoplay 策略=窗口无用户激活时音频
+				 * resume() 被拒——桌宠开机后用户未必先点它，第一条通知的
+				 * 音频解锁被拒即静音。桌宠页只跑我们自己的 whale.js（播的
+				 * 是自家通知音，非任意外部内容）——直接豁免手势要求，根除
+				 * 该类（页鲸侧由 dings.js 的手势重试兜底）。 */
+				WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: '--autoplay-policy=no-user-gesture-required'
 			});
 			log('spawning pet (port ' + port + ', form ' + form + ', runtime ' + runtime + ', log ' + logFile + ')');
 			child = spawn('powershell.exe', [
@@ -757,6 +770,30 @@ function killTree(pid) {
 		},
 		{
 			kind: 'exact',
+			path: '/api/whale-assistant/pet/config',
+			handler: (req, res) => {
+				if (req.method !== 'POST') return plain(res, 405, '');
+				if (!deps.isAllowed(req)) return plain(res, 403, '{"ok":false,"error":"forbidden"}');
+				deps.readJsonBody(req, res, 16384, (body) => {
+					const cfg = body && body.config && typeof body.config === 'object' && !Array.isArray(body.config) ? body.config : null;
+					const snd = body && (body.sound === 'off' || body.sound === 'on') ? body.sound : null;
+					if (!cfg && !snd) {
+						plain(res, 400, JSON.stringify({ ok: false, error: 'config object or sound on|off required' }));
+						return;
+					}
+					petRelay = { config: cfg, sound: snd, at: Date.now() };
+					queueStoreWrite(join(homedir(), '.dsh'), () => {
+						const doc = loadStore(join(homedir(), '.dsh')) || {};
+						doc.petConfig = petRelay;
+						saveStoreAtomic(join(homedir(), '.dsh'), doc);
+						return doc;
+					}).catch((e) => log('petConfig persist failed: ' + String(e && e.message || e)));
+					plain(res, 200, JSON.stringify({ ok: true }));
+				});
+			}
+		},
+		{
+			kind: 'exact',
 			path: '/api/whale-assistant/pet/state',
 			handler: (req, res) => {
 				if (req.method !== 'GET') return plain(res, 405, '');
@@ -766,7 +803,11 @@ function killTree(pid) {
 					ok: true,
 					form: st.form,
 					enabled: st.enabled,
-					running: st.running
+					running: st.running,
+					/* 设置 relay（11-11 真机修复轮）：页面 CONFIG/总静音快照随
+					 * 2s 轮询下发，桌宠页差分应用（桌宠 WebView2 独立分区，
+					 * 页面设置此前永远到不了桌宠=「设了叮叮响单声叮」根因） */
+					petConfig: petRelay
 				}));
 			}
 		},
@@ -859,6 +900,24 @@ function killTree(pid) {
 						}
 						return;
 					}
+					if (action === 'open-settings') {
+						/* 桌宠菜单「设置」跳转（11-11 三报，用户实报「点设置只弹
+						 * 提示没有意义」）：桌宠页没有 layout 桥——宿主广播
+						 * pet/open-settings，页鲸（数据管线常活）收到即
+						 * selectPanel('whale-assistant') 打开侧边栏设置页。
+						 * delivered 语义与 reload-page 相同（页鲸不在场=DSH
+						 * 关着，桌宠提示；DSH 前台化由桌宠进程 c:'jump' 完成）。 */
+						try {
+							if (typeof deps.pushFrame === 'function') {
+								deps.pushFrame({ type: 'pet/open-settings', time: Date.now() });
+							}
+							const delivered = typeof deps.hasPageClients === 'function' ? !!deps.hasPageClients() : true;
+							plain(res, 200, JSON.stringify({ ok: true, delivered: delivered }));
+						} catch (e) {
+							plain(res, 500, JSON.stringify({ ok: false, error: String(e && e.message || e) }));
+						}
+						return;
+					}
 					if (action === 'clear-history') {
 						/* 桌宠历史抽屉的清空（11-05）：清的就是共享账本——与页内
 						 * 清空同一份数据（抽屉读的也是它）。cutoff=null=清空全部；
@@ -927,7 +986,14 @@ function killTree(pid) {
 	/* boot state: whatever the ledger says */
 	/* boot state: 桌宠常驻（第九轮用户定稿）——没有进入/退出开关，只要平台
 	 * 支持就常开（不支持时页内鲸鱼兜底）；ledger 只保留形态记忆 */
-	const boot = normalizePetDoc(loadStore(join(homedir(), '.dsh')));
+	const bootDoc = loadStore(join(homedir(), '.dsh'));
+	const boot = normalizePetDoc(bootDoc);
+	/* 设置 relay（11-11 真机修复轮）：宿主重启后从 ledger 恢复最近一份页面
+	 * 设置快照——桌宠 boot 首个 state 轮询即可拿到（页面 boot 补推前的空窗
+	 * 也覆盖）。损坏/缺失→null，桌宠用默认值等页面下一次推送。 */
+	try {
+		petRelay = bootDoc && bootDoc.petConfig && typeof bootDoc.petConfig === 'object' && !Array.isArray(bootDoc.petConfig) ? bootDoc.petConfig : null;
+	} catch (e) { petRelay = null; }
 	enabled = supported;
 	form = boot.form;
 	spawnPet();

@@ -329,9 +329,11 @@
 		 * because its list div was never appended to the panel — only the
 		 * title + close ever made it into the DOM). */
 
-		/** 📤 导出历史: Markdown → clipboard; CSV → file download. */
-		function exportHistory(fmt) {
-			if (!history.length) { uiSay('还没有历史可导出哦 🐳', 2000); return; }
+		/** 📤 导出历史: Markdown → clipboard; CSV → file download.
+		 * onDone(ok) 可选——侧边栏页（ui/panel-page.js）用它驱动行内闪现：
+		 * 剪贴板写入是异步的，且失败气泡在桌宠在岗时打进隐藏元素零可见。 */
+		function exportHistory(fmt, onDone) {
+			if (!history.length) { uiSay('还没有历史可导出哦 🐳', 2000); if (onDone) onDone(false); return; }
 			if (fmt === 'csv') {
 				var rows = ['time,kind,title,session,tokens'];
 				for (var i = history.length - 1; i >= 0; i--) {
@@ -345,7 +347,9 @@
 				a.href = URL.createObjectURL(blob);
 				a.download = 'whale-history.csv';
 				a.click();
+				setTimeout(function () { try { URL.revokeObjectURL(a.href); } catch (e) { /* 桩环境 */ } }, 1500); /* blob URL 用完即收（11-11 审计 P3-9） */
 				uiSay('CSV 已下载 📤', 2000);
+				if (onDone) onDone(true);
 				return;
 			}
 			var lines = ['# 小鲸鱼任务历史', ''];
@@ -357,9 +361,10 @@
 			}
 			var md = lines.join('\n');
 			if (navigator.clipboard && navigator.clipboard.writeText) {
-				navigator.clipboard.writeText(md).then(function () { uiSay('Markdown 已复制 📋', 2200); }, function () { uiSay('复制失败 🥲', 2000); });
+				navigator.clipboard.writeText(md).then(function () { uiSay('Markdown 已复制 📋', 2200); if (onDone) onDone(true); }, function () { uiSay('复制失败 🥲', 2000); if (onDone) onDone(false); });
 			} else {
 				uiSay('剪贴板不可用 🥲', 2000);
+				if (onDone) onDone(false);
 			}
 		}
 

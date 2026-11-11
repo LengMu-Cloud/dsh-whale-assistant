@@ -87,7 +87,7 @@
 
 > One synthesized notification. 'done' = bicycle-bell "ding-ding": two metallic strikes (2400Hz fundamental + 2×/2.76× inharmonic partials) with a long resonant decay. 'fail' = dull descending minor third (550 → 415). Back-to-back dings stay clear because the queue gap (DING_GAP_MS) outlasts the ring'
 
-**ensureAudio()** · **renderDing()** · **pumpDings()** · **dndActive()** · **playDing()** · **setSoundMuted()**
+**ensureAudio()** · **renderDing()** · **pumpDings()** · **pumpPreview()** · **previewDing()** · **armAudioUnlockRetry()** · **dndActive()** · **playDing()** · **setSoundMuted()**
 
 ## **src/ui/status-panel.js**（行切片）
 
@@ -184,3 +184,7 @@
 **stampEls()** · **stampMs()** · **renderedOldestMs()** · **findOlderButton()** · **hasMoreNode()** · **clickOlderButton()** · **finish()**
 
 ## **src/core/exports.js**（行切片）
+
+> 设置 relay（11-11 真机修复轮，用户实报「设置了叮叮桌宠响单声叮」）： 桌宠 WebView2 是独立 localStorage 分区，页面 CONFIG/总静音永远到不了 桌宠——每次持久化（saveConfig/setSoundMuted）+ boot 各推一份到宿主 /pet/config（fence-only，与 /pet/ctrl 同信任级），桌宠 2s state 轮询 差分应用。fire-and-forget：失败静默（轮询与下次改动自然补上）。 函数声明提升：config.js/dings.js 的调用点在本定义之前也可用。
+
+**pushPetConfig()**

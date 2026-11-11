@@ -311,10 +311,60 @@
 				openHistory();
 			});
 			menu.appendChild(historyItem);
-			/* ⚙️ 设置 menu item RETIRED (11-08 用户拍板): settings live in the
-			 * DSH sidebar page「小鲸鱼助手」(client.js slots 注册) — the right-
-			 * click menu keeps gestures/reminder/usage; the pet page has no
-			 * sidebar but shares the same config, so sidebar edits reach it. */
+			/* ⚙️ 设置（11-11 真机修复轮，用户要求恢复）：跳转 DSH 侧边栏
+			 * 「小鲸鱼助手」页——layout.selectPanel 桥（client.js inject
+			 * stash），桥缺席（0.1.x web 老引擎/桌宠页无 layout 服务）时
+			 * uiSay 指路兜底。注意：11-08 收口删项时这里的旧注释声称「桌宠
+			 * 共享同一份配置」是**错误假设**（桌宠 WebView2 独立分区，页面
+			 * 设置根本到不了桌宠——正是用户实报的音色不生效根因），已由设置
+			 * relay（/pet/config → state 轮询）纠正。 */
+			var settingsItem = document.createElement('div');
+			settingsItem.className = 'dsh-whale-menu-item';
+			setIconLabel(settingsItem, '⚙️ 设置');
+			settingsItem.addEventListener('click', function (event) {
+				event.stopPropagation();
+				closeCtxMenu();
+				if (PET_MODE) {
+					/* 桌宠页没有 layout 桥也没有 DSH DOM——走宿主广播（与「刷新
+					 * DSH 页面」同通道）：POST open-settings → pet/open-settings
+					 * 帧 → 页鲸 selectPanel 打开侧边栏设置页；delivered 后再用
+					 * c:'jump' 让 ps1 把 DSH 拉前台（ps1 该分支只做前台化，无
+					 * 会话语义，11-03 机制复用）。页鲸不在场（DSH 关着）=
+					 * delivered:false → 提示，不假装成功。 */
+					try {
+						fetch('/api/whale-assistant/pet/ctrl', {
+							method: 'POST',
+							headers: { 'content-type': 'application/json' },
+							body: JSON.stringify({ action: 'open-settings' })
+						}).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (out) {
+							if (out && out.ok === true && out.delivered === true) {
+								try {
+									if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+										window.chrome.webview.postMessage({ c: 'jump' });
+									}
+								} catch (e2) { }
+								uiSay('已在 DSH 打开小鲸鱼助手设置 ✓', 2200);
+							} else if (out && out.ok === true) {
+								uiSay('DSH 窗口未打开——先打开 DSH 再从桌宠菜单进设置 🐳', 3500);
+							} else {
+								uiSay('跳转指令没有送达，稍后再试 🥲', 2500);
+							}
+						}).catch(function () { uiSay('跳转指令没有送达，稍后再试 🥲', 2500); });
+					} catch (e) { uiSay('设置住在 DSH 侧边栏的「小鲸鱼助手」页面里', 2600); }
+					return;
+				}
+				/* 页鲸：layout 桥直达（client.js inject stash）；桥缺席=0.1.x
+				 * web 老引擎 → 气泡指路兜底 */
+				var jumped = false;
+				try {
+					if (typeof window.__dshWhaleSelectPanel === 'function') {
+						window.__dshWhaleSelectPanel('whale-assistant');
+						jumped = true;
+					}
+				} catch (e) { jumped = false; }
+				if (!jumped) uiSay('设置住在 DSH 侧边栏的「小鲸鱼助手」页面里', 2600);
+			});
+			menu.appendChild(settingsItem);
 			/* refresh (B-2 desktop): the official desktop binds NO F5/Ctrl+R —
 			 * plugin updates and recovery both need a page reload, and the
 			 * whale menu is the reachable way to get one.
@@ -507,23 +557,9 @@
 			showFloatingPanel(panel, 210, 200);
 		}
 
-		/** 📖 使用说明: the full user manual, one scrollable side drawer.
-		 * Covers what the whale is, every notification, every gesture, every
-		 * settings row and where the data lives — THE authoritative doc for
-		 * end users (the old 8-line gesture cheat sheet grew into this per
-		 * user request, 2026-09-04). Lives in the side-drawer slot: wide,
-		 * left of the whale, list scrolls, never stacks with other panels. */
-
-		/* ———— 历史抽屉群已拆至 ui/drawers.js（§7 触发线到达，2026-10-27 K3） ———— */
-
-		/** 🎵 音色: per-notification sound picker — 每种通知各选各的音效，
-		 * 点选即切换并现场试听。 */
-
-		/* ———— 历史抽屉群已拆至 ui/drawers.js（§7 触发线到达，2026-10-27 K3） ———— */
-
-		/** Settings panel: notify-on-start toggle, stuck threshold, volume.
-		 * Each row is a cycle; changes apply + persist immediately. Reuses the
-		 * floating-panel slot (ctxPanel) for outside-click close. */
+		/* 11-11 菜单收口：使用说明/音色/设置三块已迁至侧边栏页
+		 * src/ui/panel-page.js（音色随设置页行内化），对应函数已删除；
+		 * 历史抽屉群早已拆至 ui/drawers.js（2026-10-27 K3）。 */
 
 		/** 🩺 Health detail panel (core/health.js detects, THIS side renders:
 		 * the panel slots live in uiInit's closure so the health module —

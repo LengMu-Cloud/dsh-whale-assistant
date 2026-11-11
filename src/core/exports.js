@@ -5,8 +5,30 @@
 		uiInit();
 	}
 
+	/** 设置 relay（11-11 真机修复轮，用户实报「设置了叮叮桌宠响单声叮」）：
+	 * 桌宠 WebView2 是独立 localStorage 分区，页面 CONFIG/总静音永远到不了
+	 * 桌宠——每次持久化（saveConfig/setSoundMuted）+ boot 各推一份到宿主
+	 * /pet/config（fence-only，与 /pet/ctrl 同信任级），桌宠 2s state 轮询
+	 * 差分应用。fire-and-forget：失败静默（轮询与下次改动自然补上）。
+	 * 函数声明提升：config.js/dings.js 的调用点在本定义之前也可用。 */
+	function pushPetConfig() {
+		try {
+			if (PET_MODE || typeof fetch !== 'function') return;
+			fetch('/api/whale-assistant/pet/config', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					config: JSON.parse(JSON.stringify(CONFIG)),
+					sound: soundMuted ? 'off' : 'on'
+				})
+			}).catch(function () { /* 宿主无桌宠/离线：静默 */ });
+		} catch (e) { /* 序列化失败不可能，防御 */ }
+	}
+	pushPetConfig(); /* boot 一推：宿主 ledger 缺货（首次启用/重装）时兜底 */
+
 	/* diagnostic seam */
 	window.__dshWhale.version = PATCH_VERSION;
+	window.__dshWhale._pushPetConfig = pushPetConfig;
 	window.__dshWhale.handleJobsFrame = handleJobsFrame;
 	window.__dshWhale.handleSubscribedFrame = handleSubscribedFrame;
 	window.__dshWhale.handleMuxPayload = handleMuxPayload;

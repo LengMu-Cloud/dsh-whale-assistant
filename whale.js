@@ -329,6 +329,12 @@ function adoptCurrentSessionPin() {
 			dndFrom: CONFIG.dndFrom,
 			dndTo: CONFIG.dndTo
 		});
+		/* 11-11 真机修复轮（用户实报「设置了叮叮桌宠响单声叮」）：桌宠
+		 * WebView2 是独立 localStorage 分区，页面 CONFIG 不会自己过去——
+		 * 每次持久化即向宿主 /pet/config 推一份（桌宠 2s state 轮询差分
+		 * 应用）。pushPetConfig 定义在 exports.js（共享 IIFE 作用域，函数
+		 * 声明跨模块提升，运行时顺序无关）；PET_MODE 下静默。 */
+		if (!PET_MODE) pushPetConfig();
 	}
 
 	/** Normalize an incoming settings patch: only known keys with the right
@@ -2102,6 +2108,21 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				}
 				continue;
 			}
+			/* 桌宠菜单「设置」跳转（11-11 三报，用户实报「点设置只弹提示没有
+			 * 意义」）：宿主广播 pet/open-settings → 本页调
+			 * layout.selectPanel('whale-assistant') 打开侧边栏设置页。桥住在
+			 * client.js（window.__dshWhaleSelectPanel）——core 不直接引用
+			 * ui/client（方向闸门，与 pet/jump 的派发模式同款）：派发
+			 * 自定义事件由 client.js 监听执行。10s 内新帧才执行（重放闸同
+			 * pet/jump）；PET_MODE 短路（桌宠页无 DSH 面板可开）。 */
+			if (f && f.type === 'pet/open-settings') {
+				var osTime = f.time || 0;
+				if (!PET_MODE && Date.now() - osTime < 10000 &&
+					typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+					try { window.dispatchEvent(new CustomEvent('dsh-whale:pet-open-settings')); } catch (e) {}
+				}
+				continue;
+			}
 			if (!f || typeof f.seq !== 'number' || f.seq <= lastSeq) continue;
 			rememberSeq(f.seq);
 			/* a fresh page must not replay the buffer's history — same
@@ -2815,8 +2836,12 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 						if (dingKinds.length > 1) dingKinds.splice(0, dingKinds.length - 1);
 						pumpDings();
 					}
+					pumpPreview(); /* 试听早于解锁排队：resume 后立即补响 */
 				}).catch(function () {
-					/* resume rejected; stay silent rather than crash */
+					/* resume 被拒（autoplay 策略、窗口尚无用户激活）——不能就此
+					 * 把排队的 ding 静默丢掉（11-11 三轮「第一条通知无声」根因）：
+					 * 挂手势重试，首次交互后补响。 */
+					armAudioUnlockRetry();
 				});
 			}
 			return false;
@@ -2946,6 +2971,49 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		}, DING_GAP_MS);
 	}
 
+	/* 显式试听（11-11 三报延时分析，用户实报「点完要等一两秒」）：根因=
+	 * 预览误入通知队列——dingPlaying/DING_GAP_MS(1900ms) 是**通知防叠**
+	 * 设计，预览撞上忙队列就要等足间隔。previewDing 开独立直渲通道：
+	 * 直接渲染（允许与正在响的通知短暂重叠——用户主动点的，要的是立即
+	 * 反馈），不占 dingPlaying、不等 1900ms；AudioContext 挂起时
+	 * pendingPreview 暂存，resume 成功后补响（连点=最后一击生效）。 */
+	var pendingPreview = null;
+	function pumpPreview() {
+		if (!pendingPreview) return;
+		var kind = pendingPreview;
+		if (renderDing(kind)) {
+			pendingPreview = null;
+			return;
+		}
+		ensureAudio(); /* resume().then → pumpPreview 重试 */
+	}
+	function previewDing(kind) {
+		if (soundMuted) return; /* 总静音仍是硬闸 */
+		pendingPreview = kind;
+		pumpPreview();
+	}
+
+	/* 自动播放解锁重试（11-11 三轮，用户实报「第一条通知无声，双击红标后
+	 * 恢复」）：resume() 被拒（autoplay 策略、窗口尚无用户激活）时旧代码
+	 * 就地静默丢弃——排队的 ding 永远不响。挂一次性手势监听：用户第一次
+	 * 点/按（sticky activation 之后 resume 必成功）即补 pumpDings/
+	 * pumpPreview，排队的首声在首次交互后立即补上。 */
+	var audioUnlockArmed = false;
+	function armAudioUnlockRetry() {
+		if (audioUnlockArmed) return;
+		audioUnlockArmed = true;
+		var unlock = function () {
+			audioUnlockArmed = false;
+			['pointerdown', 'keydown', 'touchstart'].forEach(function (t) {
+				try { window.removeEventListener(t, unlock); } catch (e2) {}
+			});
+			try { pumpDings(); pumpPreview(); } catch (e3) { /* 桩环境 */ }
+		};
+		['pointerdown', 'keydown', 'touchstart'].forEach(function (t) {
+			try { window.addEventListener(t, unlock); } catch (e4) {}
+		});
+	}
+
 	/** 免打扰窗口：开着且当前本地时间落在 [from, to) 内（支持跨零点）。 */
 	function dndActive() {
 		if (!CONFIG.dndEnabled) return false;
@@ -2961,12 +3029,17 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		return from < to ? (cur >= from && cur < to) : (cur >= from || cur < to);
 	}
 
-	function playDing(kind) {
+	function playDing(kind, opts) {
 		if (soundMuted) return; /* right-click menu: one-tap mute */
-		if (petDormant) return; /* 桌宠在岗：页面鲸鱼休眠静默（桌宠窗口自己响） */
-		/* 免打扰: completion/failure sounds are dropped (attention still
-		 * rings — the user must act on those regardless of the hour) */
-		if (dndActive() && (kind === 'done' || kind === 'fail')) return;
+		/* 11-11 真机修复轮：opts.force = 显式试听（设置页改音色）——绕过
+		 * 桌宠在岗静默与免丢弃（预览是用户主动点的，静默=「设置无效」
+		 * 观感）；总静音仍是硬闸（用户明确选了全局无声）。 */
+		if (!(opts && opts.force)) {
+			if (petDormant) return; /* 桌宠在岗：页面鲸鱼休眠静默（桌宠窗口自己响） */
+			/* 免打扰: completion/failure sounds are dropped (attention still
+			 * rings — the user must act on those regardless of the hour) */
+			if (dndActive() && (kind === 'done' || kind === 'fail')) return;
+		}
 		if (dingKinds.length >= 6) {
 			/* an extreme burst: drop the oldest backlog so the queue stays sane */
 			dingKinds.splice(0, dingKinds.length - 5);
@@ -2987,6 +3060,8 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	function setSoundMuted(muted) {
 		soundMuted = !!muted;
 		safeSet(SOUND_KEY, soundMuted ? 'off' : 'on');
+		/* 11-11 真机修复轮：总静音也要过 relay 到桌宠（桌面响的是桌宠） */
+		if (!PET_MODE) pushPetConfig();
 	}
 
 	/* ------------------------------------------------------------------ */
@@ -5602,10 +5677,60 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				openHistory();
 			});
 			menu.appendChild(historyItem);
-			/* ⚙️ 设置 menu item RETIRED (11-08 用户拍板): settings live in the
-			 * DSH sidebar page「小鲸鱼助手」(client.js slots 注册) — the right-
-			 * click menu keeps gestures/reminder/usage; the pet page has no
-			 * sidebar but shares the same config, so sidebar edits reach it. */
+			/* ⚙️ 设置（11-11 真机修复轮，用户要求恢复）：跳转 DSH 侧边栏
+			 * 「小鲸鱼助手」页——layout.selectPanel 桥（client.js inject
+			 * stash），桥缺席（0.1.x web 老引擎/桌宠页无 layout 服务）时
+			 * uiSay 指路兜底。注意：11-08 收口删项时这里的旧注释声称「桌宠
+			 * 共享同一份配置」是**错误假设**（桌宠 WebView2 独立分区，页面
+			 * 设置根本到不了桌宠——正是用户实报的音色不生效根因），已由设置
+			 * relay（/pet/config → state 轮询）纠正。 */
+			var settingsItem = document.createElement('div');
+			settingsItem.className = 'dsh-whale-menu-item';
+			setIconLabel(settingsItem, '⚙️ 设置');
+			settingsItem.addEventListener('click', function (event) {
+				event.stopPropagation();
+				closeCtxMenu();
+				if (PET_MODE) {
+					/* 桌宠页没有 layout 桥也没有 DSH DOM——走宿主广播（与「刷新
+					 * DSH 页面」同通道）：POST open-settings → pet/open-settings
+					 * 帧 → 页鲸 selectPanel 打开侧边栏设置页；delivered 后再用
+					 * c:'jump' 让 ps1 把 DSH 拉前台（ps1 该分支只做前台化，无
+					 * 会话语义，11-03 机制复用）。页鲸不在场（DSH 关着）=
+					 * delivered:false → 提示，不假装成功。 */
+					try {
+						fetch('/api/whale-assistant/pet/ctrl', {
+							method: 'POST',
+							headers: { 'content-type': 'application/json' },
+							body: JSON.stringify({ action: 'open-settings' })
+						}).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (out) {
+							if (out && out.ok === true && out.delivered === true) {
+								try {
+									if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+										window.chrome.webview.postMessage({ c: 'jump' });
+									}
+								} catch (e2) { }
+								uiSay('已在 DSH 打开小鲸鱼助手设置 ✓', 2200);
+							} else if (out && out.ok === true) {
+								uiSay('DSH 窗口未打开——先打开 DSH 再从桌宠菜单进设置 🐳', 3500);
+							} else {
+								uiSay('跳转指令没有送达，稍后再试 🥲', 2500);
+							}
+						}).catch(function () { uiSay('跳转指令没有送达，稍后再试 🥲', 2500); });
+					} catch (e) { uiSay('设置住在 DSH 侧边栏的「小鲸鱼助手」页面里', 2600); }
+					return;
+				}
+				/* 页鲸：layout 桥直达（client.js inject stash）；桥缺席=0.1.x
+				 * web 老引擎 → 气泡指路兜底 */
+				var jumped = false;
+				try {
+					if (typeof window.__dshWhaleSelectPanel === 'function') {
+						window.__dshWhaleSelectPanel('whale-assistant');
+						jumped = true;
+					}
+				} catch (e) { jumped = false; }
+				if (!jumped) uiSay('设置住在 DSH 侧边栏的「小鲸鱼助手」页面里', 2600);
+			});
+			menu.appendChild(settingsItem);
 			/* refresh (B-2 desktop): the official desktop binds NO F5/Ctrl+R —
 			 * plugin updates and recovery both need a page reload, and the
 			 * whale menu is the reachable way to get one.
@@ -5798,23 +5923,9 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			showFloatingPanel(panel, 210, 200);
 		}
 
-		/** 📖 使用说明: the full user manual, one scrollable side drawer.
-		 * Covers what the whale is, every notification, every gesture, every
-		 * settings row and where the data lives — THE authoritative doc for
-		 * end users (the old 8-line gesture cheat sheet grew into this per
-		 * user request, 2026-09-04). Lives in the side-drawer slot: wide,
-		 * left of the whale, list scrolls, never stacks with other panels. */
-
-		/* ———— 历史抽屉群已拆至 ui/drawers.js（§7 触发线到达，2026-10-27 K3） ———— */
-
-		/** 🎵 音色: per-notification sound picker — 每种通知各选各的音效，
-		 * 点选即切换并现场试听。 */
-
-		/* ———— 历史抽屉群已拆至 ui/drawers.js（§7 触发线到达，2026-10-27 K3） ———— */
-
-		/** Settings panel: notify-on-start toggle, stuck threshold, volume.
-		 * Each row is a cycle; changes apply + persist immediately. Reuses the
-		 * floating-panel slot (ctxPanel) for outside-click close. */
+		/* 11-11 菜单收口：使用说明/音色/设置三块已迁至侧边栏页
+		 * src/ui/panel-page.js（音色随设置页行内化），对应函数已删除；
+		 * 历史抽屉群早已拆至 ui/drawers.js（2026-10-27 K3）。 */
 
 		/** 🩺 Health detail panel (core/health.js detects, THIS side renders:
 		 * the panel slots live in uiInit's closure so the health module —
@@ -6370,9 +6481,11 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		 * because its list div was never appended to the panel — only the
 		 * title + close ever made it into the DOM). */
 
-		/** 📤 导出历史: Markdown → clipboard; CSV → file download. */
-		function exportHistory(fmt) {
-			if (!history.length) { uiSay('还没有历史可导出哦 🐳', 2000); return; }
+		/** 📤 导出历史: Markdown → clipboard; CSV → file download.
+		 * onDone(ok) 可选——侧边栏页（ui/panel-page.js）用它驱动行内闪现：
+		 * 剪贴板写入是异步的，且失败气泡在桌宠在岗时打进隐藏元素零可见。 */
+		function exportHistory(fmt, onDone) {
+			if (!history.length) { uiSay('还没有历史可导出哦 🐳', 2000); if (onDone) onDone(false); return; }
 			if (fmt === 'csv') {
 				var rows = ['time,kind,title,session,tokens'];
 				for (var i = history.length - 1; i >= 0; i--) {
@@ -6386,7 +6499,9 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				a.href = URL.createObjectURL(blob);
 				a.download = 'whale-history.csv';
 				a.click();
+				setTimeout(function () { try { URL.revokeObjectURL(a.href); } catch (e) { /* 桩环境 */ } }, 1500); /* blob URL 用完即收（11-11 审计 P3-9） */
 				uiSay('CSV 已下载 📤', 2000);
+				if (onDone) onDone(true);
 				return;
 			}
 			var lines = ['# 小鲸鱼任务历史', ''];
@@ -6398,9 +6513,10 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			}
 			var md = lines.join('\n');
 			if (navigator.clipboard && navigator.clipboard.writeText) {
-				navigator.clipboard.writeText(md).then(function () { uiSay('Markdown 已复制 📋', 2200); }, function () { uiSay('复制失败 🥲', 2000); });
+				navigator.clipboard.writeText(md).then(function () { uiSay('Markdown 已复制 📋', 2200); if (onDone) onDone(true); }, function () { uiSay('复制失败 🥲', 2000); if (onDone) onDone(false); });
 			} else {
 				uiSay('剪贴板不可用 🥲', 2000);
+				if (onDone) onDone(false);
 			}
 		}
 
@@ -6567,14 +6683,22 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		 * Tab：⚙️ 设置（健康条+全项迁移）/ 🐋 桌宠（三态控制，POST /pet/ctrl
 		 * form —— 该路由仅栅栏无 token，页内鲸历史同款通道）。 */
 		var __whalePanelCss = false;
+		var __ppToneOpen = false; /* 音色展开态跨 re-render 存活（主观痛点 7） */
 		function mountWhalePanelPage(root) {
 			if (!__whalePanelCss) {
 				__whalePanelCss = true;
 				var css = document.createElement('style');
 				css.textContent = [
-					/* ⚠️ pp 与 pp-host 同元素双类——不要再给 pp-host 写 width:100%，
-					 * 源序会覆盖下面的 860px 上限（11-11 真机：行右缘嵌到窗口边） */
-					'.dsh-whale-pp{width:min(100%,860px);margin:0 auto;padding:20px 26px;font-size:13px;color:var(--dsw-panel-text)}',
+					/* 11-11 真机修复轮（用户实报「展开后没法往下滑」+「关于全屏才
+					 * 看得见」）：页面此前从未自带滚动——宿主 main 面板容器定高
+					 * 裁切，官方页全是 pageBody 自滚。结构分层：root（pp-host）=
+					 * 全宽自滚容器，page（pp）=860px 居中栏。**pp 与 pp-host 从此
+					 * 不同元素**——11-11 的双类源序冲突坑永久消失 */
+					'.dsh-whale-pp-host{height:100%;min-height:0;overflow-y:auto;overscroll-behavior:contain}',
+					/* 自带深夜蓝底（11-11 审计 P2-4）：页面嵌在 DSH main 区而 DSH 有
+					 * 明暗双主题（body[data-ds-dark-theme]）——透明底+固定浅字在亮
+					 * 主题下不可读。rgba 底在暗色宿主上几乎无感，亮色下自持可读 */
+					'.dsh-whale-pp{width:min(100%,860px);margin:0 auto;padding:20px 26px;font-size:13px;color:var(--dsw-panel-text);background:var(--dsw-panel-bg)}',
 					'.dsh-whale-pp-tabs{display:flex;gap:8px;margin:6px 0 18px}',
 					'.dsh-whale-pp-tab{padding:7px 20px;border-radius:var(--dsw-radius-full);cursor:pointer;border:1px solid var(--dsw-panel-border);color:var(--dsw-panel-muted);background:transparent;font-size:13px}',
 					'.dsh-whale-pp-tab.on{background:var(--dsw-panel-active);color:var(--dsw-panel-text)}',
@@ -6592,23 +6716,53 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					'.dsh-whale-pp-content .dsh-whale-manual-search{width:100%;margin:0 0 8px}',
 					/* 使用说明 Tab：高度实测自适应窗口（用户反馈固定 calc 边界
 					 * 悬空/局促——「直接适应窗口范围」）：底边=视口底-24px */
-					'.dsh-whale-pp-manual{overflow-y:auto;padding-right:4px}',
+					'.dsh-whale-pp-manual{overflow-y:auto;padding-right:4px;overscroll-behavior:contain}',
 					/* 周报 Tab：报告列表卡片化（旧抽屉壳的观感由这里补齐） */
 					'.dsh-whale-pp-report{background:rgba(99,150,255,0.07);border:1px solid var(--dsw-panel-border);border-radius:var(--dsw-radius-m);padding:14px 16px;margin:14px 0 6px}',
 					'.dsh-whale-pp-report .dsh-whale-history-list{max-height:none}',
 					'.dsh-whale-pp-report .dsh-whale-report-summary{font-weight:600;color:var(--dsw-panel-head);padding:8px 14px;background:rgba(99,150,255,0.15);border-radius:var(--dsw-radius-s);margin-bottom:8px}',
-					'.dsh-whale-pp-report .dsh-whale-history-row{display:flex;justify-content:space-between;padding:10px 14px;background:rgba(99,150,255,0.10);border-radius:var(--dsw-radius-s);margin:5px 0}'
+					'.dsh-whale-pp-report .dsh-whale-history-row{display:flex;justify-content:space-between;padding:10px 14px;background:rgba(99,150,255,0.10);border-radius:var(--dsw-radius-s);margin:5px 0}',
+					/* 日期行假可点（主观痛点 9）：手型与 hover 高亮继承自旧抽屉
+					 * 样式而页面无点击行为——指针与 hover 都收掉，tooltip 保留 */
+					'.dsh-whale-pp-report .dsh-whale-history-row{cursor:default}',
+					'.dsh-whale-pp-report .dsh-whale-history-row:hover{background:rgba(99,150,255,0.10)}',
+					/* 页头（官方页 h1 20px/500 + 13px 描述行） */
+					'.dsh-whale-pp-title{font-size:20px;font-weight:500;line-height:28px;color:var(--dsw-panel-head);margin-top:2px}',
+					'.dsh-whale-pp-desc{font-size:13px;line-height:20px;color:var(--dsw-panel-muted);margin:4px 0 0}',
+					/* 音色子行从属感（主观痛点 7）：左缩进一档 */
+					'.dsh-whale-pp-tone-detail{margin-left:18px}',
+					/* 试听按钮（11-11 三报）：select 重选同值不触发 change——
+					 * 显式试听按钮兜住「想听已选中声音」的场景 */
+					'.dsh-whale-tone-right{display:flex;align-items:center;gap:8px}',
+					'.dsh-whale-tone-play{background:var(--dsw-panel-bg);color:var(--dsw-panel-text);border:1px solid var(--dsw-panel-border);border-radius:var(--dsw-radius-s);padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit}',
+					'.dsh-whale-tone-play:hover{background:var(--dsw-panel-hover)}',
+					/* 桌宠未启用：按钮置灰（主观痛点 10） */
+					'.dsh-whale-pp-petbtn.off{opacity:.45;cursor:default}'
 				].join('');
 				(document.head || document.body).appendChild(css); /* vm mock 无 head */
 			}
 			root.textContent = '';
-			root.classList.add('dsh-whale-pp');
+			/* 11-11 真机修复轮：滚动分层（见 CSS 注释）——root 只当滚动容器，
+			 * 860px 栏挪进内层 page */
+			var page = document.createElement('div');
+			page.className = 'dsh-whale-pp';
+			root.appendChild(page);
 			var tabBar = document.createElement('div');
 			tabBar.className = 'dsh-whale-pp-tabs';
 			var content = document.createElement('div');
 			content.className = 'dsh-whale-pp-content';
-			root.appendChild(tabBar);
-			root.appendChild(content);
+			/* 页头（11-11 基线②/主观痛点 1：官方页 h1 20px/500 + 13px 描述行是
+			 * 新人定位的第一锚点——此前直接进 Tab 条，页面没有身份） */
+			var ppTitle = document.createElement('div');
+			ppTitle.className = 'dsh-whale-pp-title';
+			ppTitle.textContent = '小鲸鱼助手';
+			var ppDesc = document.createElement('div');
+			ppDesc.className = 'dsh-whale-pp-desc';
+			ppDesc.textContent = '任务播报与记录——设置、周报、使用说明都在这里。';
+			page.appendChild(ppTitle);
+			page.appendChild(ppDesc);
+			page.appendChild(tabBar);
+			page.appendChild(content);
 			var TABS = [['settings', '⚙️ 设置'], ['pet', '🐋 桌宠'], ['report', '📊 周报'], ['help', '📖 使用说明']];
 			var curTab = 'settings';
 			var tabBtns = {};
@@ -6657,7 +6811,9 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				host.appendChild(row);
 			}
 			function renderSettings(host) {
-				/* 健康条（常驻）：数据源=health.js 自检状态（openHealthPanel 同源） */
+				/* 健康条（常驻）：数据源=health.js 自检状态（openHealthPanel 同源）。
+				 * 小节标题「运行状态」（主观痛点 8：老用户拿旧地图找不到它） */
+				ppSection(host, '🩺 运行状态');
 				var health = window.__dshWhale && window.__dshWhale._health;
 				var rep = null;
 				try {
@@ -6669,7 +6825,9 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				var healthItems = [
 					['后台通知', rep.server === 'fail' ? '❌' : '✅'],
 					['用量读取', rep.dom === 'fail' ? '❌' : '✅'],
-					['气泡跳转', rep.jump === 'ok' ? '✅' : (PET_MODE ? '⚠️' : '⚠️')]
+					/* 跳转恒 warn 级（health.js 只产 ok|warn）；详情=鲸鱼头顶 ⚠️
+					 * 的 openHealthPanel 浮层（menu.js 同源三行） */
+					['气泡跳转', rep.jump === 'ok' ? '✅' : '⚠️']
 				];
 				healthItems.forEach(function (it) {
 					var s = document.createElement('span');
@@ -6682,7 +6840,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				 * 旧浮层看详情——鲸鱼锚定场景不违和） */
 				var hint = document.createElement('div');
 				hint.className = 'dsh-whale-pp-status';
-				hint.textContent = '多数失效是页面过期：右键菜单 🔄 刷新页面（或浏览器 Ctrl+F5）即可恢复；仍失效请看控制台 [🐋] 日志';
+				hint.textContent = '多数失效是页面过期：右键菜单 🔄 刷新页面（或浏览器 Ctrl+F5）即可恢复；「气泡跳转 ⚠️」在浏览器窗口属常态（走侧栏兜底）；仍失效请看控制台 [🐋] 日志';
 				host.appendChild(hint);
 				ppSection(host, '通知');
 				ppRow(host, '🔔 开工通知', CONFIG.notifyOnStart ? '开' : '关', function () {
@@ -6708,6 +6866,12 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					render();
 				});
 				ppSection(host, '声音');
+				/* 总静音（主观痛点 4）：菜单 🔇 的页面镜像——菜单里静音着时
+				 * 页内调音量依然无声，此前页面无法解释这个现象 */
+				ppRow(host, '🔊 声音总开关', window.__dshWhale.soundMuted && window.__dshWhale.soundMuted() ? '关（静音中）' : '开', function () {
+					if (window.__dshWhale.setSoundMuted) window.__dshWhale.setSoundMuted(!window.__dshWhale.soundMuted());
+					render();
+				});
 				var VOL_STEPS = [0, 0.25, 0.5, 0.75, 1];
 				ppRow(host, '🔊 音量', Math.round(CONFIG.volume * 100) + '%', function () {
 					var i = VOL_STEPS.indexOf(CONFIG.volume);
@@ -6716,10 +6880,10 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				});
 				/* 🎵 音色：四个下拉行内展开（11-09 用户反馈浮层盖 DSH 侧边栏）
 				 * ——语义与旧浮层选择器同源：改选即应用+持久化+现场试听 */
-				var toneOpen = false;
+				var toneOpen = __ppToneOpen;
 				var toneDetail = document.createElement('div');
 				toneDetail.className = 'dsh-whale-pp-tone-detail';
-				toneDetail.style.display = 'none';
+				toneDetail.style.display = toneOpen ? 'block' : 'none';
 				var KINDS = [
 					{ key: 'soundDone', kind: 'done', label: '✅ 完成通知', opts: ['ding', 'bell', 'chime', 'none'] },
 					{ key: 'soundFail', kind: 'fail', label: '❌ 失败通知', opts: ['thud', 'ding', 'bell', 'chime', 'none'] },
@@ -6740,19 +6904,47 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 						opt2.textContent = LABELS[opt];
 						sel.appendChild(opt2);
 					});
-					sel.value = CONFIG[k.key];
+					/* 存量脏值（不在该类 opts）回落显示到第一项（11-11 审计 P3-7：
+					 * sel.value 赋未知值=静默空白），CONFIG 不动 */
+					if (k.opts.indexOf(CONFIG[k.key]) >= 0) sel.value = CONFIG[k.key];
+					else sel.selectedIndex = 0;
 					sel.addEventListener('click', function (event) { event.stopPropagation(); });
+					/* 试听（11-11 三报：用户实报「选择音色没声音」）。显式「▶
+					 * 试听」按钮兜住全部场景——原生 select **重选同值不触发
+					 * change**（想听已选中的声音只能靠按钮），change 只覆盖
+					 * 换值场景。previewDing=独立直渲通道（不进通知队列，点了
+					 * 就响——11-11 三报延时修），总静音仍尊重 */
+					var audition = function () {
+						var mutedNow = false;
+						try { mutedNow = !!(window.__dshWhale.soundMuted && window.__dshWhale.soundMuted()); } catch (e) { }
+						if (!mutedNow) previewDing(k.kind);
+						l.textContent = k.label + (mutedNow ? ' 🔇（总开关静音）' : ' ♪');
+						setTimeout(function () { l.textContent = k.label; }, 1800);
+					};
 					sel.addEventListener('change', function () {
 						var pa = {}; pa[k.key] = sel.value;
 						if (applyConfig(pa)) saveConfig();
-						playDing(k.kind); /* 现场试听 */
+						audition();
 					});
+					var playBtn = document.createElement('button');
+					playBtn.type = 'button';
+					playBtn.className = 'dsh-whale-tone-play';
+					playBtn.textContent = '▶ 试听';
+					playBtn.addEventListener('click', function (event) {
+						event.stopPropagation();
+						audition();
+					});
+					var right = document.createElement('span');
+					right.className = 'dsh-whale-tone-right';
+					right.appendChild(sel);
+					right.appendChild(playBtn);
 					row.appendChild(l);
-					row.appendChild(sel);
+					row.appendChild(right);
 					toneDetail.appendChild(row);
 				});
-				ppRow(host, '🎵 音色', '按通知设置 →', function () {
+				ppRow(host, '🎵 音色', toneOpen ? '收起 ↑' : '按通知设置 →', function () {
 					toneOpen = !toneOpen;
+					__ppToneOpen = toneOpen; /* 模块级记忆：别的行触发重渲也不收走展开态 */
 					toneDetail.style.display = toneOpen ? 'block' : 'none';
 				});
 				host.appendChild(toneDetail);
@@ -6782,11 +6974,15 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				v.textContent = valueText;
 				row.appendChild(l);
 				row.appendChild(v);
+				var flashTimer = null;
 				row.addEventListener('click', function (event) {
 					event.stopPropagation();
 					onDo(function (okText) {
 						v.textContent = okText;
-						setTimeout(function () { v.textContent = valueText; }, 2000);
+						/* 连点先清旧定时器（11-11 审计 P3-2）：否则第一次的回落
+						 * 会截断第二次的闪现 */
+						if (flashTimer) clearTimeout(flashTimer);
+						flashTimer = setTimeout(function () { v.textContent = valueText; }, 2000);
 					});
 				});
 				host.appendChild(row);
@@ -6796,22 +6992,37 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			 * 恢复 CSV 路径（合并单行时只有 Markdown 能触发） */
 			ppFlashRow(host, '📤 导出历史', 'Markdown → 复制到剪贴板', function (flash) {
 				if (!history.length) { flash('还没有记录可导出 🐳'); return; }
-				exportHistory('md');
-				flash('✓ Markdown 已复制 📋');
+				/* 剪贴板写入是异步的：闪现必须由真实结果驱动（11-11 审计 P2-3
+				 * ——无条件闪「已复制」会在写失败时假成功，而失败气泡在桌宠
+				 * 在岗时打进隐藏元素零可见） */
+				exportHistory('md', function (ok) { flash(ok ? '✓ Markdown 已复制 📋' : '复制失败 🥲'); });
 			});
 			ppFlashRow(host, '📤 导出历史', 'CSV → 下载文件', function (flash) {
 				if (!history.length) { flash('还没有记录可导出 🐳'); return; }
-				exportHistory('csv');
-				flash('✓ CSV 已下载 📤');
+				exportHistory('csv', function (ok) { if (ok) flash('✓ CSV 已下载 📤'); });
 			});
-				ppSection(host, '诊断');
-				var debugNow = false;
-				try { debugNow = localStorage.getItem('dsh-whale:debug') === 'on'; } catch (e) {}
-				ppRow(host, '🩺 调试模式', debugNow ? '开（取证中）' : '关', function () {
-					try { localStorage.setItem('dsh-whale:debug', debugNow ? 'off' : 'on'); } catch (e) {}
-					render();
-				});
-			}
+			ppSection(host, '诊断');
+			var debugNow = false;
+			try { debugNow = localStorage.getItem('dsh-whale:debug') === 'on'; } catch (e) {}
+			ppRow(host, '🩺 调试模式', debugNow ? '开（取证中）' : '关', function () {
+				try { localStorage.setItem('dsh-whale:debug', debugNow ? 'off' : 'on'); } catch (e) {}
+				render();
+			});
+			ppSection(host, '关于');
+			/* 版本行（11-11 基线⑫：官方设置页同款「当前版本」；取共享 IIFE
+			 * 作用域的 PATCH_VERSION（core/constants.js，build 可覆写）） */
+			var about = document.createElement('div');
+			about.className = 'dsh-whale-pp-row';
+			about.style.cursor = 'default';
+			var al = document.createElement('span');
+			setIconLabel(al, 'ℹ️ 当前版本');
+			var av = document.createElement('span');
+			av.className = 'dsh-whale-pp-val';
+			av.textContent = '小鲸鱼助手 v' + PATCH_VERSION;
+			about.appendChild(al);
+			about.appendChild(av);
+			host.appendChild(about);
+		}
 			function renderPet(host) {
 				var status = document.createElement('div');
 				status.className = 'dsh-whale-pp-status';
@@ -6821,6 +7032,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				btns.className = 'dsh-whale-pp-petbtns';
 				var FORMS = [['full', '🐋 完整形态'], ['bubble', '🫧 缩成气泡'], ['hidden', '🙈 躲猫猫']];
 				var btnMap = {};
+				var petEnabled = true; /* /state 返回未启用时按钮置灰+忽略点击 */
 				function markForm(form) {
 					FORMS.forEach(function (f) {
 						if (btnMap[f[0]]) btnMap[f[0]].classList.toggle('on', f[0] === form);
@@ -6832,6 +7044,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					b.textContent = f[1];
 					b.addEventListener('click', function (event) {
 						event.stopPropagation();
+						if (!petEnabled) return; /* 未启用：点击无效（主观痛点 10：注定失败的按钮=困惑发生器） */
 						try {
 							fetch('/api/whale-assistant/pet/ctrl', {
 								method: 'POST',
@@ -6863,12 +7076,16 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				try {
 					fetch('/api/whale-assistant/state').then(function (r) {
 						return r.ok ? r.json() : Promise.reject(new Error('http ' + r.status));
-					}).then(function (j) {
-						var pet = j && j.pet;
-						markForm(pet && pet.form || 'full');
-						if (!pet || !pet.enabled) status.textContent = '桌宠未启用（平台不支持或引擎未挂桌宠）——页内鲸鱼顶班中';
-						else status.textContent = pet.up ? '桌宠在岗 ✓' : '桌宠暂离——页内鲸鱼顶班中，自愈心跳约 1 分钟内拉回';
-					}).catch(function (e) {
+						}).then(function (j) {
+							var pet = j && j.pet;
+							markForm(pet && pet.form || 'full');
+							if (!pet || !pet.enabled) {
+								petEnabled = false;
+								FORMS.forEach(function (f) { if (btnMap[f[0]]) btnMap[f[0]].classList.add('off'); });
+								status.textContent = '桌宠未启用（平台不支持或引擎未挂桌宠）——页内鲸鱼顶班中，形态控制不可用';
+							}
+							else status.textContent = pet.up ? '桌宠在岗 ✓' : '桌宠暂离——页内鲸鱼顶班中，自愈心跳约 1 分钟内拉回';
+						}).catch(function (e) {
 						status.textContent = '桌宠状态读取失败：' + (e && e.message || e);
 					});
 				} catch (e) {
@@ -6881,6 +7098,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		 * 孤头隐藏全保留；抽屉壳（showSidePanel/页脚/视口封顶）随「右键菜单项
 		 * 取消」一并退役，页面自然滚动。折叠记忆跨 Tab 切换存活。 */
 		var ppManualFoldMemo = {};
+		var __ppManualResize = null; /* 手册滚动区的 resize 处理器——重复 mount 只留一个存活 */
 		function mountWhaleManualTab(content) {
 			/* 固定高度滚动区（用户反馈「点开来突然变大」）：折叠/展开框尺寸
 			 * 恒定，内容超出只在区内滚 */
@@ -6955,7 +7173,10 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			function applyManualFolds() {
 				for (var i = 0; i < manualSecEls.length; i++) {
 					var s = manualSecEls[i];
-					var folded = ppManualFoldMemo[s.title] !== false;
+					/* 默认目录态=全折叠；唯一例外「🚀 快速上手」首开即展（主观
+					 * 痛点 6：置顶但折叠=对新手没置顶）。用户点过的记住其选择 */
+					var memoV = ppManualFoldMemo[s.title];
+					var folded = memoV === undefined ? s.title !== '🚀 快速上手' : memoV !== false;
 					s.el.setAttribute('data-folded', folded ? '1' : '0');
 					var end = i + 1 < manualSecEls.length ? manualSecEls[i + 1].start : list.children.length;
 					for (var j = s.start + 1; j < end; j++) {
@@ -7033,7 +7254,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				list.appendChild(row);
 			};
 			sec('🚀 快速上手');
-			item('右键点我：打开菜单', '所有功能都在右键菜单里——提醒我、装扮、历史任务、使用说明；⚙️ 设置住在 DSH 侧边栏的「小鲸鱼助手」页面里。先记住这一个手势就够了。');
+			item('右键点我：打开菜单', '快捷操作都在右键菜单里——提醒我、装扮、历史任务、⚙️ 设置；📖 使用说明住在 DSH 侧边栏的「小鲸鱼助手」页面里。先记住这两个入口就够了。');
 			item('点我一下：读通知', '有未读就逐条读给你（红标数字会减）；没有未读就陪我聊一句。');
 			item('拖着我走：位置会记住', '按住我拖到喜欢的角落，刷新后还在这。跳回对话的手势看下面「交互手势」。');
 			sec('🐳 我是什么');
@@ -7059,6 +7280,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			gesture(8, '右键双击：触发摸摸头');
 			sec('🐋 桌宠模式（桌面上的独立小鲸鱼）');
 			item('常驻桌面：跟着 DSH 走，关窗≠退出', '打开 DSH 桌宠就出现在桌面右下角（PC 重启后再开 DSH 才有）；DSH 最小化也在场。它在时页内小金鱼休息（休眠）；万一出意外，宿主每 30 秒体检一次，最长约 1 分钟自动重生，不用重启 DSH。');
+			item('设置同步：页面改了桌宠跟着变', '桌宠是独立窗口、独立存储——侧边栏页里改的音色/音量/免打扰/总静音等设置经宿主自动下发到桌宠（约 2 秒内生效），不用两边各设一遍。');
 			item('右键小鲸鱼：三种形态', '🐋 完整形态（日常）/ 🫧 缩成气泡 / 🙈 隐藏小鲸鱼＝躲猫猫：游到右下角收成一只小气泡，点一下气泡就破、鲸鱼冒出来。');
 			item('通知、红标、用量：页内同款', '桌宠上的通知与页内完全同一套——真名播报、红标未读、三行用量、读回；双击通知气泡直接跳回 DSH 对应对话并把窗口拉到前台。');
 			item('怎么"关掉"桌宠？', '右键 → 🙈 隐藏小鲸鱼（躲猫猫）就是它的"关"——桌面只剩一颗小气泡，点一下随时召回。它跟着 DSH 宿主走：彻底退出关掉 DSH 即可，没有常驻后台进程。');
@@ -7071,7 +7293,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			item('🚨 压力提醒', '上下文占用达到该百分比时提醒 /compact；回降到 50% 以下后重新武装。');
 			item('📊 任务周报', '近 7 天按日统计任务数（完成/失败/中止/提问）与 token 消耗。');
 			item('📤 导出历史', 'Markdown：复制全部历史到剪贴板；CSV：下载表格文件。');
-			item('🩺 运行状态', '鲸鱼自查各条通知链路（后台通知/用量读取/跳转）；平时全部正常、不打扰，出问题我头上会亮 ⚠️，设置里点"运行状态"能看是哪一条。');
+			item('🩺 运行状态', '鲸鱼自查各条通知链路（后台通知/用量读取/跳转）；平时全部正常、不打扰，出问题我头上会亮 ⚠️，点那个 ⚠️ 就能看是哪一条失效（详情在鲸鱼锚定的浮层里）。');
 			item('🩺 调试模式', '排障用：开启后往控制台输出调试信息，并把取证数据写进 ~/.dsh/whale-assistant.json 的 _debug 键，平时保持关闭。');
 			item('怎么没有声音？', '依次看：右键菜单 🔊 声音是否开 → 设置里音量 → 🎵 音色里对应通知是否选了"静音" → 是否在免打扰时段（完成/失败静音，选择/审核/提醒照常）。');
 			sec('📜 历史与红标');
@@ -7086,7 +7308,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			item('状态与情绪', '任务越多我越累、会打瞌睡（拖一拖或双击我就醒）；右键菜单标题能看当前心情和进行中的任务数。');
 			item('装扮与成就', '完成任务攒进度，解锁新装扮后去 右键菜单 → 🎨我的装扮 查看（面板里能看到还差几个任务）。');
 			sec('🙋 常见问题');
-			item('通知突然不来了？', '多半是页面放久了过期：刷新页面即可恢复——官方桌面端没有 F5，用我的右键菜单 🔄 刷新页面；浏览器里按 Ctrl+F5。我自己的链路自检在 设置 → 🩺 运行状态 里，哪条失效会明说。');
+			item('通知突然不来了？', '多半是页面放久了过期：刷新页面即可恢复——官方桌面端没有 F5，用我的右键菜单 🔄 刷新页面；浏览器里按 Ctrl+F5。我自己的链路出问题时头顶会亮 ⚠️，点它就能看是哪一条失效。');
 			item('插件更新了怎么加载新版？', '同样刷新页面：右键菜单 🔄 刷新页面（桌面端）或 Ctrl+F5（浏览器）——新版本在下次加载时自动生效。');
 			item('后台任务会打扰我吗？', '不会：只有完成/失败/需要你动手时才响铃，中间过程只在状态面板安静展示。免打扰时段里完成/失败静音且不弹泡、只记红标；开工气泡与你自己定的定时提醒照常——急事不瞒你。');
 			wrap.appendChild(list);
@@ -7101,14 +7323,28 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			 * 底边钉在视口底-24px——边界永远落在窗口范围里，不再悬空 */
 			function fitManualHeight() {
 				if (typeof wrap.getBoundingClientRect !== 'function') return; /* vm 测试桩 */
-				var vh = window.innerHeight || 0;
-				if (!vh) return;
-				var top = wrap.getBoundingClientRect().top;
-				var h = Math.round(vh - top - 24);
-				if (h < 320) h = 320;
-				wrap.style.height = h + 'px';
+				/* 11-11 真机修复轮：滚动容器=页根（pp-host 分层后 content→page
+				 * →root）。基准改用容器 clientHeight（比 window.innerHeight 准：
+				 * main 区≠整窗，窗窗口模式下旧算法本来就会偏），并用 rect 差值
+				 * 消除页面已滚动带来的 top 偏移（切 Tab 时页面可能不在顶部） */
+				try {
+					var scroller = content.parentNode && content.parentNode.parentNode;
+					if (!scroller || typeof scroller.getBoundingClientRect !== 'function') return;
+					var relTop = wrap.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+					var h = Math.round((scroller.clientHeight || 0) - relTop - 24);
+					if (h < 320) h = 320;
+					wrap.style.height = h + 'px';
+				} catch (e) { /* 桩环境兜底 */ }
 			}
 			fitManualHeight();
+			/* 窗口 resize 后重算（11-11 审计 P3-3：只算一次=窗口变小底边悬出
+			 * 视口、变大底部留白）——先摘旧处理器再挂新的；vm 桩无
+			 * addEventListener 时跳过 */
+			if (typeof window.addEventListener === 'function') {
+				if (__ppManualResize) window.removeEventListener('resize', __ppManualResize);
+				__ppManualResize = fitManualHeight;
+				window.addEventListener('resize', __ppManualResize);
+			}
 		}
 		/* 📊 周报 Tab（11-09 自 openReport 侧抽屉迁入——抽屉/浮层从侧边栏页
 		 * 打开会盖住 DSH 侧边栏，全部页内化）。聚合逻辑与旧抽屉逐行同源：
@@ -7142,7 +7378,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				var b = days[o.key];
 				totals.done += b.done; totals.fail += b.fail; totals.killed += b.killed; totals.ask += b.ask; totals.tokens += b.tokens;
 			});
-			var fmtK = function (n) { return n >= 10000 ? (n / 1000).toFixed(1) + 'K' : n >= 1000 ? Math.round(n / 1000) + 'K' : n; };
+			var fmtK = function (n) { return n >= 10000 ? (n / 1000).toFixed(1) + 'K' : n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K' : n; };
 			var sumRow = document.createElement('div');
 			sumRow.className = 'dsh-whale-report-summary';
 			sumRow.textContent = '本周：✅' + totals.done + ' 失败' + totals.fail + ' ⏹' + totals.killed + ' ❓' + totals.ask + ' · ' + fmtK(totals.tokens) + ' tok';
@@ -7993,8 +8229,30 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
 		uiInit();
 	}
 
+	/** 设置 relay（11-11 真机修复轮，用户实报「设置了叮叮桌宠响单声叮」）：
+	 * 桌宠 WebView2 是独立 localStorage 分区，页面 CONFIG/总静音永远到不了
+	 * 桌宠——每次持久化（saveConfig/setSoundMuted）+ boot 各推一份到宿主
+	 * /pet/config（fence-only，与 /pet/ctrl 同信任级），桌宠 2s state 轮询
+	 * 差分应用。fire-and-forget：失败静默（轮询与下次改动自然补上）。
+	 * 函数声明提升：config.js/dings.js 的调用点在本定义之前也可用。 */
+	function pushPetConfig() {
+		try {
+			if (PET_MODE || typeof fetch !== 'function') return;
+			fetch('/api/whale-assistant/pet/config', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					config: JSON.parse(JSON.stringify(CONFIG)),
+					sound: soundMuted ? 'off' : 'on'
+				})
+			}).catch(function () { /* 宿主无桌宠/离线：静默 */ });
+		} catch (e) { /* 序列化失败不可能，防御 */ }
+	}
+	pushPetConfig(); /* boot 一推：宿主 ledger 缺货（首次启用/重装）时兜底 */
+
 	/* diagnostic seam */
 	window.__dshWhale.version = PATCH_VERSION;
+	window.__dshWhale._pushPetConfig = pushPetConfig;
 	window.__dshWhale.handleJobsFrame = handleJobsFrame;
 	window.__dshWhale.handleSubscribedFrame = handleSubscribedFrame;
 	window.__dshWhale.handleMuxPayload = handleMuxPayload;

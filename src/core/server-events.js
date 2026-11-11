@@ -457,6 +457,21 @@
 				}
 				continue;
 			}
+			/* 桌宠菜单「设置」跳转（11-11 三报，用户实报「点设置只弹提示没有
+			 * 意义」）：宿主广播 pet/open-settings → 本页调
+			 * layout.selectPanel('whale-assistant') 打开侧边栏设置页。桥住在
+			 * client.js（window.__dshWhaleSelectPanel）——core 不直接引用
+			 * ui/client（方向闸门，与 pet/jump 的派发模式同款）：派发
+			 * 自定义事件由 client.js 监听执行。10s 内新帧才执行（重放闸同
+			 * pet/jump）；PET_MODE 短路（桌宠页无 DSH 面板可开）。 */
+			if (f && f.type === 'pet/open-settings') {
+				var osTime = f.time || 0;
+				if (!PET_MODE && Date.now() - osTime < 10000 &&
+					typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+					try { window.dispatchEvent(new CustomEvent('dsh-whale:pet-open-settings')); } catch (e) {}
+				}
+				continue;
+			}
 			if (!f || typeof f.seq !== 'number' || f.seq <= lastSeq) continue;
 			rememberSeq(f.seq);
 			/* a fresh page must not replay the buffer's history — same

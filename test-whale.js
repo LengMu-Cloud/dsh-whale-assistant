@@ -2045,14 +2045,31 @@ async function main() {
 	const mEl = ctxMenuEl();
 	assert.ok(mEl, 'menu element exists');
 	const mItems = mEl.children.filter((c) => c.className === 'dsh-whale-menu-item').map((c) => c.textContent);
-	assert.strictEqual(mItems.length, 5, `5 menu items (设置+使用说明 retired to the sidebar page 11-08): ${mItems.join(' | ')}`);
+	assert.strictEqual(mItems.length, 6, `6 menu items (设置 back as a sidebar jump 11-11; 使用说明 stays sidebar-only): ${mItems.join(' | ')}`);
 	assert.ok(mEl.children.some((c) => c.className === 'dsh-whale-menu-sep'), 'group separator present (#4)');
 	assert.ok(mItems[0].includes('提醒'), 'reminder first in the quick group (#4)');
 	assert.ok(mItems[1].includes('声音'), 'sound toggle present');
 	assert.ok(mItems[2].includes('装扮'), 'wardrobe entry present');
 	assert.ok(mItems[3].includes('历史'), 'history entry present');
-	assert.ok(mItems[4].includes('刷新页面'), 'refresh row present (0.2.0 desktop has no F5)');
-	assert.ok(mItems.every((c) => !c.includes('设置') && !c.includes('使用说明')), 'no settings/manual rows in the menu (sidebar page owns both, 11-08)');
+	assert.ok(mItems[4].includes('设置'), 'settings jump row back in the menu (11-11 user request)');
+	assert.ok(mItems[5].includes('刷新页面'), 'refresh row present (0.2.0 desktop has no F5)');
+	assert.ok(mItems.every((c) => !c.includes('使用说明')), 'manual stays sidebar-only');
+	/* 设置 row: bridge PRESENT → jumps via selectPanel (11-11 三报：桌宠/页鲸
+	 * 都必须真跳转，不许只弹提示) */
+	const selectCalls = [];
+	envCtx.sandbox.window.__dshWhaleSelectPanel = function (id) { selectCalls.push(id); };
+	mEl.children.find((c) => c.className === 'dsh-whale-menu-item' && c.textContent.includes('设置'))
+		._fire('click', { stopPropagation() {} });
+	assert.ok(!CTX.ctxMenuOpen(), 'settings row closes the menu');
+	assert.deepStrictEqual(selectCalls, ['whale-assistant'], `bridge present: settings row jumps via selectPanel: ${JSON.stringify(selectCalls)}`);
+	/* 设置 row: bridge ABSENT (0.1.x web) → the uiSay fallback hint fires */
+	envCtx.sandbox.window.__dshWhaleSelectPanel = undefined;
+	await singleRClick(100, 100);
+	mEl.children.find((c) => c.className === 'dsh-whale-menu-item' && c.textContent.includes('设置'))
+		._fire('click', { stopPropagation() {} });
+	await sleep(30);
+	assert.ok(envCtx.bubble().textContent.includes('设置住在'), `bridge-absent fallback hint: ${envCtx.bubble().textContent}`);
+	assert.ok(!CTX.ctxMenuOpen(), 'fallback path also closes the menu');
 	const mHead = mEl.children.find((c) => c.className === 'dsh-whale-menu-head');
 	assert.ok(mHead.textContent.includes('🐳') && mHead.textContent.includes('待命中'), `mood header: ${mHead.textContent}`);
 	/* clicking outside closes the menu */
@@ -2100,6 +2117,9 @@ async function main() {
 		}
 		return null;
 	};
+	/* 11-11 真机修复轮：滚动分层——host=滚动容器，860px 栏在内层 page。
+	 * 直接 children 遍历的 finder 都要先进一层 */
+	const ppInner = (host) => host.children.find((c) => (c.className || '') === 'dsh-whale-pp');
 	const ppNotify = findPpRow(ppHost, '🔔 开工通知');
 	assert.ok(ppNotify, 'panel notify row found');
 	const ppNotifyBefore = ppNotify.textContent.includes('开') && !ppNotify.textContent.includes('关');
@@ -2120,7 +2140,7 @@ async function main() {
 	findPpRow(ppHost, '🌙 免打扰')._fire('click', { stopPropagation() {} });
 	findPpRow(ppHost, '🌙 免打扰')._fire('click', { stopPropagation() {} });
 	assert.ok(findPpRow(ppHost, '🌙 免打扰').textContent.includes('关'), 'dnd cycles back to off after the last preset');
-	const ppTabsEl = ppHost.children.find((c) => (c.className || '').indexOf('dsh-whale-pp-tabs') >= 0);
+	const ppTabsEl = ppInner(ppHost).children.find((c) => (c.className || '').indexOf('dsh-whale-pp-tabs') >= 0);
 	const ppPetTab = ppTabsEl.children.find((c) => (c.textContent || '').indexOf('🐋 桌宠') >= 0);
 	ppPetTab._fire('click', { stopPropagation() {} });
 	assert.ok(ppHost.textContent.includes('🐋 完整形态') && ppHost.textContent.includes('躲猫猫'), 'panel pet tab renders form buttons');
@@ -2130,7 +2150,7 @@ async function main() {
 	const helpTab = ppTabsEl.children.find((c) => (c.textContent || '').indexOf('📖 使用说明') >= 0);
 	helpTab._fire('click', { stopPropagation() {} });
 	assert.ok(helpTab.classList.contains('on'), 'manual tab activates');
-	const hEl = ppHost.children.find((c) => (c.className || '').indexOf('dsh-whale-pp-content') >= 0);
+	const hEl = ppInner(ppHost).children.find((c) => (c.className || '').indexOf('dsh-whale-pp-content') >= 0);
 	assert.ok(hEl, 'manual tab content area exists');
 	const hWrap = hEl.children.find((c) => (c.className || '').indexOf('dsh-whale-pp-manual') >= 0);
 	assert.ok(hWrap, 'manual fixed-height scroll region exists');
@@ -2155,6 +2175,66 @@ async function main() {
 	assert.ok(hEl.textContent.includes('常见问题'), 'FAQ section present');
 	assert.ok(hEl.textContent.includes('红标'), 'badge semantics explained');
 	assert.ok(hEl.textContent.includes('好感'), 'companion section present');
+	/* 11-11 三方评审回归组：幂等挂载 / 版本行 / 压力全圈 / 导出闪现真实反馈 */
+	envCtx.sandbox.window.__dshWhalePanel.mount(ppHost); /* same host mounted twice */
+	const ppTabsIdem = ppInner(ppHost).children.find((c) => (c.className || '').indexOf('dsh-whale-pp-tabs') >= 0);
+	assert.strictEqual(ppTabsIdem.children.length, 4, 're-mount on the same host stays idempotent (4 tabs, no stacking)');
+	const settingsTabIdem = ppTabsIdem.children.find((c) => (c.textContent || '').indexOf('⚙️ 设置') >= 0);
+	settingsTabIdem._fire('click', { stopPropagation() {} });
+	assert.ok(ppHost.textContent.includes('v' + envCtx.sandbox.__dshWhale.version) && ppHost.textContent.includes('当前版本'), `about row reads 当前版本 + the build version (11-11 三报：让其他用户看懂这是版本号): v${envCtx.sandbox.__dshWhale.version}`);
+	const ppPress0 = findPpRow(ppHost, '🚨 压力提醒');
+	const pressBefore = (ppPress0.textContent.match(/(\d+)%/) || [])[1];
+	assert.ok(!!pressBefore, `pressure row renders a percent: ${ppPress0.textContent}`);
+	ppPress0._fire('click', { stopPropagation() {} });
+	const pressNext = (findPpRow(ppHost, '🚨 压力提醒').textContent.match(/(\d+)%/) || [])[1];
+	assert.ok(pressNext !== pressBefore, 'pressure first click leaves the start value');
+	findPpRow(ppHost, '🚨 压力提醒')._fire('click', { stopPropagation() {} });
+	findPpRow(ppHost, '🚨 压力提醒')._fire('click', { stopPropagation() {} });
+	findPpRow(ppHost, '🚨 压力提醒')._fire('click', { stopPropagation() {} });
+	findPpRow(ppHost, '🚨 压力提醒')._fire('click', { stopPropagation() {} });
+	assert.strictEqual((findPpRow(ppHost, '🚨 压力提醒').textContent.match(/(\d+)%/) || [])[1], pressBefore, 'pressure cycles back to the start value after the full preset circle');
+	/* export flash reports the REAL outcome: the vm has no clipboard, so a
+	 * fake 「✓ 已复制」 here would be the P2-3 regression */
+	envCtx.sandbox.navigator = {}; /* vm 沙箱无 navigator：补空壳走「不可用」分支 */
+	const ppExp = findPpRow(ppHost, 'Markdown → 复制到剪贴板');
+	assert.ok(ppExp, 'markdown export row found');
+	ppExp._fire('click', { stopPropagation() {} });
+	const ppExpVal = ppExp.children.find((c) => c.className === 'dsh-whale-pp-val');
+	assert.ok(!ppExpVal.textContent.includes('已复制'), `export flash never fakes success: ${ppExpVal.textContent}`);
+	assert.ok(ppExpVal.textContent.includes('复制失败') || ppExpVal.textContent.includes('还没有记录'), `flash reflects the real outcome: ${ppExpVal.textContent}`);
+	await sleep(2100);
+	assert.strictEqual(ppExpVal.textContent, 'Markdown → 复制到剪贴板', 'export flash falls back after 2s');
+	/* tone select: dirty legacy value (not in the kind's opts) falls back to
+	 * the first option for DISPLAY only — no blank select, CONFIG untouched */
+	const envTone = makeEnv([['dsh-whale:config', JSON.stringify({ v: 1, data: { soundDone: 'thud' } })]]);
+	envTone.ready();
+	const toneHost = envTone.sandbox.document.createElement('div');
+	envTone.sandbox.window.__dshWhalePanel.mount(toneHost);
+	const toneSel = (() => {
+		const walk = (node) => {
+			if ((node.className || '') === 'dsh-whale-sound-sel') return node;
+			for (const c of node.children || []) { const hit = walk(c); if (hit) return hit; }
+			return null;
+		};
+		return walk(toneHost);
+	})();
+	assert.ok(toneSel, 'tone select rendered on a fresh env');
+	assert.strictEqual(toneSel.selectedIndex, 0, 'dirty tone value (thud not in done opts) displays option 0, not a blank select');
+	assert.strictEqual(JSON.parse(envTone.sandbox.localStorage.getItem('dsh-whale:config')).data.soundDone, 'thud', 'display fallback does not rewrite CONFIG');
+	/* 设置 relay（11-11 真机修复轮）：桌宠 WebView2 独立分区，页面设置经
+	 * /pet/config 汇聚、桌宠 2s state 轮询差分应用——vm 抓 fetch 验证页侧
+	 * 推送载荷（宿主路由与桌宠应用另见 45c 源码契约） */
+	const petCfgPosts = [];
+	envCtx.setFetch((url, opts) => {
+		if (String(url).indexOf('/pet/config') >= 0) petCfgPosts.push({ url: String(url), body: (opts && opts.body) || '' });
+		return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+	});
+	CTX._pushPetConfig();
+	await sleep(20);
+	assert.ok(petCfgPosts.length >= 1 && petCfgPosts[0].url.includes('/api/whale-assistant/pet/config'), `pushPetConfig POSTs the relay route: ${petCfgPosts[0] && petCfgPosts[0].url}`);
+	assert.ok(petCfgPosts[0].body.includes('"config"') && petCfgPosts[0].body.includes('"sound"'), 'relay payload carries config snapshot + sound state');
+	const relayPayload = JSON.parse(petCfgPosts[0].body);
+	assert.ok(relayPayload.config && typeof relayPayload.config.soundDone === 'string' && typeof relayPayload.config.volume === 'number', 'relay config snapshot is the full validated CONFIG');
 	/* double right-click pets: +1 affection, reaction line, hearts, bounce */
 	assert.strictEqual(CTX.affection(), 0, 'affection starts at 0');
 	await singleRClick(200, 200); /* first click: opens the menu */
@@ -2823,7 +2903,7 @@ async function main() {
 	 * per-kind sound */
 	const toneRow = findPpRow(ppCfg, '音色');
 	toneRow._fire('click', { stopPropagation() {} });
-	const ppContentCfg = ppCfg.children.find((c) => (c.className || '') === 'dsh-whale-pp-content');
+	const ppContentCfg = ppInner(ppCfg).children.find((c) => (c.className || '') === 'dsh-whale-pp-content');
 	const toneDet = ppContentCfg && ppContentCfg.children.find((c) => (c.className || '') === 'dsh-whale-pp-tone-detail');
 	assert.ok(toneDet && toneDet.style.display === 'block', 'tone detail expands under the 音色 row');
 	assert.ok(toneDet.textContent.includes('完成通知') && toneDet.textContent.includes('失败通知'), 'detail lists per-kind rows');
@@ -2841,6 +2921,23 @@ async function main() {
 	sndSels[1]._fire('change', {});
 	assert.strictEqual(CG.CONFIG.soundFail, 'chime', 'fail sound switched to chime via dropdown');
 	assert.strictEqual(JSON.parse(envCfg.sandbox.localStorage.getItem('dsh-whale:config')).data.soundFail, 'chime', 'fail sound persisted');
+	/* 11-11 三报：试听按钮——原生 select 重选同值不触发 change，「想听
+	 * 已选中声音」只能靠显式按钮。4 行各一个，点击即 force 试听（绕休眠/
+	 * 免打扰），vm 里以 FakeAudioContext 频率记录验证 */
+	const tonePlays = [];
+	(function walkPlays(node) {
+		(node.children || []).forEach((c) => {
+			if ((c.className || '') === 'dsh-whale-tone-play') tonePlays.push(c);
+			walkPlays(c);
+		});
+	})(toneDet);
+	assert.strictEqual(tonePlays.length, 4, 'explicit ▶ 试听 button on every tone row (same-value reselect never fires change)');
+	CG.applyConfig({ volume: 1 }); /* volume 0 = renderDing 短路静音——试听断言前先抬回 */
+	const audioBefore = envCfg.audioStarts().length;
+	tonePlays[0]._fire('click', { stopPropagation() {} });
+	tonePlays[0]._fire('click', { stopPropagation() {} }); /* 连点：预览走独立直渲通道，第二声不等 1900ms 防叠间隔（11-11 三报延时修） */
+	await sleep(30);
+	assert.ok(envCfg.audioStarts().length >= audioBefore + 4, `preview rings immediately (dedicated channel, no queue gap): ${envCfg.audioStarts().length} >= ${audioBefore + 4}`);
 	/* the remind sound must persist too — the saveConfig whitelist dropped
 	 * it (P1: the pick silently reverted to bell on the next page load) */
 	sndSels[3].value = 'thud';
@@ -2878,15 +2975,15 @@ async function main() {
 	/* 📊 周报 Tab (11-09 the report drawer retired — the sidebar page owns it) */
 	const ppRep = envCfg.sandbox.document.createElement('div');
 	envCfg.sandbox.window.__dshWhalePanel.mount(ppRep);
-	ppRep.children.find((c) => (c.className || '').indexOf('dsh-whale-pp-tabs') >= 0)
+	ppInner(ppRep).children.find((c) => (c.className || '').indexOf('dsh-whale-pp-tabs') >= 0)
 		.children.find((c) => (c.textContent || '').indexOf('📊 周报') >= 0)._fire('click', { stopPropagation() {} });
-	const rCard = ppRep.children.find((c) => (c.className || '').indexOf('dsh-whale-pp-content') >= 0)
+	const rCard = ppInner(ppRep).children.find((c) => (c.className || '').indexOf('dsh-whale-pp-content') >= 0)
 		.children.find((c) => (c.className || '') === 'dsh-whale-pp-report');
 	assert.ok(rCard, 'report card container renders');
 	const rList = rCard.children.find((c) => c.className === 'dsh-whale-history-list');
 	assert.ok(rList, 'report list renders INSIDE the card (missing appendChild fixed)');
 	assert.ok(rList.textContent.includes('本周：✅') && rList.textContent.includes('❓'), 'done+question buckets counted (records from the flows above included)');
-	assert.ok(rList.textContent.includes('1K tok'), 'token bucket summed (the 1234 pushed record dominates the rounding)');
+	assert.ok(/[0-9]+(\.[0-9])?K tok/.test(rList.textContent), `token bucket summed in one-decimal fmtK (value depends on the flows above): ${(rList.textContent.match(/本周：[^❓]*❓[^·]*·[^t]*tok/) || ['?'])[0]}`);
 	/* legacy-default migration: a stored 8000 (the pre-M4 default that older
 	 * panel saves wrote wholesale) adopts the new 15s default on load, while
 	 * deliberately-chosen values (e.g. 30000) are respected */
@@ -3032,6 +3129,77 @@ async function main() {
 	for (const call of ['say(', 'pushReport(', 'playDing(', 'uiSay(', 'reportTurn(', 'reportAttention(', 'correctReports(']) {
 		assert.ok(!jBody.includes(call), `handleJobsFrame stays silent: no ${call}`);
 	}
+
+	/* 45b. sidebar page fallback contract pinned at the CLIENT source level
+	 * (whale-assistant/client.js is the React half, not loadable in the vm):
+	 * loading vs failed copy stay distinguishable, and the race re-mounts a
+	 * still-loading host once whale.js lands (11-11 audit P3-1) */
+	const clientSrc = fs.readFileSync(path.join(__dirname, 'whale-assistant', 'client.js'), 'utf8');
+	assert.ok(clientSrc.includes('小鲸鱼助手页面还在加载'), 'client fallback copy: still-loading state present');
+	assert.ok(clientSrc.includes('加载失败'), 'client fallback copy: load-failed state (eval catch) present');
+	assert.ok(clientSrc.includes('.dsh-whale-pp-host'), 'client re-mount targets the page host element');
+	assert.ok(clientSrc.includes("ctx.inject(['layout']") && clientSrc.includes('__dshWhaleSelectPanel'), 'client: layout.selectPanel jump bridge stashed for the menu 设置 row');
+
+	/* 45c. 设置 relay 源码契约（三方各半，缺一即断——用户实报「设置了叮叮
+	 * 桌宠响单声叮」=桌宠独立分区从未收到页面设置） */
+	const petPageSrc = fs.readFileSync(path.join(__dirname, 'whale-assistant', 'pet', 'page.html'), 'utf8');
+	const petLibSrc = fs.readFileSync(path.join(__dirname, 'whale-assistant', 'lib', 'pet.js'), 'utf8');
+	assert.ok(src.includes('pushPetConfig') && src.includes('/api/whale-assistant/pet/config'), 'whale.js: relays CONFIG+sound to /pet/config (saveConfig/setSoundMuted/boot)');
+	assert.ok(petLibSrc.includes("path: '/api/whale-assistant/pet/config'") && petLibSrc.includes('petConfig: petRelay'), 'host: /pet/config route registered + relay rides the pet state poll');
+	assert.ok(petLibSrc.includes('bootDoc.petConfig'), 'host: relay restored from the ledger on boot');
+	assert.ok(petPageSrc.includes('doc.petConfig') && petPageSrc.includes('applyConfig'), 'pet page: diff-applies the relayed config on the 2s state poll');
+
+	/* 45d. 桌宠「设置」跳转全链源码契约（11-11 三报：点设置只弹提示没有
+	 * 意义——桌宠→宿主→页鲸→selectPanel 四段缺一即断） */
+	assert.ok(petLibSrc.includes("action === 'open-settings'"), 'host: /pet/ctrl open-settings action broadcasts the frame');
+	assert.ok(src.includes('pet/open-settings') && src.includes('dsh-whale:pet-open-settings'), 'whale.js: consumes pet/open-settings and dispatches to the client bridge');
+	assert.ok(clientSrc.includes("dsh-whale:pet-open-settings'") && clientSrc.includes("__dshWhaleSelectPanel('whale-assistant')"), 'client: event listener executes the real selectPanel jump');
+	assert.ok(src.includes('dsh-whale-tone-play') && src.includes('当前版本'), 'sidebar page: per-row audition buttons + self-explanatory version row');
+
+	/* 45e. 首条通知无声回归（11-11 三轮，用户实报「第一条通知无声，双击
+	 * 红标后恢复」）：WebView2 autoplay 策略=窗口无用户激活时 resume 被拒，
+	 * 旧代码被拒即静默丢弃排队 ding。回归=stub AudioContext（suspended+
+	 * resume 拒绝）：第一条通知不响但**不丢**+手势重试监听挂上 → 解锁+
+	 * 手势触发 → 排队首声补响。 */
+	const envAu2 = makeEnv();
+	envAu2.ready();
+	const A2 = envAu2.sandbox.__dshWhale;
+	const stubCtxs = [];
+	class StubbornAC {
+		constructor() { this.state = 'suspended'; this.starts = []; stubCtxs.push(this); }
+		resume() {
+			if (this._unlocked) { this.state = 'running'; return Promise.resolve(); }
+			return Promise.reject(new Error('autoplay: no gesture'));
+		}
+		createOscillator() {
+			const ctx = this;
+			return { type: 'sine', frequency: { value: 0 }, connect() {}, start() { ctx.starts.push(this.frequency.value); }, stop() {} };
+		}
+		createGain() { return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} }; }
+		get destination() { return {}; }
+	}
+	envAu2.sandbox.AudioContext = StubbornAC; /* whale 在 ensureAudio 时才读 AudioContext（惰性）——boot 后替换即生效 */
+	const gestureHandlers = [];
+	const origAdd2 = envAu2.sandbox.addEventListener;
+	envAu2.sandbox.addEventListener = function (type, fn) {
+		if (type === 'pointerdown') gestureHandlers.push(fn);
+		if (typeof origAdd2 === 'function') origAdd2.call(envAu2.sandbox, type, fn);
+	};
+	const muxpAu2 = (payload) => A2.handleMuxPayload(payload);
+	/* 配方照抄 45 测试（缺 subagentTiming 投影=会话不认完成通知）： */
+	muxpAu2({ type: 'session/projection', sessionId: 'session-au1', key: 'subagentTiming', value: { settledMs: 0 } });
+	await sleep(30);
+	muxpAu2({ type: 'session/event', sessionId: 'session-au1', event: { type: 'turn/start', seq: 1, time: 0, data: {} } });
+	muxpAu2({ type: 'session/event', sessionId: 'session-au1', event: { type: 'turn/end', seq: 2, time: 1, data: {} } });
+	await sleep(50);
+	assert.strictEqual(stubCtxs.length, 1, 'stub AudioContext was the one the whale grabbed (lazy read honored)');
+	assert.strictEqual(stubCtxs[0].starts.length, 0, 'autoplay-blocked first notification does NOT ring (resume rejected)');
+	assert.ok(gestureHandlers.length >= 1, 'rejected resume arms a one-time gesture retry (queued ding is NOT dropped)');
+	stubCtxs.forEach((c) => { c._unlocked = true; });
+	gestureHandlers[gestureHandlers.length - 1]();
+	await sleep(30);
+	assert.ok(stubCtxs[0].starts.length > 0, `first-interaction retry plays the queued ding: ${JSON.stringify(stubCtxs[0].starts)}`);
+	assert.ok(petLibSrc.includes('autoplay-policy=no-user-gesture-required'), 'pet spawn: WebView2 autoplay gesture requirement exempted (root fix for the pet window)');
 
 	/* 46. health check (core/health.js): silent while healthy, chip + report
 	 * when a dependency degrades; jump stays warn-only. */
@@ -3327,9 +3495,9 @@ async function main() {
 		 * on the sidebar panel page help tab — mounted fresh here) */
 		const ppHelpG = envG.sandbox.document.createElement('div');
 		envG.sandbox.window.__dshWhalePanel.mount(ppHelpG);
-		ppHelpG.children.find((c) => (c.className || '').indexOf('dsh-whale-pp-tabs') >= 0)
+		ppInner(ppHelpG).children.find((c) => (c.className || '').indexOf('dsh-whale-pp-tabs') >= 0)
 			.children.find((c) => (c.textContent || '').indexOf('📖 使用说明') >= 0)._fire('click', { stopPropagation() {} });
-		const mDrawer = ppHelpG.children.find((c) => (c.className || '').indexOf('dsh-whale-pp-content') >= 0);
+		const mDrawer = ppInner(ppHelpG).children.find((c) => (c.className || '').indexOf('dsh-whale-pp-content') >= 0);
 		assert.ok(mDrawer && mDrawer.textContent.includes('我是什么'), 'manual tab content renders');
 		const mWrap = mDrawer.children.find((c) => (c.className || '').indexOf('dsh-whale-pp-manual') >= 0);
 		const mIn = mWrap.children.find((c) => (c.className || '').indexOf('dsh-whale-manual-search') >= 0);

@@ -37,8 +37,12 @@
 						if (dingKinds.length > 1) dingKinds.splice(0, dingKinds.length - 1);
 						pumpDings();
 					}
+					pumpPreview(); /* 试听早于解锁排队：resume 后立即补响 */
 				}).catch(function () {
-					/* resume rejected; stay silent rather than crash */
+					/* resume 被拒（autoplay 策略、窗口尚无用户激活）——不能就此
+					 * 把排队的 ding 静默丢掉（11-11 三轮「第一条通知无声」根因）：
+					 * 挂手势重试，首次交互后补响。 */
+					armAudioUnlockRetry();
 				});
 			}
 			return false;
@@ -168,6 +172,49 @@
 		}, DING_GAP_MS);
 	}
 
+	/* 显式试听（11-11 三报延时分析，用户实报「点完要等一两秒」）：根因=
+	 * 预览误入通知队列——dingPlaying/DING_GAP_MS(1900ms) 是**通知防叠**
+	 * 设计，预览撞上忙队列就要等足间隔。previewDing 开独立直渲通道：
+	 * 直接渲染（允许与正在响的通知短暂重叠——用户主动点的，要的是立即
+	 * 反馈），不占 dingPlaying、不等 1900ms；AudioContext 挂起时
+	 * pendingPreview 暂存，resume 成功后补响（连点=最后一击生效）。 */
+	var pendingPreview = null;
+	function pumpPreview() {
+		if (!pendingPreview) return;
+		var kind = pendingPreview;
+		if (renderDing(kind)) {
+			pendingPreview = null;
+			return;
+		}
+		ensureAudio(); /* resume().then → pumpPreview 重试 */
+	}
+	function previewDing(kind) {
+		if (soundMuted) return; /* 总静音仍是硬闸 */
+		pendingPreview = kind;
+		pumpPreview();
+	}
+
+	/* 自动播放解锁重试（11-11 三轮，用户实报「第一条通知无声，双击红标后
+	 * 恢复」）：resume() 被拒（autoplay 策略、窗口尚无用户激活）时旧代码
+	 * 就地静默丢弃——排队的 ding 永远不响。挂一次性手势监听：用户第一次
+	 * 点/按（sticky activation 之后 resume 必成功）即补 pumpDings/
+	 * pumpPreview，排队的首声在首次交互后立即补上。 */
+	var audioUnlockArmed = false;
+	function armAudioUnlockRetry() {
+		if (audioUnlockArmed) return;
+		audioUnlockArmed = true;
+		var unlock = function () {
+			audioUnlockArmed = false;
+			['pointerdown', 'keydown', 'touchstart'].forEach(function (t) {
+				try { window.removeEventListener(t, unlock); } catch (e2) {}
+			});
+			try { pumpDings(); pumpPreview(); } catch (e3) { /* 桩环境 */ }
+		};
+		['pointerdown', 'keydown', 'touchstart'].forEach(function (t) {
+			try { window.addEventListener(t, unlock); } catch (e4) {}
+		});
+	}
+
 	/** 免打扰窗口：开着且当前本地时间落在 [from, to) 内（支持跨零点）。 */
 	function dndActive() {
 		if (!CONFIG.dndEnabled) return false;
@@ -183,12 +230,17 @@
 		return from < to ? (cur >= from && cur < to) : (cur >= from || cur < to);
 	}
 
-	function playDing(kind) {
+	function playDing(kind, opts) {
 		if (soundMuted) return; /* right-click menu: one-tap mute */
-		if (petDormant) return; /* 桌宠在岗：页面鲸鱼休眠静默（桌宠窗口自己响） */
-		/* 免打扰: completion/failure sounds are dropped (attention still
-		 * rings — the user must act on those regardless of the hour) */
-		if (dndActive() && (kind === 'done' || kind === 'fail')) return;
+		/* 11-11 真机修复轮：opts.force = 显式试听（设置页改音色）——绕过
+		 * 桌宠在岗静默与免丢弃（预览是用户主动点的，静默=「设置无效」
+		 * 观感）；总静音仍是硬闸（用户明确选了全局无声）。 */
+		if (!(opts && opts.force)) {
+			if (petDormant) return; /* 桌宠在岗：页面鲸鱼休眠静默（桌宠窗口自己响） */
+			/* 免打扰: completion/failure sounds are dropped (attention still
+			 * rings — the user must act on those regardless of the hour) */
+			if (dndActive() && (kind === 'done' || kind === 'fail')) return;
+		}
 		if (dingKinds.length >= 6) {
 			/* an extreme burst: drop the oldest backlog so the queue stays sane */
 			dingKinds.splice(0, dingKinds.length - 5);
@@ -209,6 +261,8 @@
 	function setSoundMuted(muted) {
 		soundMuted = !!muted;
 		safeSet(SOUND_KEY, soundMuted ? 'off' : 'on');
+		/* 11-11 真机修复轮：总静音也要过 relay 到桌宠（桌面响的是桌宠） */
+		if (!PET_MODE) pushPetConfig();
 	}
 
 	/* ------------------------------------------------------------------ */

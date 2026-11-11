@@ -60,6 +60,12 @@
 			dndFrom: CONFIG.dndFrom,
 			dndTo: CONFIG.dndTo
 		});
+		/* 11-11 真机修复轮（用户实报「设置了叮叮桌宠响单声叮」）：桌宠
+		 * WebView2 是独立 localStorage 分区，页面 CONFIG 不会自己过去——
+		 * 每次持久化即向宿主 /pet/config 推一份（桌宠 2s state 轮询差分
+		 * 应用）。pushPetConfig 定义在 exports.js（共享 IIFE 作用域，函数
+		 * 声明跨模块提升，运行时顺序无关）；PET_MODE 下静默。 */
+		if (!PET_MODE) pushPetConfig();
 	}
 
 	/** Normalize an incoming settings patch: only known keys with the right

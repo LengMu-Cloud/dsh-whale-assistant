@@ -85,6 +85,16 @@ public static class Native4 {
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
   [DllImport("user32.dll")] public static extern void keybd_event(byte k, byte scan, uint flags, UIntPtr extra);
+  public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  private static IntPtr _reviveHwnd;
+  public static IntPtr FindWindowOfPids(int[] pids) {
+    _reviveHwnd = IntPtr.Zero;
+    EnumWindows(delegate(IntPtr h, IntPtr l) { uint wpid = 0; GetWindowThreadProcessId(h, out wpid); foreach (int p in pids) { if (wpid == (uint)p) { _reviveHwnd = h; return false; } } return true; }, IntPtr.Zero);
+    return _reviveHwnd;
+  }
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
   [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
   public const int GWL_EXSTYLE = -20;
@@ -259,6 +269,121 @@ function script:Show-DshWindow {
 	} catch { Log ('jump err: ' + $_.Exception.Message) }
 }
 
+# Resolve the DSH shell executable ONCE at spawn time: engine pid
+# (DSH_PET_PARENT_PID) -> its parent = the shell (Electron, holds the
+# window). The shell may be GONE by the time a revive is needed (user
+# closed the window; window-all-closed -> app.quit), so the full path is
+# stashed here while it is still alive (11-11 jump-revive round).
+function script:Resolve-ShellExe {
+	try {
+		$eng = Get-CimInstance Win32_Process -Filter "ProcessId=$env:DSH_PET_PARENT_PID" -ErrorAction Stop
+		$shell = Get-CimInstance Win32_Process -Filter "ProcessId=$($eng.ParentProcessId)" -ErrorAction Stop
+		if ($shell.ExecutablePath) {
+			$script:shellExePath = [string]$shell.ExecutablePath
+			Log ('shell exe resolved: ' + $script:shellExePath)
+		} else {
+			Log 'shell exe resolve: parent has no path'
+		}
+	} catch {
+		Log ('shell exe resolve skipped: ' + $_.Exception.Message)
+	}
+}
+
+# Revive the DSH window after the user closed it (jump/settings requested).
+# 11-12 v2 - the page calls this after EVERY jump/settings request, and two
+# realities must both work:
+# - a DSH window with a handle exists -> just foreground it (the jump
+#   already executed in that window's whale);
+# - no window handle anywhere -> the shell quit/hung while its renderer may
+#   even still linger in close-limbo (observed 11-12: delivered=true with
+#   zero visible windows = the jump executed in an INVISIBLE whale). Plain
+#   Start-Process cannot help then: the single-instance lock is held by the
+#   zombie shell, so the second instance just self-quits. Instead a
+#   DETACHED helper force-kills the zombie shell first, then starts the
+#   stashed shell exe. The helper must outlive this pet (killing the shell
+#   kills this pet through the parent chain). The jump itself replays from
+#   the ledger pendingJump (host hello-flush) once the fresh page connects.
+function script:Revive-DshWindow {
+	if (-not $script:shellExePath) { Log 'revive: shell path unknown'; return }
+	$procName2 = [IO.Path]::GetFileNameWithoutExtension($script:shellExePath)
+	$shellPids = @(Get-Process -Name $procName2 -ErrorAction SilentlyContinue | ForEach-Object { [int]$_.Id })
+	# v7 (11-12): X 之后壳常停在「退出挂起」态——窗口被隐藏但渲染层还活着
+	# （任务栏残留 + delivered=true 实证）。Process.MainWindowHandle 对隐藏
+	# 窗返回 0，必须 EnumWindows 枚举壳名下全部顶层窗口：找到=ShowWindow+
+	# 前台化（跳转已经在隐藏窗里执行成功，只差显示出来）；一个都没有=壳真
+	# 死→走 CIM 杀僵尸+重拉兜底。
+	if ($shellPids.Count -gt 0) {
+		try {
+			$h = [Native4]::FindWindowOfPids($shellPids)
+			if ($h -ne [IntPtr]::Zero) {
+				if ([Native4]::IsIconic($h)) { [void][Native4]::ShowWindow($h, 9) }
+				[void][Native4]::ShowWindow($h, 5)
+				[void][Native4]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)
+				[void][Native4]::SetForegroundWindow($h)
+				[void][Native4]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
+				Log 'revive: hidden shell window shown + foregrounded (jump already executed in it)'
+				return
+			}
+			Log 'revive: shell alive but windowless (close-limbo) -> CIM kill+relaunch'
+		} catch {
+			Log ('revive enum err: ' + $_.Exception.Message)
+		}
+	}
+	# 11-12 v5 FILE-based cooldown (20s): the detached relaunch respawns THIS
+	# pet (new process = in-memory cooldown lost), so consecutive clicks used
+	# to re-kill the freshly booting shell forever - death spiral, observed
+	# 03:38-03:39: three kill+relaunch cycles in 50s ending with NO DSH at
+	# all. The file survives pet respawns and blocks overlapping helpers.
+	$cdFile = Join-Path $env:USERPROFILE '.dsh\pet\last-revive'
+	$nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+	try {
+		if (Test-Path $cdFile) {
+			$last = [int64](Get-Content $cdFile -TotalCount 1 -ErrorAction Stop)
+			if ($nowMs - $last -lt 20000) {
+				Log 'revive: file cooldown (relaunch in flight) - skipped'
+				return
+			}
+		}
+	} catch { }
+	if (-not (Test-Path $script:shellExePath)) { Log ('revive: shell exe missing: ' + $script:shellExePath); return }
+	try {
+		# v6 (11-12): write the revive script to a FILE and launch it via
+		# WMI/CIM. Two hard lessons from v4/v5:
+		# 1) embedded quotes in a -Command string get eaten by Start-Process
+		#    argument re-parsing (the helper silently no-oped);
+		# 2) the killed shell owns a JOB OBJECT that holds this whole process
+		#    tree (pet + detached helpers) with kill-on-close - when the shell
+		#    dies, every helper dies with it and the relaunch never runs
+		#    (observed: kill works, relaunch never does). A CIM-created
+		#    process is parented to WmiPrvSE and escapes the job entirely.
+		# The helper logs its own steps to revive-helper.log.
+		$helperFile = Join-Path $env:USERPROFILE '.dsh\pet\revive-helper.ps1'
+		$helperLog = Join-Path $env:USERPROFILE '.dsh\pet\revive-helper.log'
+		$helperScript = @'
+$ErrorActionPreference = 'Continue'
+$log = Join-Path $env:USERPROFILE '.dsh\pet\revive-helper.log'
+function L($m) { Add-Content -Path $log -Value ((Get-Date).ToString('HH:mm:ss.fff') + ' ' + $m) }
+L 'helper start'
+try {
+	Stop-Process -Name "DeepSeek Harness" -Force -ErrorAction SilentlyContinue
+	L 'zombie shell killed'
+	Start-Sleep -Seconds 2
+	Start-Process -FilePath "SHELLEXE_PLACEHOLDER"
+	L 'shell relaunched'
+} catch {
+	L ('helper err: ' + $_.Exception.Message)
+}
+'@
+		$helperScript = $helperScript.Replace('SHELLEXE_PLACEHOLDER', $script:shellExePath)
+		Set-Content -Path $helperFile -Value $helperScript -Encoding UTF8 -ErrorAction Stop
+		try { Set-Content -Path $cdFile -Value $nowMs -ErrorAction Stop } catch { }
+		Log ('revive: helper file written, launching via CIM (zombie ' + $procName2 + ' kill + relaunch)')
+		Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ('powershell -NoProfile -ExecutionPolicy Bypass -File "' + $helperFile + '"') } | Out-Null
+	} catch {
+		Log ('revive helper err: ' + $_.Exception.Message)
+	}
+}
+
 function script:Shutdown-Pet($reason) {
 	Log ('shutdown: ' + $reason)
 	try { $script:parentWatch.Stop() } catch { }
@@ -391,6 +516,7 @@ $script:parentWatch.Add_Tick({
 	}
 })
 $script:parentWatch.Start()
+Resolve-ShellExe
 
 # ---- 托盘整体移除（用户定稿 11-02）------------------------------------------
 # 系统托盘图标（NotifyIcon+自绘小蓝鲸+菜单+气球提示）全部撤下：小鲸鱼自己的
@@ -449,6 +575,7 @@ $script:poll.Add_Tick({
 							if ($obj.c -eq 'form') { Apply-PetForm ([string]$obj.v) }
 							elseif ($obj.c -eq 'fatal') { Log ('fatal from page: ' + $obj.r); Shutdown-Pet ('fatal-' + $obj.r) }
 							elseif ($obj.c -eq 'jump') { Show-DshWindow }
+							elseif ($obj.c -eq 'revive') { Revive-DshWindow }
 							return
 						}
 						# poly 即到即缓存（真机实证 11-01）：16ms latest-wins 合流会用

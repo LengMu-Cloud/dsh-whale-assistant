@@ -563,6 +563,38 @@ function apply(ctx) {
 				sseClients.add(clientRecord);
 				req.on('close', () => sseClients.delete(clientRecord));
 				req.on('error', () => sseClients.delete(clientRecord));
+				/* 跳转/设置补偿（11-11 四轮，用户实报「后台挂着也要能跳」）：页鲸
+				 * 不在场期间桌宠落的 pending 意图（ledger）——页鲸 SSE 接入即补投
+				 * （120s 新鲜闸：过期意图不再兑现，防止陈旧跳转突袭）。走 pushFrame
+				 * （入 recentFrames+SSE 扇出），页鲸消费后自动落到目标会话/设置页
+				 * ——用户随手重开 DSH 窗口即自动兑现，不用再手动重跳。
+				 * **只对页鲸连接补投**（!petClient）：桌宠自己的 SSE 接入若也触发
+				 * 补投，会把 pending 清给一个消费不了的连接=白扔。 */
+				if (!petClient) {
+					try {
+						const pendDoc = loadStore(storeDir());
+						const pj = pendDoc && pendDoc.pendingJump;
+						if (pj && pj.sessionId && Date.now() - (pj.time || 0) < 120000) {
+							pushFrame({ type: 'pet/jump', sessionId: pj.sessionId, atMs: typeof pj.atMs === 'number' && pj.atMs > 0 ? pj.atMs : undefined, time: Date.now() });
+							queueStoreWrite(storeDir(), () => {
+								const d = loadStore(storeDir()) || {};
+								delete d.pendingJump;
+								saveStoreAtomic(storeDir(), d);
+								return d;
+							}).catch(() => {});
+						}
+						const pset = pendDoc && pendDoc.pendingSettings;
+						if (pset && Date.now() - (pset.time || 0) < 120000) {
+							pushFrame({ type: 'pet/open-settings', time: Date.now() });
+							queueStoreWrite(storeDir(), () => {
+								const d = loadStore(storeDir()) || {};
+								delete d.pendingSettings;
+								saveStoreAtomic(storeDir(), d);
+								return d;
+							}).catch(() => {});
+						}
+					} catch (e) { /* ledger 不可用：跳过补偿 */ }
+				}
 			}
 		}
 		];
@@ -625,7 +657,16 @@ function apply(ctx) {
 		 * 关了 DOM 就没了）——桌宠双击跳转时宿主广播 pet/jump，但没有页鲸
 		 * 消费=无声失败。把「页鲸是否在场」（SSE 连接数）交给 jump 响应，
 		 * 桌宠页据此提示用户而不是干点没反应。 */
-		hasPageClients: () => sseClients.size > 0,
+		/* 「页鲸是否在场」必须**排除桌宠自己的连接**（11-11 四轮根修，用户实报
+		 * 「关窗后跳转失效」）：桌宠常驻期间它自己的 pet-token SSE 恒在——旧
+		 * 实现 size>0 把它当页鲸，delivered 恒 true=关窗后的跳转/刷新广播永远
+		 * "有人消费"（实际无人），补偿链（pendingJump/revive）整个死路（11-06
+		 * 起的 delivered 语义对这个场景一直是坏的）。pet 客户端带 pet:true
+		 * 标记（见下 clientRecord），只数非 pet 连接。 */
+		hasPageClients: () => {
+			for (const c of sseClients) { if (c && !c.pet) return true; }
+			return false;
+		},
 		/* 存量标题预填（11-03）：session/title 事件只在标题**变化**时广播，
 		 * 桌宠起来后老会话（标题早已生成）不会有 title 帧——页鲸靠开机取
 		 * 名从历史预填，桌宠走同一条路：宿主从账本历史提取 真实会话→标题，

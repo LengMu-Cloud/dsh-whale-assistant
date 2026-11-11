@@ -385,7 +385,19 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
 		try {
 			var sid = ev && ev.detail && ev.detail.sessionId;
 			var atMs = ev && ev.detail && ev.detail.atMs;
-			if (sid && typeof openSessionAt === 'function') openSessionAt(sid, typeof atMs === 'number' ? atMs : undefined);
+			if (!sid || typeof openSessionAt !== 'function') return;
+			/* 补投时序（11-11 四轮）：宿主 hello 补投可能早于 sessions/
+			 * uiWorkspace 桥注入（两路异步到达）——桥未绑定时 openSessionAt
+			 * 返回 false（no bridge bound）。有界重试：每 300ms 一次最多
+			 * ~10s，桥一就绪立即跳；真失败（会话不存在）10s 后放弃不打扰。 */
+			var tries = 0;
+			var attempt = function () {
+				var ok = false;
+				try { ok = openSessionAt(sid, typeof atMs === 'number' ? atMs : undefined); } catch (e2) { ok = false; }
+				if (ok) return;
+				if (++tries < 33) setTimeout(attempt, 300);
+			};
+			attempt();
 		} catch (e) { /* a bad payload must not kill the listener */ }
 	});
 }

@@ -39,6 +39,9 @@
 - **二轮三连（同日深夜，用户再报三问题）**：①每行音色加「▶ 试听」按钮+换值自动试听双保险——原生 select **重选同值不触发 change**，显式按钮兜住「想听已选中声音」（force 绕休眠/免打扰，总静音仍尊重）；②「关于」行改「ℹ️ 当前版本 | 小鲸鱼助手 vX.Y.Z」自解释；③桌宠菜单「设置」**真跳转四段全链**（桌宠 POST open-settings→宿主广播 pet/open-settings→页鲸 selectPanel→`c:'jump'` 让 ps1 把 DSH 拉前台），DSH 关着时明说「先打开 DSH」而不是弹指路气泡；最终 **801 断言全绿**
 - **试听延时追修（用户再报「点完要等一两秒」）**：根因=预览误入通知队列——`DING_GAP_MS(1900ms)` 防叠间隔是通知设计，预览撞上忙队列就要等足 → `previewDing` 独立直渲通道（不占 dingPlaying、连点立即响、允许与正在响的通知短暂重叠；AudioContext 挂起时 pendingPreview 暂存+resume 补响）
 - **首条通知无声（用户实报「偶发：第一条任务完成没声音，双击红标后恢复」）**：根因=桌宠 WebView2 autoplay 策略——窗口无用户激活时音频 `resume()` 被拒，旧代码被拒即**静默丢弃**排队 ding；双击红标=第一次交互（sticky activation）之后全部正常。修两层：桌宠 spawn 豁免手势要求（`--autoplay-policy=no-user-gesture-required`，桌宠页只跑自家通知音）；`ensureAudio` resume 被拒不丢弃——挂一次性手势监听，首次交互即补响排队首声（页鲸侧任何引擎策略通吃）
+- **关窗跳转补偿（用户实报「关掉窗口后历史任务/红标跳转失效——后台挂着就该能跳」）**：取证=壳 `window-all-closed→quit`（页鲸渲染层随之消失，广播无人消费）。三层修复：桌宠意图落 ledger pendingJump/pendingSettings → 页鲸 SSE 接入 hello 补投（120s 新鲜闸防陈旧突袭）→ ps1 revive 重拉壳窗口（单实例锁双向安全+DispatcherTimer 轮询前台化，UI 线程零阻塞）；三个跳转入口提示改「已记住——DSH 窗口打开后会自动跳转/打开设置」，不再死胡同
+- **关窗跳转·根修（用户复测仍失败后锁定的真根因）**：`hasPageClients` 把**桌宠自己的 pet-token SSE 连接**也算成页鲸（桌宠为实时推送常驻连接 /events/stream）——桌宠活着 delivered **恒 true**，补偿链与 11-06/11-07 的 delivered 语义整个死路。根修=只数非 pet 连接 + hello 补投加 `!petClient` 闸；另修补投时序竞态（早于跳转桥注入到达→有界重试 300ms×33）。**注意：宿主半区修复需重启 DSH 应用（引擎跑在壳进程内，关窗不退=旧代码继续服役）**
+- **关窗跳转·v2 终修（用户复测仍失败→探针实证）**：关窗后壳停在「退出挂起」态、**渲染层残留**（delivered=true+零可见窗口=跳转在看不见的窗口里执行了）。修复：三个跳转入口**无论 delivered 一律唤回**（`c:'revive'`）；ps1 v2 分流——有窗=前台化、无窗=**分离式助手杀僵尸壳+重拉**（杀壳沿父链杀死桌宠自己，故助手 detached 独立存活）；pet.js **无条件持久化** pending 意图（新页鲸接入时 hello 补投自动兑现，120s 新鲜闸）；宿主半区修复生效需重启 DSH 应用；811 断言全绿
 
 ### 修复（评估 P1-1，11-08）
 

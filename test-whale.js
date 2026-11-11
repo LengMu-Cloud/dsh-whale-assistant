@@ -3156,6 +3156,20 @@ async function main() {
 	assert.ok(clientSrc.includes("dsh-whale:pet-open-settings'") && clientSrc.includes("__dshWhaleSelectPanel('whale-assistant')"), 'client: event listener executes the real selectPanel jump');
 	assert.ok(src.includes('dsh-whale-tone-play') && src.includes('当前版本'), 'sidebar page: per-row audition buttons + self-explanatory version row');
 
+	/* 45f. 跳转补偿全链源码契约（11-11 四轮：用户实报「关窗后跳转失效」——
+	 * 壳 window-all-closed→quit，页鲸不在场=广播无人消费。三层缺一即断：
+	 * ①桌宠意图落 ledger pending ②宿主 hello 补投 ③页侧 revive 重拉壳窗口） */
+	assert.ok(petLibSrc.includes('pendingJump') && petLibSrc.includes('pendingSettings'), 'host: undelivered jump/settings intents persist to the shared ledger');
+	const petIndexSrc = fs.readFileSync(path.join(__dirname, 'whale-assistant', 'lib', 'index.js'), 'utf8');
+	assert.ok(petIndexSrc.includes('pendingJump') && petIndexSrc.includes('pendingSettings') && petIndexSrc.includes('delete d.pendingJump'), 'host: SSE hello flushes fresh pending intents then clears them');
+	const petPs1Src = fs.readFileSync(path.join(__dirname, 'whale-assistant', 'pet', 'pet.ps1'), 'utf8');
+	assert.ok(petPs1Src.includes("c -eq 'revive'") && petPs1Src.includes('Revive-DshWindow') && petPs1Src.includes('Resolve-ShellExe'), 'pet shell: revive routine relaunches the stashed shell exe (single-instance safe)');
+	assert.ok(src.includes("c: 'revive'"), 'whale.js: pet branches trigger shell revive on undelivered jumps');
+	/* 根修断言（11-11 四轮真根因）：hasPageClients 必须排除桌宠自己的
+	 * pet-token SSE 连接——桌宠常驻期间它恒在，size>0 计数=delivered 恒
+	 * true=关窗后的补偿链（pending/revive）整个死路 */
+	assert.ok(petIndexSrc.includes('!c.pet') && petIndexSrc.includes('hasPageClients'), 'host: hasPageClients EXCLUDES the pet own SSE connection (root fix)');
+
 	/* 45e. 首条通知无声回归（11-11 三轮，用户实报「第一条通知无声，双击
 	 * 红标后恢复」）：WebView2 autoplay 策略=窗口无用户激活时 resume 被拒，
 	 * 旧代码被拒即静默丢弃排队 ding。回归=stub AudioContext（suspended+

@@ -5198,12 +5198,18 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					headers: { 'content-type': 'application/json' },
 					body: JSON.stringify({ action: 'jump', code: code, atMs: atMs })
 				}).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (out) {
+					/* v2（11-12）：无论 delivered 都唤回窗口——delivered=true 也可能
+					 * 只是「退出挂起的僵尸渲染层」在场（跳转在看不见的窗口里执行
+					 * 了）。c:'revive' 由 ps1 分流：有窗=前台化；无窗=杀僵尸壳+重
+					 * 拉，ledger pendingJump 在新页鲸接入时 hello 补投自动兑现。
+					 * delivered=false 时通知保留未读（红标不掉）。 */
+					try {
+						if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+							window.chrome.webview.postMessage({ c: 'revive' });
+						}
+					} catch (e2) { }
 					if (out && out.ok === true && out.delivered === false) {
-						/* 常驻语义（11-06）：关窗≠退出——DSH 窗口关着时页鲸不在场
-						 * （宿主广播 pet/jump 无人消费），跳转落不了地。通知**保留
-						 * 未读**（红标不掉），用户重开 DSH 后再双击还能定位到任务
-						 * 节点——比默默标已读丢了通知诚实得多。 */
-						uiSay('DSH 窗口已关闭——打开 DSH 后再点我跳转吧 🐳', 3500);
+						uiSay('DSH 窗口已关——正在重开并自动跳转，稍等 🐳', 3500);
 					} else if (out && out.ok === true) {
 						/* jumping counts as reading the report (same contract as
 						 * the page whale): the badge drops and the notification
@@ -5212,7 +5218,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					} else {
 						uiSay('通知已过期，回 DSH 看看吧 🐳', 2500);
 					}
-				}).catch(function () { /* network hiccup: the shell switch already happened */ });
+				}).catch(function () { /* network hiccup: the revive already fired */ });
 				return;
 			}
 			var sessionId = currentSaySession;
@@ -5703,15 +5709,19 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 							headers: { 'content-type': 'application/json' },
 							body: JSON.stringify({ action: 'open-settings' })
 						}).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (out) {
-							if (out && out.ok === true && out.delivered === true) {
-								try {
-									if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
-										window.chrome.webview.postMessage({ c: 'jump' });
-									}
-								} catch (e2) { }
-								uiSay('已在 DSH 打开小鲸鱼助手设置 ✓', 2200);
+							/* v2（11-12）：无论 delivered 都唤回窗口——delivered=true
+							 * 也可能只是退出挂起的僵尸渲染层在场；c:'revive' 由 ps1
+							 * 分流（有窗=前台化，无窗=杀僵尸壳+重拉，pendingSettings
+							 * 在新页鲸接入时 hello 补投自动打开设置页） */
+							try {
+								if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+									window.chrome.webview.postMessage({ c: 'revive' });
+								}
+							} catch (e2) { }
+							if (out && out.ok === true && out.delivered === false) {
+								uiSay('DSH 窗口已关——正在重开并进入设置页，稍等 🐳', 3500);
 							} else if (out && out.ok === true) {
-								uiSay('DSH 窗口未打开——先打开 DSH 再从桌宠菜单进设置 🐳', 3500);
+								uiSay('已打开小鲸鱼助手设置 ✓', 1800);
 							} else {
 								uiSay('跳转指令没有送达，稍后再试 🥲', 2500);
 							}
@@ -6266,6 +6276,17 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 										method: 'POST',
 										headers: { 'content-type': 'application/json' },
 											body: JSON.stringify({ action: 'jump', code: code, atMs: typeof endTime === 'number' ? endTime : undefined })
+									}).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (out) {
+										/* v2（11-12）：无论 delivered 都唤回窗口（同 bootstrap
+										 * 注释——delivered=true 也可能是僵尸渲染层在场） */
+										try {
+											if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+												window.chrome.webview.postMessage({ c: 'revive' });
+											}
+										} catch (e2) { }
+										if (out && out.ok === true && out.delivered === false) {
+											uiSay('DSH 窗口已关——正在重开并自动跳转，稍等 🐳', 3500, sessionId);
+										}
 									}).catch(function () {});
 									uiSay('正在打开对话… 🐳', 1500, sessionId);
 								} catch (e) {
@@ -8217,7 +8238,19 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
 		try {
 			var sid = ev && ev.detail && ev.detail.sessionId;
 			var atMs = ev && ev.detail && ev.detail.atMs;
-			if (sid && typeof openSessionAt === 'function') openSessionAt(sid, typeof atMs === 'number' ? atMs : undefined);
+			if (!sid || typeof openSessionAt !== 'function') return;
+			/* 补投时序（11-11 四轮）：宿主 hello 补投可能早于 sessions/
+			 * uiWorkspace 桥注入（两路异步到达）——桥未绑定时 openSessionAt
+			 * 返回 false（no bridge bound）。有界重试：每 300ms 一次最多
+			 * ~10s，桥一就绪立即跳；真失败（会话不存在）10s 后放弃不打扰。 */
+			var tries = 0;
+			var attempt = function () {
+				var ok = false;
+				try { ok = openSessionAt(sid, typeof atMs === 'number' ? atMs : undefined); } catch (e2) { ok = false; }
+				if (ok) return;
+				if (++tries < 33) setTimeout(attempt, 300);
+			};
+			attempt();
 		} catch (e) { /* a bad payload must not kill the listener */ }
 	});
 }

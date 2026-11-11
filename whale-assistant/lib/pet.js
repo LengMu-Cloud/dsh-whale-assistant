@@ -876,6 +876,21 @@ function killTree(pid) {
 							 * 无声失败。false 时桌宠页不标已读、提示用户先打开
 							 * DSH（通知保留，开窗后再跳还能定位到任务节点）。 */
 							const delivered = typeof deps.hasPageClients === 'function' ? !!deps.hasPageClients() : true;
+							/* 跳转补偿 v2（11-12）：**无条件**落 ledger pendingJump——
+							 * delivered=true 也不可信：关窗后壳可能停在退出挂起态，
+							 * 渲染层残留在里面（SSE 还连着=hasPageClients 真），跳转
+							 * 帧广播给一个看不见的窗口=用户眼中的「跳转失效」。落库
+							 * 后由 ps1 revive（杀僵尸壳+重拉）+ 新页鲸 hello 补投兜底；
+							 * 窗口正常在场的场景 pending 无人消费、120s 后自然过期。 */
+							try {
+								const dir = deps.ledgerDir();
+								queueStoreWrite(dir, () => {
+									const doc = loadStore(dir) || {};
+									doc.pendingJump = { sessionId: realId, atMs: anchor || 0, time: Date.now() };
+									saveStoreAtomic(dir, doc);
+									return doc;
+								}).catch((e2) => log('pendingJump persist failed: ' + String(e2 && e2.message || e2)));
+							} catch (e3) { /* ledger 不可用：跳过补偿 */ }
 							plain(res, 200, JSON.stringify({ ok: true, delivered: delivered }));
 						} catch (e) {
 							plain(res, 500, JSON.stringify({ ok: false, error: String(e && e.message || e) }));
@@ -912,6 +927,17 @@ function killTree(pid) {
 								deps.pushFrame({ type: 'pet/open-settings', time: Date.now() });
 							}
 							const delivered = typeof deps.hasPageClients === 'function' ? !!deps.hasPageClients() : true;
+							/* 设置跳转补偿 v2（11-12）：同 pendingJump——无条件落库
+							 * （delivered=true 也可能是「僵尸渲染层在场」的假象）。 */
+							try {
+								const dir = deps.ledgerDir();
+								queueStoreWrite(dir, () => {
+									const doc = loadStore(dir) || {};
+									doc.pendingSettings = { time: Date.now() };
+									saveStoreAtomic(dir, doc);
+									return doc;
+								}).catch((e2) => log('pendingSettings persist failed: ' + String(e2 && e2.message || e2)));
+							} catch (e3) { /* ledger 不可用：跳过补偿 */ }
 							plain(res, 200, JSON.stringify({ ok: true, delivered: delivered }));
 						} catch (e) {
 							plain(res, 500, JSON.stringify({ ok: false, error: String(e && e.message || e) }));

@@ -72,12 +72,18 @@
 					headers: { 'content-type': 'application/json' },
 					body: JSON.stringify({ action: 'jump', code: code, atMs: atMs })
 				}).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (out) {
+					/* v2（11-12）：无论 delivered 都唤回窗口——delivered=true 也可能
+					 * 只是「退出挂起的僵尸渲染层」在场（跳转在看不见的窗口里执行
+					 * 了）。c:'revive' 由 ps1 分流：有窗=前台化；无窗=杀僵尸壳+重
+					 * 拉，ledger pendingJump 在新页鲸接入时 hello 补投自动兑现。
+					 * delivered=false 时通知保留未读（红标不掉）。 */
+					try {
+						if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+							window.chrome.webview.postMessage({ c: 'revive' });
+						}
+					} catch (e2) { }
 					if (out && out.ok === true && out.delivered === false) {
-						/* 常驻语义（11-06）：关窗≠退出——DSH 窗口关着时页鲸不在场
-						 * （宿主广播 pet/jump 无人消费），跳转落不了地。通知**保留
-						 * 未读**（红标不掉），用户重开 DSH 后再双击还能定位到任务
-						 * 节点——比默默标已读丢了通知诚实得多。 */
-						uiSay('DSH 窗口已关闭——打开 DSH 后再点我跳转吧 🐳', 3500);
+						uiSay('DSH 窗口已关——正在重开并自动跳转，稍等 🐳', 3500);
 					} else if (out && out.ok === true) {
 						/* jumping counts as reading the report (same contract as
 						 * the page whale): the badge drops and the notification
@@ -86,7 +92,7 @@
 					} else {
 						uiSay('通知已过期，回 DSH 看看吧 🐳', 2500);
 					}
-				}).catch(function () { /* network hiccup: the shell switch already happened */ });
+				}).catch(function () { /* network hiccup: the revive already fired */ });
 				return;
 			}
 			var sessionId = currentSaySession;

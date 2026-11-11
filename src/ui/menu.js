@@ -337,15 +337,19 @@
 							headers: { 'content-type': 'application/json' },
 							body: JSON.stringify({ action: 'open-settings' })
 						}).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (out) {
-							if (out && out.ok === true && out.delivered === true) {
-								try {
-									if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
-										window.chrome.webview.postMessage({ c: 'jump' });
-									}
-								} catch (e2) { }
-								uiSay('已在 DSH 打开小鲸鱼助手设置 ✓', 2200);
+							/* v2（11-12）：无论 delivered 都唤回窗口——delivered=true
+							 * 也可能只是退出挂起的僵尸渲染层在场；c:'revive' 由 ps1
+							 * 分流（有窗=前台化，无窗=杀僵尸壳+重拉，pendingSettings
+							 * 在新页鲸接入时 hello 补投自动打开设置页） */
+							try {
+								if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+									window.chrome.webview.postMessage({ c: 'revive' });
+								}
+							} catch (e2) { }
+							if (out && out.ok === true && out.delivered === false) {
+								uiSay('DSH 窗口已关——正在重开并进入设置页，稍等 🐳', 3500);
 							} else if (out && out.ok === true) {
-								uiSay('DSH 窗口未打开——先打开 DSH 再从桌宠菜单进设置 🐳', 3500);
+								uiSay('已打开小鲸鱼助手设置 ✓', 1800);
 							} else {
 								uiSay('跳转指令没有送达，稍后再试 🥲', 2500);
 							}

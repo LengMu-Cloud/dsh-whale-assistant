@@ -114,6 +114,17 @@
 										method: 'POST',
 										headers: { 'content-type': 'application/json' },
 											body: JSON.stringify({ action: 'jump', code: code, atMs: typeof endTime === 'number' ? endTime : undefined })
+									}).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (out) {
+										/* v2（11-12）：无论 delivered 都唤回窗口（同 bootstrap
+										 * 注释——delivered=true 也可能是僵尸渲染层在场） */
+										try {
+											if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+												window.chrome.webview.postMessage({ c: 'revive' });
+											}
+										} catch (e2) { }
+										if (out && out.ok === true && out.delivered === false) {
+											uiSay('DSH 窗口已关——正在重开并自动跳转，稍等 🐳', 3500, sessionId);
+										}
 									}).catch(function () {});
 									uiSay('正在打开对话… 🐳', 1500, sessionId);
 								} catch (e) {

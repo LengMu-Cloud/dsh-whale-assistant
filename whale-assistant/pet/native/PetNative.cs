@@ -35,6 +35,16 @@ public static class Native4
 	[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
 	[DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
 	[DllImport("user32.dll")] public static extern void keybd_event(byte k, byte scan, uint flags, UIntPtr extra);
+	public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
+	[DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr lParam);
+	[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+	[DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+	private static IntPtr _reviveHwnd;
+	public static IntPtr FindWindowOfPids(int[] pids) {
+		_reviveHwnd = IntPtr.Zero;
+		EnumWindows(delegate(IntPtr h, IntPtr l) { uint wpid = 0; GetWindowThreadProcessId(h, out wpid); foreach (int p in pids) { if (wpid == (uint)p) { _reviveHwnd = h; return false; } } return true; }, IntPtr.Zero);
+		return _reviveHwnd;
+	}
 	[StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
 	[StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
 	public const int GWL_EXSTYLE = -20;

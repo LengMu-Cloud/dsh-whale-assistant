@@ -1082,8 +1082,15 @@ function killTree(pid) {
 				try { dispose(); } catch (e) { /* route already gone */ }
 			}
 			enabled = false;
-			/* kill=false（11-06 常驻语义）：桌宠跟父进程走，不在收尾时连坐 */
-			return stopPet('dispose', false);
+			/* v14（11-13）：收尾必杀桌宠树（kill=true）。用户实报「重开 DSH 卡
+			 * 死」挂起复现实测 40s+——根因=桌宠页的 SSE（3s 自动重连进正在
+			 * 排空的服务器=新的活跃连接）+2s 轮询 keep-alive 把宿主
+			 * backend.close() 的连接排空拖死=壳停在退出挂起态（单实例锁握着
+			 * =重开无响应）。11-06 的 kill=false 常驻语义实际早已失效：壳的
+			 * Job 对象在壳死时本来就静默带走桌宠（02:46 世代无日志消失实证）
+			 * ——与其随机挂在 limbo，不如确定性放行。关窗→退出全程 ~3-5s，
+			 * 期间桌宠照常可点；窗口期过后重开 DSH 即时生效（无锁无 limbo）。 */
+			return stopPet('dispose', true);
 		}
 	};
 }

@@ -8,24 +8,41 @@
   /* 首建区域淡入：宿主第一次 SetWindowRgn 的 DWM re-clip 可能闪 1 帧空白
      （POC 坑 20）——鲸鱼从透明淡入 220ms，把这次重贴藏在淡入里 */
   #dsh-whale { opacity: 0; transition: opacity .22s ease; }
+  /* v12b（11-13）：桌宠文档没有宿主 CSS——--wh-* 全套在此钉死为暗色值
+     （桌宠无亮色模式）。必须 !important：client.js 后注入的 style.css
+     (:root,body 块，亮色兜底) 同特异性会覆盖这里，暗底深字=用户实锤
+     「右键菜单暗色下看不清」。侧边栏（宿主文档）不受影响，照常随主题。 */
+  :root, body {
+    --wh-panel-text: #f9fafb !important;
+    --wh-panel-muted: #cfd3d6 !important;
+    --wh-panel-head: #cfd3d6 !important;
+    --wh-panel-bg: #1b1b1c !important;
+    --wh-card-bg: #2c2c2e !important;
+    --wh-card-border: rgba(255, 255, 255, 0.14) !important;
+    --wh-panel-border: rgba(255, 255, 255, 0.12) !important;
+    --wh-panel-divider: rgba(255, 255, 255, 0.08) !important;
+    --wh-panel-hover: rgba(255, 255, 255, 0.08) !important;
+    --wh-panel-active: rgba(255, 255, 255, 0.14) !important;
+    --wh-accent: #7aaaff !important;
+  }
   /* 桌宠版面修正：DSH 页内 UI 的投影/毛玻璃是为应用深底设计的，透到任意壁纸上
      会显形成灰晕/黑块 —— 桌宠语境一律去阴影、玻璃改实色（与深色主题同色系）。
      水花/涟漪/喷水等水效保留半透明（透墙纸是合理观感）。 */
   #dsh-whale { filter: none !important; }
   #dsh-whale.dsh-whale-asleep { filter: grayscale(0.55) brightness(0.85) !important; }
   .dsh-whale-bubble, .dsh-whale-note {
-    background: #232b3f !important;
-    color: #e8eefc !important;
+    background: #2c2c2e !important;
+    color: #f9fafb !important;
     box-shadow: none !important;
     filter: none !important;
     backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
   }
   .dsh-whale-bubble::after, .dsh-whale-note::after {
-    border-top-color: #232b3f !important; border-bottom-color: #232b3f !important;
+    border-top-color: #2c2c2e !important; border-bottom-color: #2c2c2e !important;
   }
   .dsh-whale-menu, .dsh-whale-settings, .dsh-whale-wardrobe, .dsh-whale-history,
   .dsh-whale-status, .dsh-whale-status-report {
-    background: #141c30 !important;
+    background: #1b1b1c !important;
     box-shadow: none !important;
     filter: none !important;
     backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
@@ -60,12 +77,12 @@
     opacity: 0; transform: scale(0.25) rotate(-30deg);
     transition: transform .5s cubic-bezier(.34,1.56,.64,1), opacity .32s ease;
     pointer-events: none;
-    background: linear-gradient(150deg, rgba(56,74,118,0.60) 0%, rgba(24,34,62,0.58) 48%, rgba(88,110,168,0.42) 100%);
-    border: 1px solid rgba(255,255,255,0.32);
-    box-shadow: 0 8px 22px rgba(8,16,38,0.38),
+    background: linear-gradient(150deg, rgba(58,58,62,0.60) 0%, rgba(26,26,28,0.58) 48%, rgba(96,96,102,0.42) 100%);
+    border: 1px solid rgba(255,255,255,0.14);
+    box-shadow: 0 8px 22px rgba(0,0,0,0.38),
                 inset 0 1px 0 rgba(255,255,255,0.50),
-                inset 0 -8px 14px rgba(120,150,220,0.16),
-                inset 0 0 18px rgba(180,205,255,0.10);
+                inset 0 -8px 14px rgba(200,200,205,0.14),
+                inset 0 0 18px rgba(200,200,205,0.10);
   }
   body.pet-form-bubble #pet-bubble { opacity: 1; transform: scale(1) rotate(0deg); }
   /* 线稿鲸鱼：同一条 logo path，气泡语境下 stroke 化（线条而非实心）。
@@ -274,6 +291,7 @@
         if (r.status === 401 || r.status === 403) { authFail(); return null; }
         return r.ok ? r.json() : null;
       }).then(function (doc) {
+        if (doc) { fetchFails = 0; }
         if (doc && doc.form && doc.form !== currentForm) applyForm(doc.form);
         /* ---- 设置 relay（11-11 真机修复轮）：页面半区的 CONFIG/总静音经
            宿主 /pet/config 汇聚、随 state 轮询下发——桌宠 WebView2 是独立
@@ -295,11 +313,19 @@
             } catch (e1) { }
           }
         }
-      }).catch(function () { });
+      }).catch(function () {
+        if (++fetchFails >= 3) { try { clearInterval(stateTimer); } catch (e3) { } }
+      });
     } catch (e) { }
   }
+  /* v11（11-13）：离线停轮询——壳的退出流程要等 HTTP 连接排空才走完，桌宠
+   * 的 2s 轮询+keep-alive 会把排空拖死=壳停在退出挂起态（单实例锁握着=
+   * 用户重开 DSH 无响应）。连续 3 次失败即停轮询，连接归零让壳干净退场；
+   * 孤儿桌宠保留，点历史任务由 ps1 重拉壳（pendingJump 补投自动兑现）。 */
+  var fetchFails = 0;
+  var stateTimer = null;
   fetchState();
-  setInterval(fetchState, 2000);
+  stateTimer = setInterval(fetchState, 2000);
 
   /* ---- 宿主缝：whale.js 右键菜单构建时调用，追加桌宠三态形态组 ---- */
   window.__dshPetHost = {

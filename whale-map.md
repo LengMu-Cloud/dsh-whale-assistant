@@ -181,7 +181,7 @@
 
 > Session jump (inline module): open a conversation in the DSH UI and, when a target moment (atMs) is given, page the conversation log backwards until the rendered message stamps cover that moment (or the whole log is in memory), then scroll the closest older stamp into view.  0.4.0 provenance: this l
 
-**stampEls()** · **stampMs()** · **renderedOldestMs()** · **findOlderButton()** · **hasMoreNode()** · **clickOlderButton()** · **finish()**
+**stampEls()** · **stampMs()** · **renderedOldestMs()** · **findOlderButton()** · **hasMoreNode()** · **clickOlderButton()** · **finish()** · **runJumpChain()**
 
 ## **src/core/exports.js**（行切片）
 

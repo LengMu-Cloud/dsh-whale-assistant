@@ -2156,23 +2156,42 @@ async function main() {
 	assert.ok(hWrap, 'manual fixed-height scroll region exists');
 	const hListM = hWrap.children.find((c) => c.className === 'dsh-whale-history-list');
 	assert.ok(hListM, 'manual list is INSIDE the tab scroll region (content actually renders)');
-	assert.ok(hEl.textContent.includes('我是什么'), 'what-it-is section');
-	assert.ok(hEl.textContent.includes('通知一览'), 'notifications section');
-	assert.ok(hEl.textContent.includes('完成了'), 'completion explained');
-	assert.ok(hEl.textContent.includes('需要你选择'), 'question explained');
-	assert.ok(hEl.textContent.includes('需要你审核'), 'approval explained');
+	/* 11-13 三层重构契约：设计者视角 9 区 → 用户视角「三步上手 / 日常操作 /
+	 * 问题排障 / 更多细节」；机制内幕收进默认折叠区，行级渲染契约不破 */
+	const hSecs = hListM.children.filter((c) => (c.className || '').indexOf('dsh-whale-manual-sec') === 0);
+	assert.strictEqual(hSecs.length, 4, 'manual rebuilt into 4 sections (three user layers + folded details)');
+	assert.strictEqual(hSecs[0].getAttribute('data-folded'), '0', '三步上手 default expanded');
+	assert.ok(hSecs.slice(1).every((s) => s.getAttribute('data-folded') === '1'), '日常操作/排障/更多细节 default folded');
+	assert.ok(hEl.textContent.includes('我是什么'), 'what-it-is kept as folded 机制内幕 one-liner');
+	assert.ok(hEl.textContent.includes('通知响了'), 'notifications merged entry (看到→做什么)');
+	assert.ok(hEl.textContent.includes('双击看结果'), 'completion action explained');
+	/* 11-13 视觉重构契约：长横排「通知响了=该做什么」→ 卡片内 4 行两列
+	 * mini 矩阵（渲染层转译，PP_MANUAL_DATA 未动）——旧长句锚点
+	 * 「需要你选择/审核」由矩阵短语顶上，内容锚点仍逐一在场 */
+	assert.ok(hEl.textContent.includes('双击看原因'), 'fail action explained (通知矩阵短语)');
+	assert.ok(hEl.textContent.includes('双击直达决策处'), 'question/approval action explained (通知矩阵短语)');
+	assert.ok(hEl.textContent.includes('该收尾了'), 'pressure action explained (通知矩阵短语)');
 	const hRows = hListM.children.filter((c) => c.className === 'dsh-whale-help-row');
-	assert.strictEqual(hRows.length, 8, 'eight gesture rows');
+	assert.strictEqual(hRows.length, 11, '3 quick-start steps + 8 gestures as numbered rows');
 	assert.strictEqual(hRows[0].children[0].textContent, '1', 'row 1 badge number');
 	assert.ok(hRows[0].children[0].className.includes('dsh-whale-help-num'), 'badge element class');
-	assert.ok(hRows[7].children[1].textContent.includes('摸摸头'), 'last gesture intact');
-	assert.ok(hEl.textContent.includes('设置项详解'), 'settings section present');
+	assert.ok(hRows[3].children[1].textContent.includes('按住拖动'), 'gesture list restarts at 1 after the three steps');
+	assert.ok(hRows[10].children[1].textContent.includes('摸摸头'), 'last gesture intact (rows 0-2 quick start, 3-10 gestures)');
+	/* 11-13 视觉重构契约（第二刀）：非编号条目=轻卡片，机制内幕=无卡片
+	 * 紧凑行，通知矩阵 8 格挂 _mCells 进搜索契约 */
+	assert.strictEqual(hListM.children.filter((c) => (c.className || '') === 'dsh-whale-manual-item').length, 6, '6 flat cards (notify matrix + settings pointer + 4 troubleshooting)');
+	assert.strictEqual(hListM.children.filter((c) => (c.className || '').indexOf('dsh-whale-manual-detail') >= 0).length, 19, '19 mechanism-detail compact rows (no cards, visually separated layer)');
+	const hMxCard = hListM.children.find((c) => c._mCells && c._mCells.length === 8);
+	assert.ok(hMxCard, 'notify mini-matrix card mounts 8 searchable cells (_mCells contract)');
+	assert.ok(hMxCard.children.some((k) => (k.className || '').indexOf('dsh-whale-manual-matrix') >= 0), 'matrix grid element inside the card');
+	assert.ok(hEl.textContent.includes('常用设置在哪'), 'settings merged entry present (高频设置指向真实入口)');
 	assert.ok(hEl.textContent.includes('免打扰'), 'dnd explained');
 	assert.ok(hEl.textContent.includes('任务周报'), 'weekly report explained');
-	assert.ok(hEl.textContent.includes('调试模式'), 'debug mode explained (renamed from 诊断模式, #15)');
-	assert.ok(hEl.textContent.includes('运行状态'), 'run-status row explained (#14)');
-	assert.ok(hEl.textContent.includes('快速上手'), 'quick-start section tops the manual (newcomer onboarding)');
-	assert.ok(hEl.textContent.includes('常见问题'), 'FAQ section present');
+	assert.ok(hEl.textContent.includes('调试模式'), 'debug mode explained (folded 机制内幕)');
+	assert.ok(hEl.textContent.includes('运行状态'), 'run-status row explained (folded 机制内幕)');
+	assert.ok(hEl.textContent.includes('三步上手'), 'three-step quick start tops the manual (default expanded)');
+	assert.ok(hEl.textContent.includes('问题排障'), 'troubleshooting section present');
+	assert.ok(hEl.textContent.includes('点历史任务没反应'), 'new troubleshooting row: session jump auto-reopens DSH');
 	assert.ok(hEl.textContent.includes('红标'), 'badge semantics explained');
 	assert.ok(hEl.textContent.includes('好感'), 'companion section present');
 	/* 11-11 三方评审回归组：幂等挂载 / 版本行 / 压力全圈 / 导出闪现真实反馈 */
@@ -2970,20 +2989,98 @@ async function main() {
 	 * list but never appended it, so the report showed title+close only for
 	 * its whole life (user-reported "空的"). Also: drawers and floating
 	 * panels never stack (the settings panel used to cover the drawer). */
-	CG.pushHistory({ title: '周报任务A', sessionId: 'session-r1', kind: 'done', at: Date.now(), endTime: Date.now(), turnTokens: 1234 });
+	const r1End = Date.now();
+	CG.pushHistory({ title: '周报任务A', sessionId: 'session-r1', kind: 'done', at: r1End, endTime: r1End, turnTokens: 1234 });
 	CG.pushHistory({ title: '周报任务B', sessionId: 'session-r2', kind: 'question', at: Date.now(), endTime: Date.now(), turnTokens: null });
-	/* 📊 周报 Tab (11-09 the report drawer retired — the sidebar page owns it) */
+	/* 📊 周报 Tab (11-09 the report drawer retired — the sidebar page owns it;
+	 * 11-13 版式升级：今日汇总置顶 + 按天折叠展开当日会话明细 + 占比条 +
+	 * 会话行点击跳回——旧「日期死行假可点」契约有意变更：折叠头/会话行真可点，
+	 * 空日不可点) */
 	const ppRep = envCfg.sandbox.document.createElement('div');
 	envCfg.sandbox.window.__dshWhalePanel.mount(ppRep);
-	ppInner(ppRep).children.find((c) => (c.className || '').indexOf('dsh-whale-pp-tabs') >= 0)
-		.children.find((c) => (c.textContent || '').indexOf('📊 周报') >= 0)._fire('click', { stopPropagation() {} });
+	const repTabClick = (name) => ppInner(ppRep).children.find((c) => (c.className || '').indexOf('dsh-whale-pp-tabs') >= 0)
+		.children.find((c) => (c.textContent || '').indexOf(name) >= 0)._fire('click', { stopPropagation() {} });
+	const repList = () => ppInner(ppRep).children.find((c) => (c.className || '') === 'dsh-whale-pp-content')
+		.children.find((c) => (c.className || '') === 'dsh-whale-pp-report')
+		.children.find((c) => c.className === 'dsh-whale-history-list');
+	const repDayHeads = (lst) => lst.children.filter((c) => String(c.className || '').indexOf('dsh-whale-rep-day') === 0);
+	const repSrows = (lst) => lst.children.filter((c) => c.className === 'dsh-whale-rep-srow');
+	const repWalkCls = (node, cls) => {
+		if (node.className === cls) return node;
+		for (const c of node.children || []) { const hit = repWalkCls(c, cls); if (hit) return hit; }
+		return null;
+	};
+	repTabClick('📊 周报');
 	const rCard = ppInner(ppRep).children.find((c) => (c.className || '').indexOf('dsh-whale-pp-content') >= 0)
 		.children.find((c) => (c.className || '') === 'dsh-whale-pp-report');
 	assert.ok(rCard, 'report card container renders');
 	const rList = rCard.children.find((c) => c.className === 'dsh-whale-history-list');
 	assert.ok(rList, 'report list renders INSIDE the card (missing appendChild fixed)');
-	assert.ok(rList.textContent.includes('本周：✅') && rList.textContent.includes('❓'), 'done+question buckets counted (records from the flows above included)');
-	assert.ok(/[0-9]+(\.[0-9])?K tok/.test(rList.textContent), `token bucket summed in one-decimal fmtK (value depends on the flows above): ${(rList.textContent.match(/本周：[^❓]*❓[^·]*·[^t]*tok/) || ['?'])[0]}`);
+	/* ① 今日汇总行置顶：含「今日」+ 对话数；❓ 桶计入；fmtK 一位小数 */
+	const repSum = rList.children.find((c) => c.className === 'dsh-whale-report-summary');
+	assert.ok(rList.children[0] === repSum, 'today summary row tops the list');
+	assert.ok(repSum && repSum.textContent.includes('今日') && repSum.textContent.includes('个对话'),
+		`today summary carries the date + session count (records from the flows above included): ${repSum && repSum.textContent}`);
+	assert.ok(repSum.textContent.includes('❓'), 'question/approval bucket counted in the summary');
+	assert.ok(/[0-9]+(\.[0-9])?K tok/.test(repSum.textContent), `token bucket summed in one-decimal fmtK (value depends on the flows above): ${repSum.textContent}`);
+	assert.strictEqual(repSum.title, '任务数与 token 按日聚合；周报窗口 7 天', 'summary tooltip states the aggregation scope');
+	/* 按天折叠头：固定 7 个本地日历日，默认全收起；空日=「这天没有任务记录」不可展开 */
+	await sleep(30); /* pullCloudHistory onDone 二次 build 已落——重渲不叠加（11-11 双份回归点） */
+	assert.strictEqual(repDayHeads(rList).length, 7, 'seven calendar day rows render (cloud-pull rebuild must not double)');
+	assert.strictEqual(rList.children.filter((c) => c.className === 'dsh-whale-report-summary').length, 1, 'summary stays single after the cloud-pull rebuild');
+	const todayHead = repDayHeads(rList)[0];
+	assert.ok(/▸/.test(todayHead.textContent) && todayHead.textContent.includes('个对话'),
+		`day head collapsed by default with arrow + session count: ${todayHead.textContent}`);
+	assert.strictEqual(todayHead.title, '会话 token=当日该会话各轮消耗之和（turnTokens 口径）', 'day head tooltip states the turnTokens scope');
+	assert.ok(rList.textContent.includes('这天没有任务记录'), 'empty days render the no-record hint');
+	const emptyHead = repDayHeads(rList).find((c) => String(c.className).indexOf('dsh-whale-rep-day-empty') >= 0);
+	assert.ok(emptyHead && !/▸|▾/.test(emptyHead.textContent), 'empty day has no expand arrow (cursor:default, not clickable)');
+	emptyHead._fire('click', { stopPropagation() {} });
+	assert.strictEqual(repSrows(rList).length, 0, 'clicking an empty day expands nothing');
+	/* ② 展开今日：会话行带标题/时刻轮次状态/Σtoken + 占比条 */
+	todayHead._fire('click', { stopPropagation() {} });
+	assert.ok(repSrows(rList).length >= 2, `expanded day renders per-session rows: ${repSrows(rList).length}`);
+	assert.ok(rList.textContent.includes('周报任务A'), 'session row carries the record title');
+	const rArow = repSrows(rList).find((r) => r.textContent.includes('周报任务A'));
+	assert.ok(rArow && rArow.textContent.includes('1 轮') && rArow.textContent.includes('✅ 完成'),
+		`session meta line: time · turns · status: ${rArow && rArow.textContent}`);
+	const rAbar = rArow && repWalkCls(rArow, 'dsh-whale-rep-bar');
+	const rAfill = rArow && repWalkCls(rArow, 'dsh-whale-rep-fill');
+	assert.ok(rAbar && rAfill && /[0-9]+%/.test(rAfill.style.width), `share bar renders with a percent width: ${rAfill && rAfill.style.width}`);
+	assert.ok(rArow.textContent.includes('当日占比'), 'share label 当日占比 n% present');
+	/* 展开态存模块级 Set：切 Tab 再回来仍展开（跨重渲存活） */
+	repTabClick('⚙️ 设置');
+	repTabClick('📊 周报');
+	const rListB = repList();
+	assert.ok(repSrows(rListB).length >= 2, 'expand state survives tab switches (module-level Set memo)');
+	/* ③ 再次点击收起 */
+	repDayHeads(rListB)[0]._fire('click', { stopPropagation() {} });
+	assert.strictEqual(repSrows(repList()).length, 0, 'second click collapses the day (session rows gone)');
+	/* ④ 会话行跳转链与历史抽屉完全同链：先无桥（桥/侧栏全空 → 失败提示），
+	 * 再绑桥验证 openSessionAt 以 (sessionId, endTime||at) 调用 */
+	repDayHeads(repList())[0]._fire('click', { stopPropagation() {} });
+	const rListC = repList();
+	const srowA = repSrows(rListC).find((r) => r.textContent.includes('周报任务A'));
+	assert.ok(srowA, 'session row re-found after re-expand');
+	srowA._fire('click', { stopPropagation() {} });
+	assert.ok(envCfg.bubble().textContent.includes('跳转失败'), 'no bridge + empty sidebar -> the failure hint (same chain tail as the history drawer)');
+	const repOpened = [];
+	CG.bindJumpSessions({ open: (id, atMs) => { repOpened.push([id, atMs]); }, scope: () => ({ get: () => ({ loadOlder: () => {} }) }) });
+	srowA._fire('click', { stopPropagation() {} });
+	assert.deepStrictEqual(repOpened, [['session-r1', r1End]],
+		`session row click calls openSessionAt with (sessionId, endTime||at): ${JSON.stringify(repOpened)}`);
+	assert.ok(envCfg.bubble().textContent.includes('正在跳转到该对话'), 'success hint same as the history drawer');
+	/* ⑤ 云合并重渲不双份：服务器带回一条新记录，重开 Tab 后行数不翻倍 */
+	envCfg.setFetch(() => Promise.resolve({
+		ok: true,
+		json: () => Promise.resolve({ history: [{ title: '云端任务C', sessionId: 'session-r3', kind: 'done', at: Date.now() - 2 * 864e5, endTime: Date.now() - 2 * 864e5, turnTokens: 500 }] })
+	}));
+	repTabClick('⚙️ 设置');
+	repTabClick('📊 周报');
+	await sleep(30); /* merge + onDone rebuild 已落 */
+	const rListD = repList();
+	assert.strictEqual(repDayHeads(rListD).length, 7, 'cloud merge rebuild keeps exactly 7 day rows (no doubling)');
+	assert.strictEqual(rListD.children.filter((c) => c.className === 'dsh-whale-report-summary').length, 1, 'cloud merge rebuild keeps a single summary row');
 	/* legacy-default migration: a stored 8000 (the pre-M4 default that older
 	 * panel saves wrote wholesale) adopts the new 15s default on load, while
 	 * deliberately-chosen values (e.g. 30000) are respected */

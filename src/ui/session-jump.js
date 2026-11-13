@@ -380,24 +380,69 @@ if (typeof window !== 'undefined' && (window.__dshWhaleSessions || window.__dshW
  * 事件照常到达。载荷坏值只跳过本次，绝不打断监听。
  * atMs（11-06）：时间锚点透传——openSessionAt 的翻页回溯把桌宠通知/历史
  * 行所指的那条任务消息滚进视野（跳到任务节点，不再只跳到会话头部）。 */
-if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+	if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+	/* v16（11-13）：跳转串行化 + 隐藏期延迟执行。两个真机实锤断点：
+	 * ①隐藏窗里 openSessionAt 的翻页回溯靠 setTimeout（隐藏页被钳到
+	 *   ≥1s/步，大会话=分钟级爬行）且 33 次重试链同期在跑；
+	 * ②窗口唤醒瞬间 visibilitychange 重放与在途链并发=两条会话打开管线
+	 *   交错打满渲染层 JS 主线程=页面卡死（用户实报「弹出来的页面连啥都
+	 *   点不了」，进程全部 responding=True，刷新好几轮才恢复——JS 主线程
+	 *   被双管线打满的典型形态）。
+	 * 规则：隐藏期收到 pet/jump 只记意图不执行；唤醒后 visibilitychange
+	 * 以全速定时器跑单链；可见期新意图经 gen 闸门顶替在途链。 */
+	var jumpGen = 0, jumpBusy = false, lastPetJump = null;
+	function runJumpChain(sid, atMs, myGen) {
+		jumpBusy = true;
+		var tries = 0;
+		var attempt = function () {
+			if (myGen !== jumpGen) { jumpBusy = false; return; } /* 被新意图顶替 */
+			var ok = false;
+			try { ok = openSessionAt(sid, typeof atMs === 'number' ? atMs : undefined); } catch (e2) { ok = false; }
+			if (lastPetJump && lastPetJump.sid === String(sid)) lastPetJump.landed = ok;
+			/* v16 诊断缝：跳转链每次尝试的落点可见（真机排障 04:5x 十连不落地用） */
+			try { if (typeof window !== 'undefined' && window.__dshWhale) window.__dshWhale._petJumpState = { gen: myGen, sid: String(sid).slice(-12), atMs: atMs || 0, tries: tries, ok: ok, busy: jumpBusy, hidden: document.hidden === true, t: Date.now() }; } catch (e4) { }
+			if (ok) { jumpBusy = false; return; }
+			if (++tries < 33) { setTimeout(attempt, 300); return; }
+			jumpBusy = false;
+			try { if (typeof window !== 'undefined' && window.__dshWhale) window.__dshWhale._petJumpState = { gen: myGen, sid: String(sid).slice(-12), tries: tries, ok: false, exhausted: true, t: Date.now() }; } catch (e5) { }
+		};
+		attempt();
+	}
 	window.addEventListener('dsh-whale:pet-jump', function (ev) {
 		try {
 			var sid = ev && ev.detail && ev.detail.sessionId;
 			var atMs = ev && ev.detail && ev.detail.atMs;
 			if (!sid || typeof openSessionAt !== 'function') return;
-			/* 补投时序（11-11 四轮）：宿主 hello 补投可能早于 sessions/
-			 * uiWorkspace 桥注入（两路异步到达）——桥未绑定时 openSessionAt
-			 * 返回 false（no bridge bound）。有界重试：每 300ms 一次最多
-			 * ~10s，桥一就绪立即跳；真失败（会话不存在）10s 后放弃不打扰。 */
-			var tries = 0;
-			var attempt = function () {
-				var ok = false;
-				try { ok = openSessionAt(sid, typeof atMs === 'number' ? atMs : undefined); } catch (e2) { ok = false; }
-				if (ok) return;
-				if (++tries < 33) setTimeout(attempt, 300);
-			};
-			attempt();
+			jumpGen++;
+			var hidden = document.hidden === true;
+			lastPetJump = { sid: String(sid), atMs: typeof atMs === 'number' ? atMs : 0, at: Date.now(), whileHidden: hidden, landed: false };
+			if (hidden) return; /* 隐藏期只记意图：唤醒后由 visibilitychange 全速执行 */
+			runJumpChain(String(sid), atMs, jumpGen);
 		} catch (e) { /* a bad payload must not kill the listener */ }
+	});
+	document.addEventListener('visibilitychange', function () {
+		try {
+			if (document.hidden) return;
+			/* v17（11-13）：落点复核——真机实锤 openSessionAt 返回 true 只代表
+			 * 「打开已受理」，真正的会话导航在 occluded 页里被冻结（窗口被遮挡
+			 * 时标题不变=没落地，回视=旧会话+页面卡死）。回视时校验：意图 120s
+			 * 内 &&（未落地 || 当前标题不含目标会话名）→ 全速重发单链。标题从
+			 * ui 闭包的 history 里按 sid 反查最新记录。 */
+			if (lastPetJump && Date.now() - lastPetJump.at < 120000 && typeof openSessionAt === 'function') {
+				var need = !!lastPetJump.whileHidden || !lastPetJump.landed;
+				if (!need) {
+					var rec = null;
+					try { rec = (typeof history !== 'undefined' ? (history || []) : []).filter(function (h) { return h.sessionId === lastPetJump.sid; }).sort(function (a, b) { return (b.at || 0) - (a.at || 0); })[0] || null; } catch (e1) { }
+					var want = rec ? String(rec.title || '') : '';
+					need = !!want && (document.title || '').indexOf(want) === -1;
+				}
+				if (need) {
+					lastPetJump.whileHidden = false;
+					jumpGen++;
+					var jp = lastPetJump;
+					setTimeout(function () { runJumpChain(jp.sid, jp.atMs, jumpGen); }, 250);
+				}
+			}
+		} catch (e) { }
 	});
 }

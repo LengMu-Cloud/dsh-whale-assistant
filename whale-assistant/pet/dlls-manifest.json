@@ -13,11 +13,11 @@
     "WebView2Loader.dll": "462b36fd1be6ca9f7563466a89e57c41ef4a4def3e0a84fa885d203aea4a3aaf",
     "Microsoft.Web.WebView2.Core.dll": "88a3b62f45225a811cdb85df6dfd95c2bff9a0e43e3b04f813b125eaca56cc9f",
     "Microsoft.Web.WebView2.Wpf.dll": "1c5b6c792916d168093ef9b836f33e818d2d15d0c81f0864b5cddff97d913319",
-    "PetNative.dll": "62663b59bb684ea65cbfd66cb238e8182359bee358b798e13cbd74ddab8d3836"
+    "PetNative.dll": "3ace910f6fb84ea9b0c22b49865dda0c3cde1bc21d9c270dcfb7a82322221690"
   },
   "petNative": {
     "source": "pet/native/PetNative.cs (source of truth — edit it, rebuild via scripts/build-pet-native.ps1, refresh this hash)",
-    "built": "2026-11-12",
+    "built": "2026-11-13",
     "why": "pet.ps1's inline Add-Type compiled this P/Invoke class with csc.exe on every cold start — measured 14.5s (11-06 boot log). Precompiled load removes the compiler from the boot path; Add-Type remains as fallback.",
     "compiler": "Windows PowerShell 5.1 / .NET Framework v4.0.30319 csc.exe, /target:library /platform:anycpu"
   },

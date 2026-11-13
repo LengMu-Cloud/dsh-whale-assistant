@@ -2296,6 +2296,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			}
 		consume([f], sseBootId || undefined);
 	}
+	var sseFails = 0;
 	function connectSSE() {
 		/* 11-06 枚举 SSE 流（用户实报「任务通知有延时」）：宿主现在按 pet
 		 * token 把 SSE 连接分流——桌宠连接收到的是逐帧枚举载荷（与 /pet/feed
@@ -2304,9 +2305,36 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		 * poll 恢复跑 /pet/feed 补漏帧，lastSeq 闸门去重）。 */
 		if (typeof EventSource !== 'function') return; /* vm sandbox / ancient browsers */
 		try { sse = new EventSource('/api/whale-assistant/events/stream'); } catch (e) { return; }
-		sse.onopen = function () { sseUp = true; };
-		sse.onerror = function () { sseUp = false; }; /* EventSource auto-reconnects */
+		sse.onopen = function () { sseUp = true; sseFails = 0; };
+		sse.onerror = function () {
+			sseUp = false; /* EventSource auto-reconnects */
+			/* v15（11-13）：离线熔断——壳退出时宿主服务器排空连接，EventSource
+			 * 的 3s 自动重连会不断造出新的活跃连接，把排空拖成死锁（壳停在退
+			 * 出挂起态=单实例锁握着=用户重开 DSH 无响应，挂起复现实测 40s+，
+			 * 桌宠连接归零后依然挂=重连风暴才是主阻塞）。连续 3 次失败（约
+			 * 9s）即关闭事件源停止重连，让壳干净退场；恢复钩子=可见/聚焦/上线
+			 * 三事件重新 connectSSE（关窗唤醒后页鲸照常回线，hello 补投兑现）。 */
+			if (++sseFails >= 3 && sse) {
+				try { sse.close(); } catch (e2) { }
+				sse = null;
+			}
+		};
 		sse.onmessage = function (ev) { handleSseData(ev.data); };
+	}
+	/* v15：熔断后的恢复钩子——窗口重新可见/获得焦点/系统网络恢复时重连。
+	 * 退出挂起期的隐藏页不会触发这些事件=保持断开=排空不被打扰。 */
+	if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+		document.addEventListener('visibilitychange', function () {
+			try { if (!document.hidden && !sse) { sseFails = 0; connectSSE(); } } catch (e) { }
+		});
+	}
+	if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+		window.addEventListener('focus', function () {
+			try { if (!sse) { sseFails = 0; connectSSE(); } } catch (e) { }
+		});
+		window.addEventListener('online', function () {
+			try { if (!sse) { sseFails = 0; connectSSE(); } } catch (e) { }
+		});
 	}
 	/* test seam: this whole module is a closure, so exports.js can't see it —
 	 * mirror the _pollConsume pattern and hang the handler on the window seam */
@@ -6287,7 +6315,16 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 										if (out && out.ok === true && out.delivered === false) {
 											uiSay('DSH 窗口已关——正在重开并自动跳转，稍等 🐳', 3500, sessionId);
 										}
-									}).catch(function () {});
+									}).catch(function () {
+										/* v8（11-13）：引擎不可达时 fetch 秒拒、.then 不跑，
+										 * 唤窗消息就丢了——catch 里也要尝试唤回（壳真死由
+										 * CIM 重拉），别让「点了没反应」连窗口都不弹。 */
+										try {
+											if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+												window.chrome.webview.postMessage({ c: 'revive' });
+											}
+										} catch (e3) { }
+									});
 									uiSay('正在打开对话… 🐳', 1500, sessionId);
 								} catch (e) {
 									uiSay('跳转失败，稍后再试 🥲', 2000, sessionId);
@@ -6716,49 +6753,128 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					 * 全宽自滚容器，page（pp）=860px 居中栏。**pp 与 pp-host 从此
 					 * 不同元素**——11-11 的双类源序冲突坑永久消失 */
 					'.dsh-whale-pp-host{height:100%;min-height:0;overflow-y:auto;overscroll-behavior:contain}',
-					/* 自带深夜蓝底（11-11 审计 P2-4）：页面嵌在 DSH main 区而 DSH 有
-					 * 明暗双主题（body[data-ds-dark-theme]）——透明底+固定浅字在亮
-					 * 主题下不可读。rgba 底在暗色宿主上几乎无感，亮色下自持可读 */
-					'.dsh-whale-pp{width:min(100%,860px);margin:0 auto;padding:20px 26px;font-size:13px;color:var(--dsw-panel-text);background:var(--dsw-panel-bg)}',
+					/* 页面底/文字直读 --wh-* token（DSH alias），亮暗主题自动跟随：
+					 * 面板底=bg-layer-1 实底，卡片/行=bg-layer-2+card-stroke 描边，
+					 * tint 一律走 interactive-bg-hover/active，不再自带深夜蓝硬编码 */
+					'.dsh-whale-pp{width:min(100%,860px);margin:0 auto;padding:20px 26px;font-size:13px;color:var(--wh-panel-text);background:var(--wh-panel-bg)}',
 					'.dsh-whale-pp-tabs{display:flex;gap:8px;margin:6px 0 18px}',
-					'.dsh-whale-pp-tab{padding:7px 20px;border-radius:var(--dsw-radius-full);cursor:pointer;border:1px solid var(--dsw-panel-border);color:var(--dsw-panel-muted);background:transparent;font-size:13px}',
-					'.dsh-whale-pp-tab.on{background:var(--dsw-panel-active);color:var(--dsw-panel-text)}',
-					'.dsh-whale-pp-sec{margin:20px 0 8px;font-weight:600;color:var(--dsw-panel-head);font-size:12px}',
-					'.dsh-whale-pp-row{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-radius:var(--dsw-radius-s);cursor:pointer;background:rgba(99,150,255,0.07);margin:5px 0}',
-					'.dsh-whale-pp-row:hover{background:var(--dsw-panel-hover)}',
-					'.dsh-whale-pp-val{color:var(--dsw-panel-muted)}',
-					'.dsh-whale-pp-health{display:flex;gap:18px;flex-wrap:wrap;align-items:center;padding:10px 14px;border-radius:var(--dsw-radius-s);background:rgba(99,150,255,0.07);margin:14px 0 0}',
-					'.dsh-whale-pp select{background:var(--dsw-panel-bg);color:var(--dsw-panel-text);border:1px solid var(--dsw-panel-border);border-radius:var(--dsw-radius-s);padding:4px 8px;font-size:12px}',
+					'.dsh-whale-pp-tab{padding:7px 20px;border-radius:var(--wh-radius-full);cursor:pointer;border:1px solid var(--wh-panel-border);color:var(--wh-panel-muted);background:transparent;font-size:13px}',
+					'.dsh-whale-pp-tab.on{background:var(--wh-panel-active);color:var(--wh-panel-text)}',
+					'.dsh-whale-pp-sec{margin:20px 0 8px;font-weight:600;color:var(--wh-panel-head);font-size:12px}',
+					'.dsh-whale-pp-row{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-radius:var(--wh-radius-s);cursor:pointer;background:var(--wh-card-bg);border:1px solid var(--wh-card-border);margin:5px 0}',
+					'.dsh-whale-pp-row:hover{background:var(--wh-panel-hover)}',
+					'.dsh-whale-pp-val{color:var(--wh-panel-muted)}',
+					'.dsh-whale-pp-health{display:flex;gap:18px;flex-wrap:wrap;align-items:center;padding:10px 14px;border-radius:var(--wh-radius-s);background:var(--wh-card-bg);border:1px solid var(--wh-card-border);margin:14px 0 0}',
+					'.dsh-whale-pp select{background:var(--wh-panel-bg);color:var(--wh-panel-text);border:1px solid var(--wh-panel-border);border-radius:var(--wh-radius-s);padding:4px 8px;font-size:12px}',
 					'.dsh-whale-pp-petbtns{display:flex;gap:10px;margin:10px 0}',
-					'.dsh-whale-pp-petbtn{flex:1;padding:12px 10px;border-radius:var(--dsw-radius-s);border:1px solid var(--dsw-panel-border);cursor:pointer;background:rgba(99,150,255,0.07);color:var(--dsw-panel-text);text-align:center;font-size:13px}',
-					'.dsh-whale-pp-petbtn.on{background:var(--dsw-panel-active);border-color:var(--dsw-accent)}',
-					'.dsh-whale-pp-status{color:var(--dsw-panel-muted);margin:8px 0 4px;font-size:12px}',
+					'.dsh-whale-pp-petbtn{flex:1;padding:12px 10px;border-radius:var(--wh-radius-s);border:1px solid var(--wh-card-border);cursor:pointer;background:var(--wh-card-bg);color:var(--wh-panel-text);text-align:center;font-size:13px}',
+					'.dsh-whale-pp-petbtn.on{background:var(--wh-panel-active);border-color:var(--wh-accent)}',
+					'.dsh-whale-pp-status{color:var(--wh-panel-muted);margin:8px 0 4px;font-size:12px}',
 					'.dsh-whale-pp-content .dsh-whale-history-list{max-height:none}',
 					'.dsh-whale-pp-content .dsh-whale-manual-search{width:100%;margin:0 0 8px}',
 					/* 使用说明 Tab：高度实测自适应窗口（用户反馈固定 calc 边界
 					 * 悬空/局促——「直接适应窗口范围」）：底边=视口底-24px */
 					'.dsh-whale-pp-manual{overflow-y:auto;padding-right:4px;overscroll-behavior:contain}',
 					/* 周报 Tab：报告列表卡片化（旧抽屉壳的观感由这里补齐） */
-					'.dsh-whale-pp-report{background:rgba(99,150,255,0.07);border:1px solid var(--dsw-panel-border);border-radius:var(--dsw-radius-m);padding:14px 16px;margin:14px 0 6px}',
+					'.dsh-whale-pp-report{background:var(--wh-card-bg);border:1px solid var(--wh-card-border);border-radius:var(--wh-radius-m);padding:14px 16px;margin:14px 0 6px}',
 					'.dsh-whale-pp-report .dsh-whale-history-list{max-height:none}',
-					'.dsh-whale-pp-report .dsh-whale-report-summary{font-weight:600;color:var(--dsw-panel-head);padding:8px 14px;background:rgba(99,150,255,0.15);border-radius:var(--dsw-radius-s);margin-bottom:8px}',
-					'.dsh-whale-pp-report .dsh-whale-history-row{display:flex;justify-content:space-between;padding:10px 14px;background:rgba(99,150,255,0.10);border-radius:var(--dsw-radius-s);margin:5px 0}',
+					'.dsh-whale-pp-report .dsh-whale-report-summary{font-weight:600;color:var(--wh-panel-head);padding:8px 14px;background:var(--wh-panel-hover);border-radius:var(--wh-radius-s);margin-bottom:8px}',
+					'.dsh-whale-pp-report .dsh-whale-history-row{display:flex;justify-content:space-between;padding:10px 14px;background:var(--wh-panel-hover);border-radius:var(--wh-radius-s);margin:5px 0}',
 					/* 日期行假可点（主观痛点 9）：手型与 hover 高亮继承自旧抽屉
 					 * 样式而页面无点击行为——指针与 hover 都收掉，tooltip 保留 */
 					'.dsh-whale-pp-report .dsh-whale-history-row{cursor:default}',
-					'.dsh-whale-pp-report .dsh-whale-history-row:hover{background:rgba(99,150,255,0.10)}',
+					'.dsh-whale-pp-report .dsh-whale-history-row:hover{background:var(--wh-panel-hover)}',
 					/* 页头（官方页 h1 20px/500 + 13px 描述行） */
-					'.dsh-whale-pp-title{font-size:20px;font-weight:500;line-height:28px;color:var(--dsw-panel-head);margin-top:2px}',
-					'.dsh-whale-pp-desc{font-size:13px;line-height:20px;color:var(--dsw-panel-muted);margin:4px 0 0}',
+					'.dsh-whale-pp-title{font-size:20px;font-weight:500;line-height:28px;color:var(--wh-panel-head);margin-top:2px}',
+					'.dsh-whale-pp-desc{font-size:13px;line-height:20px;color:var(--wh-panel-muted);margin:4px 0 0}',
 					/* 音色子行从属感（主观痛点 7）：左缩进一档 */
 					'.dsh-whale-pp-tone-detail{margin-left:18px}',
 					/* 试听按钮（11-11 三报）：select 重选同值不触发 change——
 					 * 显式试听按钮兜住「想听已选中声音」的场景 */
 					'.dsh-whale-tone-right{display:flex;align-items:center;gap:8px}',
-					'.dsh-whale-tone-play{background:var(--dsw-panel-bg);color:var(--dsw-panel-text);border:1px solid var(--dsw-panel-border);border-radius:var(--dsw-radius-s);padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit}',
-					'.dsh-whale-tone-play:hover{background:var(--dsw-panel-hover)}',
+					'.dsh-whale-tone-play{background:var(--wh-panel-bg);color:var(--wh-panel-text);border:1px solid var(--wh-panel-border);border-radius:var(--wh-radius-s);padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit}',
+					'.dsh-whale-tone-play:hover{background:var(--wh-panel-hover)}',
 					/* 桌宠未启用：按钮置灰（主观痛点 10） */
-					'.dsh-whale-pp-petbtn.off{opacity:.45;cursor:default}'
+					'.dsh-whale-pp-petbtn.off{opacity:.45;cursor:default}',
+					/* —— 周报新版式（11-13）：今日汇总置顶 + 按天折叠展开当日会话
+					 * 明细 + token 占比条 + 会话行点击跳回。旧的「日期行假可点」
+					 * 规则（.dsh-whale-history-row cursor:default，上方 51-54 行）
+					 * 只匹配旧类名，新类名不受影响；全部走 --wh-* token 体系，
+					 * 亮暗主题自动跟随 */
+					/* 日期折叠头：可点（真可点了——旧评审的假可点收指针行为有意
+					 * 变更），hover 抬到 panel-active 给出可点反馈 */
+					'.dsh-whale-pp-report .dsh-whale-rep-day{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--wh-panel-hover);border-radius:var(--wh-radius-s);margin:5px 0;cursor:pointer}',
+					'.dsh-whale-pp-report .dsh-whale-rep-day:hover{background:var(--wh-panel-active)}',
+					/* 空日：无展开行为——指针与 hover 反馈都收掉（与 .rep-day:hover
+					 * 同特异性、源序在后=胜出） */
+					'.dsh-whale-pp-report .dsh-whale-rep-day-empty{cursor:default}',
+					'.dsh-whale-pp-report .dsh-whale-rep-day-empty:hover{background:var(--wh-panel-hover)}',
+					'.dsh-whale-rep-day-left{color:var(--wh-panel-text)}',
+					'.dsh-whale-rep-day-right{color:var(--wh-panel-muted);font-size:12px}',
+					/* 展开后的会话明细行：cursor:pointer 只给折叠头与会话行 */
+					'.dsh-whale-pp-report .dsh-whale-rep-srow{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:8px 12px 8px 24px;border-radius:var(--wh-radius-s);margin:3px 0;cursor:pointer}',
+					'.dsh-whale-pp-report .dsh-whale-rep-srow:hover{background:var(--wh-panel-hover)}',
+					'.dsh-whale-rep-smain{display:flex;flex-direction:column;min-width:0}',
+					'.dsh-whale-rep-stitle{color:var(--wh-panel-text)}',
+					'.dsh-whale-rep-smeta{color:var(--wh-panel-muted);font-size:12px;margin-top:2px}',
+					'.dsh-whale-rep-sright{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0}',
+					'.dsh-whale-rep-stok{color:var(--wh-panel-muted);font-size:12px}',
+					/* 占比条：4px 纯 CSS 条，底槽=panel-hover（token 体系下即宿主
+					 * interactive-bg-hover），填充=accent */
+					'.dsh-whale-rep-share{display:flex;align-items:center;gap:6px}',
+					'.dsh-whale-rep-bar{width:90px;height:4px;border-radius:2px;background:var(--wh-panel-hover);overflow:hidden}',
+					'.dsh-whale-rep-fill{height:100%;background:var(--wh-accent);border-radius:2px}',
+					'.dsh-whale-rep-pct{color:var(--wh-panel-muted);font-size:11px}',
+					/* —— 使用说明三层重构（11-13）：分区头 flex 化，右侧徽标/摘要
+					 * 挤到行尾（::after 折叠箭头在 flex 里按普通项排到最右，旧
+					 * float 规则对 flex 项自动失效）；全部走 --wh-* token 体系，
+					 * 亮暗主题自动跟随 */
+					'.dsh-whale-pp-manual .dsh-whale-manual-sec{display:flex;align-items:baseline;gap:8px}',
+					'.dsh-whale-manual-badge{flex:none;font-size:10px;font-weight:500;line-height:16px;padding:0 7px;border-radius:var(--wh-radius-full);border:1px solid var(--wh-accent);color:var(--wh-accent);white-space:nowrap}',
+					'.dsh-whale-manual-hint{margin-left:auto;font-size:10px;font-weight:400;color:var(--wh-panel-muted);white-space:nowrap}',
+					/* 编号手势行两行式：说明行 flex-basis:100% 强制换行，左缩进
+					 * 对齐正文（编号 18px + gap 10px = 28px） */
+					'.dsh-whale-pp-manual .dsh-whale-help-row{flex-wrap:wrap;align-items:flex-start}',
+					'.dsh-whale-pp-manual .dsh-whale-help-row .dsh-whale-manual-d{flex:1 1 100%;margin:0 0 2px 28px;padding:0}',
+					/* —— 使用说明视觉重构（11-13 第二轮）：用户批「打开很乱、
+					 * 一堆字堆上去、没有分类感」——条目卡片化 + 通知矩阵 +
+					 * 机制内幕紧凑行。全部走 --wh-* token（唯一例外=搜索命中
+					 * 底色沿用 style.css 既有 rgba 命中值，不新增色值）；选择器
+					 * 全部钉在 .dsh-whale-pp-manual 作用域，历史抽屉/设置页零波及。
+					 *特异性按 (0,2,0) 起步压过 style.css 的 (0,1,0) 基类规则 */
+					/* ① 条目卡片：三步上手/日常操作/问题排障的每个条目一张轻卡片 */
+					'.dsh-whale-pp-manual .dsh-whale-manual-item{background:var(--wh-card-bg);border:1px solid var(--wh-card-border);border-radius:var(--wh-radius-m);padding:9px 12px;margin:0 0 8px}',
+					/* ② 卡片头行（标题）：12.5px/600 与描述行拉开视觉层级；编号
+					 * 手势行同款卡片（类名保持 dsh-whale-help-row=测试/搜索契约） */
+					'.dsh-whale-pp-manual .dsh-whale-manual-t{font-size:12.5px;font-weight:600;color:var(--wh-panel-text);line-height:18px}',
+					'.dsh-whale-pp-manual .dsh-whale-help-text{font-size:12.5px;font-weight:600;color:var(--wh-panel-text);line-height:18px}',
+					'.dsh-whale-pp-manual .dsh-whale-help-row{background:var(--wh-card-bg);border:1px solid var(--wh-card-border);border-radius:var(--wh-radius-m);padding:9px 12px;margin:0 0 8px}',
+					/* 编号徽章：方形→圆形（18px 徽章居中排版走 inline-flex） */
+					'.dsh-whale-pp-manual .dsh-whale-help-num{width:18px;height:18px;border-radius:50%;background:var(--wh-accent);color:#fff;font-size:10.5px;display:inline-flex;align-items:center;justify-content:center;flex:none}',
+					/* ③ 描述行：muted 11.5px/1.6，头行下留 3px 呼吸；手势行说明行
+					 * 缩进对齐正文（编号 18px + gap 10px = 28px，与上方既有规则
+					 * 同特异性靠源序覆写其 margin） */
+					'.dsh-whale-pp-manual .dsh-whale-manual-d{margin-top:3px;font-size:11.5px;line-height:1.6;color:var(--wh-panel-muted)}',
+					'.dsh-whale-pp-manual .dsh-whale-help-row .dsh-whale-manual-d{margin:3px 0 0 28px}',
+					/* ④ 通知矩阵（「通知响了=该做什么」）：一句长横排 → 卡片内
+					 * 4 行两列 grid，左列=状态（panel-text）右列=动词短句（muted） */
+					'.dsh-whale-pp-manual .dsh-whale-manual-matrix{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;margin-top:6px}',
+					'.dsh-whale-pp-manual .dsh-whale-manual-mx-s{font-size:11.5px;line-height:1.6;color:var(--wh-panel-text);white-space:nowrap}',
+					'.dsh-whale-pp-manual .dsh-whale-manual-mx-a{font-size:11.5px;line-height:1.6;color:var(--wh-panel-muted)}',
+					/* 搜索命中底色：style.css 的 (0,1,0) .help-hit 规则压不过上面的
+					 * (0,2,0) 卡片底色——同值复写提特异性（色值沿用 style.css
+					 * 既有命中底色，非新增） */
+					'.dsh-whale-pp-manual .dsh-whale-manual-item.dsh-whale-help-hit,.dsh-whale-pp-manual .dsh-whale-help-row.dsh-whale-help-hit{background:rgba(255,199,0,0.12)}',
+					/* 手册内 mark 高亮统一兜底（含手势行说明行——style.css 的
+					 * mark 选择器组漏了它，顺手补齐），全部走 token */
+					'.dsh-whale-pp-manual mark{background:var(--wh-highlight);color:var(--wh-panel-text);border-radius:2px;padding:0 1px}',
+					/* ⑤ 机制内幕区（ℹ️ 更多细节）：无卡片——透明底单行紧凑行 +
+					 * 分隔线，与主区卡片视觉分层；整区透明度 0.92 */
+					'.dsh-whale-pp-manual .dsh-whale-manual-item.dsh-whale-manual-detail{background:transparent;border:0;border-bottom:1px solid var(--wh-panel-divider);border-radius:0;padding:5px 2px;margin:0;opacity:.92;font-size:11.5px;line-height:1.55}',
+					/* 标题与说明同行：inline 化 + 6px 间隔（标题 600/panel-text，
+					 * 说明 muted——词条色 token 由上面共享规则带下来） */
+					'.dsh-whale-pp-manual .dsh-whale-manual-detail .dsh-whale-manual-t{display:inline;font-size:11.5px;line-height:inherit}',
+					'.dsh-whale-pp-manual .dsh-whale-manual-detail .dsh-whale-manual-d{display:inline;margin:0 0 0 6px;font-size:11.5px;line-height:inherit}'
 				].join('');
 				(document.head || document.body).appendChild(css); /* vm mock 无 head */
 			}
@@ -7115,11 +7231,64 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			}
 			render();
 		}
-		/* 📖 使用说明 Tab（11-08 自 openHelp 抽屉原样迁入——搜索/折叠/命中高亮/
-		 * 孤头隐藏全保留；抽屉壳（showSidePanel/页脚/视口封顶）随「右键菜单项
-		 * 取消」一并退役，页面自然滚动。折叠记忆跨 Tab 切换存活。 */
+		/* 📖 使用说明 Tab（11-08 自 openHelp 抽屉迁入；11-13 三层重构——设计者
+		 * 视角 9 区 49 条全量平铺 → 纯用户视角「🚀 三步上手 / 🎮 日常操作 /
+		 * 🔧 问题排障 / ℹ️ 更多细节」四区 36 条，机制内幕 19 条收进默认折叠
+		 * 区）。搜索/折叠/命中高亮/孤头隐藏/折叠记忆/sticky 吸顶全保留；内容
+		 * 抽成 PP_MANUAL_DATA 数据数组，渲染器只认数据（解释单源化）。 */
 		var ppManualFoldMemo = {};
 		var __ppManualResize = null; /* 手册滚动区的 resize 处理器——重复 mount 只留一个存活 */
+		/* 手册内容=纯数据（11-13 重构）。g=编号行（三步上手 1-3 / 日常操作手势
+		 * 1-8，编号两行式），t=词条，d=说明；badge/hint=分区头右侧徽标与摘要。
+		 * 入口描述与真实入口逐一核对：右键菜单 6 项（⏰ 提醒我 / 声音 /
+		 * 🎨 我的装扮 / 📜 历史任务 / ⚙️ 设置 / 🔄 刷新页面，menu.js 11-11
+		 * 收口后现状）+ 桌宠窗口缝入的形态三项；侧边栏 4 Tab（TABS 表）。 */
+		var PP_MANUAL_DATA = [
+			{ sec: '🚀 三步上手', badge: '默认展开', items: [
+				{ g: 1, t: '打开菜单', d: '右键小鲸鱼 → 提醒我 / 声音 / 我的装扮 / 历史任务 / 设置 / 刷新页面；其余都在 DSH 左侧栏「小鲸鱼助手」页——设置 / 桌宠 / 周报 / 使用说明 四个 Tab。' },
+				{ g: 2, t: '看通知、点跳转', d: '任务开始 / 完成 / 需要你操作时会响铃 + 冒气泡；双击气泡或通知直接跳到对应对话。红标数字 = 未读条数，单击读一条、双击全清。' },
+				{ g: 3, t: '移动与形态', d: '按住鲸鱼拖到喜欢的位置，位置会记住；侧边栏「🐋 桌宠」Tab 或桌宠右键菜单可切换 🐋 完整形态 / 🫧 缩成气泡 / 🙈 躲猫猫。' }
+			] },
+			{ sec: '🎮 日常操作', hint: '手势 · 通知 · 常用设置', items: [
+				{ g: 1, t: '按住拖动：移动我', d: '拖到喜欢的角落，位置会记住。' },
+				{ g: 2, t: '左键单击：读通知 / 互动', d: '有未读就逐条读给你；没有未读就陪我聊一句。' },
+				{ g: 3, t: '左键双击：游回角落', d: '游回右下角待命，中途可抓住。' },
+				{ g: 4, t: '双击通知气泡：跳回对话', d: '直达对应对话，并把 DSH 窗口拉到前台。' },
+				{ g: 5, t: '单击红标数字：读一条', d: '读过的自动消失（红标 -1）。' },
+				{ g: 6, t: '双击红标数字：清空全部', d: '所有未读一键清零。' },
+				{ g: 7, t: '右键：打开菜单', d: '提醒我 / 声音 / 我的装扮 / 历史任务 / 设置 / 刷新页面。' },
+				{ g: 8, t: '右键双击：摸摸头', d: '好感 +1，还有小心心飘出。' },
+				{ t: '通知响了 = 该做什么', d: '✅ 完成 → 双击看结果；❌ 失败 / 截断 → 双击去看原因；❓ 需要你选择 / 🛡 需要你审核 → 只有等你点，双击直达决策处；🌡 上下文压力高 → 该收尾了（/compact）。' },
+				{ t: '常用设置在哪', d: '声音 / 音量 / 音色 / 免打扰 / 开工通知 / 导出历史 → 侧边栏「⚙️ 设置」页：音色每行 ▶ 试听即点即听、免打扰时段点击循环切换；任务周报有专门的「📊 周报」Tab。' }
+			] },
+			{ sec: '🔧 问题排障', hint: '4 条', items: [
+				{ t: '没声音？', d: '先看右键菜单 🔊 声音是否开、设置页音量拉起、避开免打扰时段；还不行点音色行的 ▶ 试听——试听也不响 = 系统音量 / 输出设备问题。' },
+				{ t: '通知突然不来了？', d: '多半是页面放久了过期：刷新 DSH 页面——右键菜单 🔄 刷新页面（浏览器按 Ctrl+F5）；桌宠在岗时页内静默是正常的，铃在桌宠那边响。' },
+				{ t: '装了新版没变化？', d: '刷新页面就会加载新代码（右键菜单 🔄 或 Ctrl+F5）；侧边栏页整个消失 = 管理页里插件被停用了。' },
+				{ t: '点历史任务没反应？', d: 'DSH 关着时会自动重开窗口并跳转（约几秒）；刚重开 DSH 的几十秒内桌宠在换代，稍等再点。' }
+			] },
+			{ sec: 'ℹ️ 更多细节（机制内幕）', badge: '默认折叠', items: [
+				{ t: '我是什么', d: '只读任务事件做播报和记录的打工小鲸鱼——不拦截、不修改任何任务行为，随便折腾不影响工作。' },
+				{ t: '常驻与自愈', d: '桌宠跟着 DSH 走：开 DSH 就在（关窗≠退出），宿主每 30 秒体检、意外消失约 1 分钟内自动重生。' },
+				{ t: '设置同步', d: '侧边栏页里改的音色 / 音量 / 免打扰等约 2 秒内自动下发到桌宠，不用两边各设。' },
+				{ t: '红标计数规则', d: '完成 / 失败 / 截断 / 中止 / 提问 / 审核 / 定时提醒计入未读；开工、压力提醒、工具提示不计入；99+ 封顶。' },
+				{ t: '定时提醒', d: '右键菜单设的闹钟到点播报；免打扰时段也照常响——自己定的闹钟不受免打扰约束。' },
+				{ t: '中止与开工', d: '任务开始只播报、不算未读；手动中止不算失败，但也计入红标。' },
+				{ t: '用量面板', d: '完成通知下方同时弹出本次消耗 / 全对话累计 / 上下文占用，与气泡同生同灭。' },
+				{ t: '工具超时', d: '工具跑超过设定时长，状态面板逐秒显示「⚠️ 工具已运行 Ns」——只是提醒，不打断任务。' },
+				{ t: '压力阈值', d: '上下文占用达到设定百分比提醒 /compact，回降到 50% 以下重新武装。' },
+				{ t: '运行状态', d: '鲸鱼自查后台通知 / 用量读取 / 跳转三条链路；出问题头顶亮 ⚠️，点它看是哪条失效。' },
+				{ t: '调试模式', d: '排障用：控制台输出调试信息 + 写 ~/.dsh/whale-assistant.json 的 _debug 键，平时保持关闭。' },
+				{ t: '历史双存储', d: '历史保留最近 50 条，本地 + 服务器双存储；支持搜索、清空、导出。' },
+				{ t: '换浏览器历史还在吗', d: '在——历史跟服务端走，同一台机器的桌面壳和各浏览器窗口看到同一份；跨机器不同步。' },
+				{ t: '想彻底遗忘某个对话', d: '两步：先清历史、再「清空通讯录」，两步都做才真正遗忘。' },
+				{ t: '账本损坏', d: '极少数情况会自动隔离重建，~/.dsh/ 留有 .corrupt-时间戳 备份；想救回：先关 DSH、删掉后缀恢复原名再启动。' },
+				{ t: '桌宠通知同款', d: '桌宠上的通知 / 红标 / 三行用量与页内完全同一套，双击气泡同样跳回对话。' },
+				{ t: '怎么"关掉"桌宠', d: '右键 → 🙈 躲猫猫就是它的"关"：桌面只剩一颗小气泡，点一下随时召回；彻底退出关掉 DSH 即可，没有常驻后台进程。' },
+				{ t: '摸摸头与装扮', d: '右键双击摸摸头：好感 +1、小心心飘出；完成任务攒进度解锁新装扮（右键菜单 → 🎨 我的装扮 查看）。' },
+				{ t: '状态与情绪', d: '任务越多越累、会打瞌睡（拖一拖或双击就醒）；右键菜单标题看得到当前心情和进行中任务数。' }
+			] }
+		];
 		function mountWhaleManualTab(content) {
 			/* 固定高度滚动区（用户反馈「点开来突然变大」）：折叠/展开框尺寸
 			 * 恒定，内容超出只在区内滚 */
@@ -7165,6 +7334,11 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 						if (el._mT) el._mT.textContent = el._mTerm;
 						if (el._mD) el._mD.textContent = el._mDesc;
 						if (el._mG) el._mG.textContent = el._mTerm;
+						/* 通知矩阵逐格恢复（11-13 视觉重构 _mCells 契约：格挂
+						 * {el,text} 数组，与 _mT/_mD 同一恢复语义） */
+						if (el._mCells) {
+							for (var ci = 0; ci < el._mCells.length; ci++) el._mCells[ci].el.textContent = el._mCells[ci].text;
+						}
 						continue;
 					}
 					var hit = indexOfCI(el.textContent, q) >= 0;
@@ -7173,10 +7347,17 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					if (hit) {
 						n++;
 						if (rowSection && rowSection[i] >= 0 && rowSection[i] < secHits.length) secHits[rowSection[i]]++;
-						if (el._mG) highlightAll(el._mG, el._mTerm, q);
-						else {
+						if (el._mG) {
+							highlightAll(el._mG, el._mTerm, q);
+							/* 11-13 编号行带说明行：说明同样参与命中高亮 */
+							if (el._mD) highlightAll(el._mD, el._mDesc, q);
+						} else {
 							if (el._mT) highlightAll(el._mT, el._mTerm, q);
 							if (el._mD) highlightAll(el._mD, el._mDesc, q);
+						}
+						/* 通知矩阵逐格命中高亮（mark 逻辑同一套 highlightAll） */
+						if (el._mCells) {
+							for (var cj = 0; cj < el._mCells.length; cj++) highlightAll(el._mCells[cj].el, el._mCells[cj].text, q);
 						}
 						if (!first) first = el;
 					}
@@ -7194,10 +7375,11 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			function applyManualFolds() {
 				for (var i = 0; i < manualSecEls.length; i++) {
 					var s = manualSecEls[i];
-					/* 默认目录态=全折叠；唯一例外「🚀 快速上手」首开即展（主观
-					 * 痛点 6：置顶但折叠=对新手没置顶）。用户点过的记住其选择 */
+					/* 默认目录态=「🚀 三步上手」首开即展（主观痛点 6：置顶但折叠
+					 * =对新手没置顶；11-13 重构沿用，仅随分区改名），其余三层全
+					 * 折叠——机制内幕收进默认折叠区。用户点过的记住其选择 */
 					var memoV = ppManualFoldMemo[s.title];
-					var folded = memoV === undefined ? s.title !== '🚀 快速上手' : memoV !== false;
+					var folded = memoV === undefined ? s.title !== '🚀 三步上手' : memoV !== false;
 					s.el.setAttribute('data-folded', folded ? '1' : '0');
 					var end = i + 1 < manualSecEls.length ? manualSecEls[i + 1].start : list.children.length;
 					for (var j = s.start + 1; j < end; j++) {
@@ -7224,10 +7406,24 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					i = hitAt + q.length;
 				}
 			}
-			var sec = function (t) {
+			var sec = function (t, badge, hint) {
 				var el = document.createElement('div');
 				el.className = 'dsh-whale-manual-sec';
 				el.textContent = t;
+				/* 分区头右侧徽标/摘要（11-13 三层重构）：折叠分区在收起态也能
+				 * 一眼看到里面装了什么；flex 布局由注入 CSS 追加规则接管 */
+				if (badge) {
+					var bd = document.createElement('span');
+					bd.className = 'dsh-whale-manual-badge';
+					bd.textContent = badge;
+					el.appendChild(bd);
+				}
+				if (hint) {
+					var ht = document.createElement('span');
+					ht.className = 'dsh-whale-manual-hint';
+					ht.textContent = hint;
+					el.appendChild(ht);
+				}
 				/* 点击分区头折叠/展开该组：扁平结构不变（行仍是 list 直接
 				 * 子元素），搜索断言遍历 children 的契约不破 */
 				el.addEventListener('click', function (event) {
@@ -7238,9 +7434,11 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				list.appendChild(el);
 				manualSecEls.push({ title: t, el: el, start: list.children.length - 1 });
 			};
-			var item = function (term, desc) {
+			var item = function (term, desc, detail) {
 				var el = document.createElement('div');
-				el.className = 'dsh-whale-manual-item';
+				/* 11-13 视觉重构：主区条目=轻卡片（CSS 接管）；机制内幕区
+				 * 条目加 dsh-whale-manual-detail 走无卡片紧凑单行分层 */
+				el.className = 'dsh-whale-manual-item' + (detail ? ' dsh-whale-manual-detail' : '');
 				var t = document.createElement('div');
 				t.className = 'dsh-whale-manual-t';
 				t.textContent = term;
@@ -7259,7 +7457,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				el._mD = desc ? d : null;
 				list.appendChild(el);
 			};
-			var gesture = function (n, text) {
+			var gesture = function (n, text, desc) {
 				var row = document.createElement('div');
 				row.className = 'dsh-whale-help-row';
 				var num = document.createElement('span');
@@ -7270,68 +7468,74 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				text2.textContent = text;
 				row.appendChild(num);
 				row.appendChild(text2);
+				if (desc) {
+					/* 11-13 编号两行式：说明行挂在编号行下（复用 manual-d 的
+					 * 搜索高亮/恢复契约：_mDesc/_mD 与词条行同构） */
+					var d2 = document.createElement('div');
+					d2.className = 'dsh-whale-manual-d';
+					d2.textContent = desc;
+					row.appendChild(d2);
+					row._mDesc = desc;
+					row._mD = d2;
+				}
 				row._mTerm = text;
 				row._mG = text2;
 				list.appendChild(row);
 			};
-			sec('🚀 快速上手');
-			item('右键点我：打开菜单', '快捷操作都在右键菜单里——提醒我、装扮、历史任务、⚙️ 设置；📖 使用说明住在 DSH 侧边栏的「小鲸鱼助手」页面里。先记住这两个入口就够了。');
-			item('点我一下：读通知', '有未读就逐条读给你（红标数字会减）；没有未读就陪我聊一句。');
-			item('拖着我走：位置会记住', '按住我拖到喜欢的角落，刷新后还在这。跳回对话的手势看下面「交互手势」。');
-			sec('🐳 我是什么');
-			item('打工小鲸鱼，住在 DeepSeek Harness 右下角', '只读任务事件做播报和记录，不拦截、不修改任何任务行为，随便折腾不影响工作。任务在后台跑我也会看着，跑完立刻播报（取名慢时最多等 3 秒）。');
-			sec('🔔 通知一览');
-			item('[对话名]开工了 …', '任务开始跑。不进红标（不算未读）。');
-			item('[对话名]完成了 …', '正常结束：响一声 + 红标 +1，下方同时弹出用量面板（本次消耗 / 全对话累计 / 上下文占用），和气泡同生同灭。');
-			item('[对话名]失败了 …', '出错了：低沉音 + 红标 +1。双击通知气泡可回去看看。');
-			item('[对话名]被截断了 …', '回复顶到 max tokens 上限：按完成处理（完成音 + 红标 +1 + 用量面板），任务本身没坏，只是内容被切短了。');
-			item('[对话名]被中止了 ✋', '你手动停了任务：不算失败，但也会计入红标。');
-			item('🤔 [对话名]需要你选择', '模型在等你作答：响铃 + 红标 +1。回到对话作答即收尾；任务还没跑完，用量等完成通知再统一看。');
-			item('⚠️ [对话名]需要你审核', '有工具调用等你批准：同上。');
-			item('上下文快挤爆了…建议 /compact', '上下文占用达到压力阈值时提醒一次。');
-			item('⏰ 定时提醒', '右键菜单设的闹钟到点播报（会计入红标，不带用量面板）；免打扰时段也照常响——自己定的闹钟不受免打扰约束。');
-			sec('🐾 交互手势');
-			gesture(1, '左键拖动：移动我');
-			gesture(2, '左键单击：进行互动（读通知）');
-			gesture(3, '左键双击：游回角落（中途可抓住）');
-			gesture(4, '双击通知气泡：跳转对应对话');
-			gesture(5, '左键单击红标数字：读通知');
-			gesture(6, '左键双击红标数字：通知清空');
-			gesture(7, '右键：打开菜单');
-			gesture(8, '右键双击：触发摸摸头');
-			sec('🐋 桌宠模式（桌面上的独立小鲸鱼）');
-			item('常驻桌面：跟着 DSH 走，关窗≠退出', '打开 DSH 桌宠就出现在桌面右下角（PC 重启后再开 DSH 才有）；DSH 最小化也在场。它在时页内小金鱼休息（休眠）；万一出意外，宿主每 30 秒体检一次，最长约 1 分钟自动重生，不用重启 DSH。');
-			item('设置同步：页面改了桌宠跟着变', '桌宠是独立窗口、独立存储——侧边栏页里改的音色/音量/免打扰/总静音等设置经宿主自动下发到桌宠（约 2 秒内生效），不用两边各设一遍。');
-			item('右键小鲸鱼：三种形态', '🐋 完整形态（日常）/ 🫧 缩成气泡 / 🙈 隐藏小鲸鱼＝躲猫猫：游到右下角收成一只小气泡，点一下气泡就破、鲸鱼冒出来。');
-			item('通知、红标、用量：页内同款', '桌宠上的通知与页内完全同一套——真名播报、红标未读、三行用量、读回；双击通知气泡直接跳回 DSH 对应对话并把窗口拉到前台。');
-			item('怎么"关掉"桌宠？', '右键 → 🙈 隐藏小鲸鱼（躲猫猫）就是它的"关"——桌面只剩一颗小气泡，点一下随时召回。它跟着 DSH 宿主走：彻底退出关掉 DSH 即可，没有常驻后台进程。');
-			sec('🎛️ 设置项详解');
-			item('🔔 开工通知（开/关）', '关掉后"开工了"不再播报，其余通知不受影响。');
-			item('🌙 免打扰', '从 4 组时段预设里循环选（不能任填时间）。时段内完成/失败静音且不弹泡、只记红标；需要你动手的选择/审核照常提醒——急事不瞒你。');
-			item('🔊 音量', '提示音音量，5 档循环。');
-			item('🎵 音色（按通知设置）', '完成/失败/提问、定时提醒四类通知各选各的音效：单声叮 / 叮叮两连击 / 清脆上行 / 低沉下行 / 静音，下拉选中即生效并现场试听（各类可选项略有差异，如完成类没有低沉下行）。');
-			item('⏱️ 工具超时', '某个工具跑超过该时长时，鲸鱼下方的状态面板会持续显示「⚠️ [对话名] 工具已运行 Ns」并逐秒读数（只是提醒，不会打断任务）。');
-			item('🚨 压力提醒', '上下文占用达到该百分比时提醒 /compact；回降到 50% 以下后重新武装。');
-			item('📊 任务周报', '近 7 天按日统计任务数（完成/失败/中止/提问）与 token 消耗。');
-			item('📤 导出历史', 'Markdown：复制全部历史到剪贴板；CSV：下载表格文件。');
-			item('🩺 运行状态', '鲸鱼自查各条通知链路（后台通知/用量读取/跳转）；平时全部正常、不打扰，出问题我头上会亮 ⚠️，点那个 ⚠️ 就能看是哪一条失效（详情在鲸鱼锚定的浮层里）。');
-			item('🩺 调试模式', '排障用：开启后往控制台输出调试信息，并把取证数据写进 ~/.dsh/whale-assistant.json 的 _debug 键，平时保持关闭。');
-			item('怎么没有声音？', '依次看：右键菜单 🔊 声音是否开 → 设置里音量 → 🎵 音色里对应通知是否选了"静音" → 是否在免打扰时段（完成/失败静音，选择/审核/提醒照常）。');
-			sec('📜 历史与红标');
-			item('红标数字 = 未读通知数', '左键单击读一条（读过的消失），双击一键清空。完成/失败/被截断/被中止/提问/审核/定时提醒计入；开工、上下文压力提醒、工具运行提示不计入。超过 99+ 封顶显示。');
-			item('📜 历史任务（右键菜单）', '保留最近 50 条：本地 + 服务器双存储，桌面壳和别的浏览器窗口看到同一份；支持搜索、清空、导出。');
-			item('想彻底遗忘某个对话？', '两步：先清历史、再「清空通讯录」——历史里存的名字快照会在下次加载时回流，两步都做才真正遗忘。');
-			item('换浏览器历史还在吗？', '在——历史跟服务端走，同一台机器的桌面壳和各浏览器窗口看到同一份；跨机器不同步。');
-			item('历史突然变空了？', '极少数情况下账本文件损坏会自动隔离重建，~/.dsh/ 下会出现 whale-assistant.json.corrupt-时间戳 备份文件。想救回：先关 DSH，把文件名末尾的 .corrupt-时间戳 后缀删掉、恢复原名，再启动。');
-			item('跳回对话', '双击通知气泡，或点历史抽屉里的任意一条记录。');
-			sec('❤️ 陪伴小彩蛋');
-			item('摸摸头', '右键双击我：好感 +1，还有小心心飘出。');
-			item('状态与情绪', '任务越多我越累、会打瞌睡（拖一拖或双击我就醒）；右键菜单标题能看当前心情和进行中的任务数。');
-			item('装扮与成就', '完成任务攒进度，解锁新装扮后去 右键菜单 → 🎨我的装扮 查看（面板里能看到还差几个任务）。');
-			sec('🙋 常见问题');
-			item('通知突然不来了？', '多半是页面放久了过期：刷新页面即可恢复——官方桌面端没有 F5，用我的右键菜单 🔄 刷新页面；浏览器里按 Ctrl+F5。我自己的链路出问题时头顶会亮 ⚠️，点它就能看是哪一条失效。');
-			item('插件更新了怎么加载新版？', '同样刷新页面：右键菜单 🔄 刷新页面（桌面端）或 Ctrl+F5（浏览器）——新版本在下次加载时自动生效。');
-			item('后台任务会打扰我吗？', '不会：只有完成/失败/需要你动手时才响铃，中间过程只在状态面板安静展示。免打扰时段里完成/失败静音且不弹泡、只记红标；开工气泡与你自己定的定时提醒照常——急事不瞒你。');
+			/* 通知矩阵卡片（11-13 视觉重构，用户批「4 种通知挤成一句长横排」）：
+			 * PP_MANUAL_DATA 里该条的 d 是一句长横排（数据一字未改），渲染层
+			 * 按用户拍板的四行两列短语转译成 mini 矩阵——左列=状态（panel-text
+			 * 色）、右列=动词开头短句（muted 色）。矩阵短语挂 _mCells={el,text}
+			 * 数组进搜索契约（highlightAll 会把 grid 压平，单串 _mD 挂点对矩阵
+			 * 无意义，由逐格挂点顶上）；_mTerm/_mT 照常在行上，行级命中/隐藏/
+			 * 折叠行为与普通条目完全一致 */
+			var NOTIFY_DO_MATRIX = [
+				['✅ 完成', '双击看结果'],
+				['❌ 失败·截断', '双击看原因'],
+				['❓🛡 需要你', '双击直达决策处'],
+				['🌡 压力高', '该收尾了']
+			];
+			var notifyMatrix = function (term, pairs) {
+				var el = document.createElement('div');
+				el.className = 'dsh-whale-manual-item';
+				var t = document.createElement('div');
+				t.className = 'dsh-whale-manual-t';
+				t.textContent = term;
+				el.appendChild(t);
+				var grid = document.createElement('div');
+				grid.className = 'dsh-whale-manual-matrix';
+				var cells = [];
+				pairs.forEach(function (p) {
+					var st = document.createElement('span');
+					st.className = 'dsh-whale-manual-mx-s';
+					st.textContent = p[0];
+					var act = document.createElement('span');
+					act.className = 'dsh-whale-manual-mx-a';
+					act.textContent = p[1];
+					grid.appendChild(st);
+					grid.appendChild(act);
+					cells.push({ el: st, text: p[0] });
+					cells.push({ el: act, text: p[1] });
+				});
+				el.appendChild(grid);
+				el._mTerm = term;
+				el._mT = t;
+				el._mCells = cells;
+				list.appendChild(el);
+			};
+			/* 内容渲染=遍历 PP_MANUAL_DATA（11-13 抽取）：行仍是 list 直接
+			 * 子元素，rowSection 分区索引与搜索 children 遍历契约不破。
+			 * 11-13 视觉重构：机制内幕区条目走 detail 紧凑行；「通知响了=
+			 * 该做什么」按标题识别转译成通知矩阵卡片（数据未动） */
+			PP_MANUAL_DATA.forEach(function (S) {
+				sec(S.sec, S.badge, S.hint);
+				var detail = S.sec.indexOf('更多细节') >= 0;
+				S.items.forEach(function (it) {
+					if (it.g) gesture(it.g, it.t, it.d);
+					else if (it.t === '通知响了 = 该做什么') notifyMatrix(it.t, NOTIFY_DO_MATRIX);
+					else item(it.t, it.d, detail);
+				});
+			});
 			wrap.appendChild(list);
 			applyManualFolds(); /* 目录态 */
 			var rowSection = [];
@@ -7369,67 +7573,170 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		}
 		/* 📊 周报 Tab（11-09 自 openReport 侧抽屉迁入——抽屉/浮层从侧边栏页
 		 * 打开会盖住 DSH 侧边栏，全部页内化）。聚合逻辑与旧抽屉逐行同源：
-		 * 近 7 天按日聚合 done/fail/killed/ask + tokens，本周汇总行置顶。 */
+		 * 近 7 天按日聚合 done/fail/killed/ask + tokens。11-13 版式升级（用户
+		 * 批准方案）：旧「日期+计数+token 死列表」→ 今日汇总置顶 + 按天折叠
+		 * 展开当日会话明细（标题/时刻/轮次/状态 + Σtoken + 当日占比条）+
+		 * 会话行点击跳回——openSessionAt(endTime||at 翻页锚点) → 侧栏兜底，
+		 * 与历史抽屉完全同链（drawers.js fillHistoryList 行点击）；空日
+		 * 「这天没有任务记录」不可展开，空周保留原提示。 */
+		var ppReportOpenDays = new Set(); /* 日期折叠展开态：模块级 Set，跨 Tab 切换/重渲存活（ppManualFoldMemo 同思路），默认全收起 */
 		function mountWhaleReportTab(content) {
 			var list = document.createElement('div');
 			list.className = 'dsh-whale-history-list';
 			function build() {
 			list.textContent = ''; /* 重渲前清空——pullCloudHistory 回调二次 build 不叠加（11-11 用户实报双份） */
-			var days = {};
-			var order = [];
+			var fmtK = function (n) { return n >= 10000 ? (n / 1000).toFixed(1) + 'K' : n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K' : n; };
 			var weekAgo = Date.now() - 7 * 864e5;
+			var days = {};
+			var hasAny = false;
 			for (var i = 0; i < history.length; i++) {
 				var rec = history[i];
 				var at = rec.at || 0;
 				if (at < weekAgo) continue;
+				hasAny = true;
 				var d = new Date(at);
 				var key = (d.getMonth() + 1) + '月' + d.getDate() + '日';
-				if (!days[key]) { days[key] = { done: 0, fail: 0, killed: 0, ask: 0, tokens: 0, titles: [] }; order.push({ key: key, at: at }); }
+				if (!days[key]) days[key] = { done: 0, fail: 0, killed: 0, ask: 0, tokens: 0, sessions: {} };
 				var b = days[key];
 				if (rec.kind === 'done') b.done++;
 				else if (rec.kind === 'fail') b.fail++;
 				else if (rec.kind === 'killed') b.killed++;
-				else if (rec.kind === 'question' || rec.kind === 'approval') b.ask++;
+				else if (rec.kind === 'question' || rec.kind === 'approval') b.ask++; /* 计任务数；question/approval 的 turnTokens 为 null，不参与 token 求和 */
 				if (rec.turnTokens) b.tokens += rec.turnTokens;
-				if (rec.title && rec.title !== '未命名任务' && b.titles.indexOf(rec.title) < 0) b.titles.push(rec.title);
+				/* 当日按 sessionId 分组（展开区会话明细行的数据源）。history 新
+				 * →旧，组内首见=当日最新记录：标题取最新非「未命名任务」（全
+				 * 未命名才回退原样），跳转锚点=最新记录的 endTime||at（多轮组
+				 * 用 max 兜住乱序载荷，规范见 11-13 方案第 7 条） */
+				var g = b.sessions[rec.sessionId || ''];
+				if (!g) g = b.sessions[rec.sessionId || ''] = { n: 0, tokens: 0, hasBad: false, allDone: true, title: '', rawTitle: '', anchor: 0 };
+				g.n++;
+				if (rec.turnTokens) g.tokens += rec.turnTokens;
+				if (rec.kind === 'fail' || rec.kind === 'killed') { g.hasBad = true; g.allDone = false; }
+				else if (rec.kind !== 'done') g.allDone = false;
+				if (!g.rawTitle) g.rawTitle = rec.title || '';
+				if (!g.title && rec.title && rec.title !== '未命名任务') g.title = rec.title;
+				var anchor = rec.endTime || rec.at || 0;
+				if (anchor > g.anchor) g.anchor = anchor;
 			}
-			order.sort(function (a, b2) { return b2.at - a.at; });
-			var totals = { done: 0, fail: 0, killed: 0, ask: 0, tokens: 0 };
-			order.forEach(function (o) {
-				var b = days[o.key];
-				totals.done += b.done; totals.fail += b.fail; totals.killed += b.killed; totals.ask += b.ask; totals.tokens += b.tokens;
-			});
-			var fmtK = function (n) { return n >= 10000 ? (n / 1000).toFixed(1) + 'K' : n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K' : n; };
+			/* 今日汇总行（置顶卡片，沿用 .dsh-whale-report-summary 类名）：
+			 * 今天的 key=本地日期；当日无记录也如实显示 0 */
+			var now = new Date();
+			var todayKey = (now.getMonth() + 1) + '月' + now.getDate() + '日';
+			var tb = days[todayKey];
 			var sumRow = document.createElement('div');
 			sumRow.className = 'dsh-whale-report-summary';
-			sumRow.textContent = '本周：✅' + totals.done + ' 失败' + totals.fail + ' ⏹' + totals.killed + ' ❓' + totals.ask + ' · ' + fmtK(totals.tokens) + ' tok';
+			sumRow.title = '任务数与 token 按日聚合；周报窗口 7 天';
+			sumRow.textContent = '今日 ' + todayKey + ' · ✅' + (tb ? tb.done : 0) + ' ❌' + (tb ? tb.fail : 0) + ' ⏹' + (tb ? tb.killed : 0) + ' ❓' + (tb ? tb.ask : 0) + ' · ' + fmtK(tb ? tb.tokens : 0) + ' tok · ' + (tb ? Object.keys(tb.sessions).length : 0) + ' 个对话';
 			list.appendChild(sumRow);
-			if (order.length === 0) {
+			if (!hasAny) {
 				var empty = document.createElement('div');
 				empty.className = 'dsh-whale-history-empty';
 				empty.textContent = '这 7 天还没有任务记录 🐳';
 				list.appendChild(empty);
+				return;
 			}
-			order.forEach(function (o) {
-				var b = days[o.key];
-				var row = document.createElement('div');
-				row.className = 'dsh-whale-history-row';
-				row.title = b.titles.join('\n');
-				var text = document.createElement('span');
-				text.className = 'dsh-whale-history-text';
-				text.textContent = o.key;
-				var time = document.createElement('span');
-				time.className = 'dsh-whale-history-time';
+			/* 每天一行（折叠头）：固定渲染窗口内 7 个本地日历日（今天起倒序，
+			 * 按本地日期分量倒推——864e5 毫秒减法跨夏令时会日期漂移）。空日
+			 * 「这天没有任务记录」：无箭头、不可展开、cursor:default */
+			for (var dd = 0; dd < 7; dd++) {
+				var dt = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dd);
+				var dkey = (dt.getMonth() + 1) + '月' + dt.getDate() + '日';
+				var db = days[dkey];
+				var head = document.createElement('div');
+				head.className = 'dsh-whale-rep-day' + (db ? '' : ' dsh-whale-rep-day-empty');
+				head.title = '会话 token=当日该会话各轮消耗之和（turnTokens 口径）';
+				var left = document.createElement('span');
+				left.className = 'dsh-whale-rep-day-left';
+				var right = document.createElement('span');
+				right.className = 'dsh-whale-rep-day-right';
+				if (!db) {
+					left.textContent = dkey;
+					right.textContent = '这天没有任务记录';
+					head.appendChild(left);
+					head.appendChild(right);
+					list.appendChild(head);
+					continue;
+				}
+				var open = ppReportOpenDays.has(dkey);
 				var parts = [];
-				if (b.done) parts.push('✅' + b.done);
-				if (b.fail) parts.push('❌' + b.fail);
-				if (b.killed) parts.push('⏹' + b.killed);
-				if (b.ask) parts.push('❓' + b.ask);
-				time.textContent = parts.join(' ') + (b.tokens ? ' · ' + fmtK(b.tokens) : '');
-				row.appendChild(text);
-				row.appendChild(time);
-				list.appendChild(row);
-			});
+				if (db.done) parts.push('✅' + db.done);
+				if (db.fail) parts.push('❌' + db.fail);
+				if (db.killed) parts.push('⏹' + db.killed);
+				if (db.ask) parts.push('❓' + db.ask);
+				right.textContent = parts.join(' ') + (db.tokens ? ' · ' + fmtK(db.tokens) : '');
+				left.textContent = (open ? '▾ ' : '▸ ') + dkey + ' · ' + Object.keys(db.sessions).length + ' 个对话';
+				head.appendChild(left);
+				head.appendChild(right);
+				/* 整行点击切换展开/收起：重建整列表（build 开头已清空），展开
+				 * 态从模块级 Set 读回——跨 Tab 切换/重渲存活 */
+				head.addEventListener('click', (function (k) {
+					return function (event) {
+						event.stopPropagation();
+						if (ppReportOpenDays.has(k)) ppReportOpenDays.delete(k);
+						else ppReportOpenDays.add(k);
+						build();
+					};
+				})(dkey));
+				list.appendChild(head);
+				if (!open) continue;
+				/* 展开区：当日会话明细行，按组内最新活动倒序 */
+				var sids = Object.keys(db.sessions);
+				sids.sort(function (x, y) { return (db.sessions[y].anchor || 0) - (db.sessions[x].anchor || 0); });
+				sids.forEach(function (sid) {
+					var g2 = db.sessions[sid];
+					var title2 = g2.title || g2.rawTitle || '（未命名）';
+					var ad = new Date(g2.anchor || 0);
+					var label = g2.hasBad ? '❌ 失败' : (g2.allDone ? '✅ 完成' : '混合');
+					var pct = db.tokens > 0 ? Math.round(g2.tokens / db.tokens * 100) : 0;
+					var srow = document.createElement('div');
+					srow.className = 'dsh-whale-rep-srow';
+					var main = document.createElement('div');
+					main.className = 'dsh-whale-rep-smain';
+					var st = document.createElement('div');
+					st.className = 'dsh-whale-rep-stitle';
+					st.textContent = title2;
+					var sm = document.createElement('div');
+					sm.className = 'dsh-whale-rep-smeta';
+					sm.textContent = (ad.getHours() < 10 ? '0' : '') + ad.getHours() + ':' + (ad.getMinutes() < 10 ? '0' : '') + ad.getMinutes() + ' · ' + g2.n + ' 轮 · ' + label;
+					main.appendChild(st);
+					main.appendChild(sm);
+					var sright = document.createElement('div');
+					sright.className = 'dsh-whale-rep-sright';
+					var stok = document.createElement('div');
+					stok.className = 'dsh-whale-rep-stok';
+					stok.textContent = fmtK(g2.tokens);
+					var share = document.createElement('div');
+					share.className = 'dsh-whale-rep-share';
+					var bar = document.createElement('div');
+					bar.className = 'dsh-whale-rep-bar';
+					var fill = document.createElement('div');
+					fill.className = 'dsh-whale-rep-fill';
+					fill.style.width = pct + '%';
+					bar.appendChild(fill);
+					var pctEl = document.createElement('span');
+					pctEl.className = 'dsh-whale-rep-pct';
+					pctEl.textContent = '当日占比 ' + pct + '%';
+					share.appendChild(bar);
+					share.appendChild(pctEl);
+					sright.appendChild(stok);
+					sright.appendChild(share);
+					srow.appendChild(main);
+					srow.appendChild(sright);
+					/* 与历史抽屉行点击完全同链（drawers.js 147-151）：带锚点直开
+					 * →侧栏按 id →侧栏按标题；全失败给刷新提示 */
+					srow.addEventListener('click', (function (sid2, anchor2, t2) {
+						return function (event) {
+							event.stopPropagation();
+							if (openSessionAt(sid2, anchor2) || openViaSidebarById(sid2) || openViaSidebarByTitle(t2)) {
+								uiSay('正在跳转到该对话… 🐳', 1500, sid2);
+								return;
+							}
+							uiSay('跳转失败：右键菜单 🔄 刷新页面后重试（浏览器可按 Ctrl+F5）🥲', 3000, sid2);
+						};
+					})(sid, g2.anchor, title2));
+					list.appendChild(srow);
+				});
+			}
 			}
 			/* 报告卡片化（用户反馈「这是搞的啥」：旧列表裸奔在页面背景上） */
 			var card = document.createElement('div');
@@ -8233,25 +8540,70 @@ if (typeof window !== 'undefined' && (window.__dshWhaleSessions || window.__dshW
  * 事件照常到达。载荷坏值只跳过本次，绝不打断监听。
  * atMs（11-06）：时间锚点透传——openSessionAt 的翻页回溯把桌宠通知/历史
  * 行所指的那条任务消息滚进视野（跳到任务节点，不再只跳到会话头部）。 */
-if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+	if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+	/* v16（11-13）：跳转串行化 + 隐藏期延迟执行。两个真机实锤断点：
+	 * ①隐藏窗里 openSessionAt 的翻页回溯靠 setTimeout（隐藏页被钳到
+	 *   ≥1s/步，大会话=分钟级爬行）且 33 次重试链同期在跑；
+	 * ②窗口唤醒瞬间 visibilitychange 重放与在途链并发=两条会话打开管线
+	 *   交错打满渲染层 JS 主线程=页面卡死（用户实报「弹出来的页面连啥都
+	 *   点不了」，进程全部 responding=True，刷新好几轮才恢复——JS 主线程
+	 *   被双管线打满的典型形态）。
+	 * 规则：隐藏期收到 pet/jump 只记意图不执行；唤醒后 visibilitychange
+	 * 以全速定时器跑单链；可见期新意图经 gen 闸门顶替在途链。 */
+	var jumpGen = 0, jumpBusy = false, lastPetJump = null;
+	function runJumpChain(sid, atMs, myGen) {
+		jumpBusy = true;
+		var tries = 0;
+		var attempt = function () {
+			if (myGen !== jumpGen) { jumpBusy = false; return; } /* 被新意图顶替 */
+			var ok = false;
+			try { ok = openSessionAt(sid, typeof atMs === 'number' ? atMs : undefined); } catch (e2) { ok = false; }
+			if (lastPetJump && lastPetJump.sid === String(sid)) lastPetJump.landed = ok;
+			/* v16 诊断缝：跳转链每次尝试的落点可见（真机排障 04:5x 十连不落地用） */
+			try { if (typeof window !== 'undefined' && window.__dshWhale) window.__dshWhale._petJumpState = { gen: myGen, sid: String(sid).slice(-12), atMs: atMs || 0, tries: tries, ok: ok, busy: jumpBusy, hidden: document.hidden === true, t: Date.now() }; } catch (e4) { }
+			if (ok) { jumpBusy = false; return; }
+			if (++tries < 33) { setTimeout(attempt, 300); return; }
+			jumpBusy = false;
+			try { if (typeof window !== 'undefined' && window.__dshWhale) window.__dshWhale._petJumpState = { gen: myGen, sid: String(sid).slice(-12), tries: tries, ok: false, exhausted: true, t: Date.now() }; } catch (e5) { }
+		};
+		attempt();
+	}
 	window.addEventListener('dsh-whale:pet-jump', function (ev) {
 		try {
 			var sid = ev && ev.detail && ev.detail.sessionId;
 			var atMs = ev && ev.detail && ev.detail.atMs;
 			if (!sid || typeof openSessionAt !== 'function') return;
-			/* 补投时序（11-11 四轮）：宿主 hello 补投可能早于 sessions/
-			 * uiWorkspace 桥注入（两路异步到达）——桥未绑定时 openSessionAt
-			 * 返回 false（no bridge bound）。有界重试：每 300ms 一次最多
-			 * ~10s，桥一就绪立即跳；真失败（会话不存在）10s 后放弃不打扰。 */
-			var tries = 0;
-			var attempt = function () {
-				var ok = false;
-				try { ok = openSessionAt(sid, typeof atMs === 'number' ? atMs : undefined); } catch (e2) { ok = false; }
-				if (ok) return;
-				if (++tries < 33) setTimeout(attempt, 300);
-			};
-			attempt();
+			jumpGen++;
+			var hidden = document.hidden === true;
+			lastPetJump = { sid: String(sid), atMs: typeof atMs === 'number' ? atMs : 0, at: Date.now(), whileHidden: hidden, landed: false };
+			if (hidden) return; /* 隐藏期只记意图：唤醒后由 visibilitychange 全速执行 */
+			runJumpChain(String(sid), atMs, jumpGen);
 		} catch (e) { /* a bad payload must not kill the listener */ }
+	});
+	document.addEventListener('visibilitychange', function () {
+		try {
+			if (document.hidden) return;
+			/* v17（11-13）：落点复核——真机实锤 openSessionAt 返回 true 只代表
+			 * 「打开已受理」，真正的会话导航在 occluded 页里被冻结（窗口被遮挡
+			 * 时标题不变=没落地，回视=旧会话+页面卡死）。回视时校验：意图 120s
+			 * 内 &&（未落地 || 当前标题不含目标会话名）→ 全速重发单链。标题从
+			 * ui 闭包的 history 里按 sid 反查最新记录。 */
+			if (lastPetJump && Date.now() - lastPetJump.at < 120000 && typeof openSessionAt === 'function') {
+				var need = !!lastPetJump.whileHidden || !lastPetJump.landed;
+				if (!need) {
+					var rec = null;
+					try { rec = (typeof history !== 'undefined' ? (history || []) : []).filter(function (h) { return h.sessionId === lastPetJump.sid; }).sort(function (a, b) { return (b.at || 0) - (a.at || 0); })[0] || null; } catch (e1) { }
+					var want = rec ? String(rec.title || '') : '';
+					need = !!want && (document.title || '').indexOf(want) === -1;
+				}
+				if (need) {
+					lastPetJump.whileHidden = false;
+					jumpGen++;
+					var jp = lastPetJump;
+					setTimeout(function () { runJumpChain(jp.sid, jp.atMs, jumpGen); }, 250);
+				}
+			}
+		} catch (e) { }
 	});
 }
 /* ---- module: src/core/exports.js ---- */

@@ -33,7 +33,28 @@ function Log($m) { try { Add-Content -Path $log -Value ("{0} {1}" -f (Get-Date -
 $mutex = New-Object System.Threading.Mutex($false, 'dsh-whale-pet')
 $mutexAcquired = $false
 try { $mutexAcquired = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $mutexAcquired = $true }
-if (-not $mutexAcquired) { Log '== duplicate start blocked (mutex held) - exit =='; exit 0 }
+# v11 (11-13)：锁被占=上一代桌宠在场（孤儿常驻或正常世代）。发握手信号让
+# 前任让位（其 1s 看护 tick 检测到即自退），然后有界等待接管——新引擎的
+# 端口/世代只有新桌宠能服务，前任必须退场。
+if (-not $mutexAcquired) {
+	Log 'mutex held - signaling handover and waiting (up to 8s)'
+	try {
+		$null = New-Object System.Threading.EventWaitHandle($true, [System.Threading.EventResetMode]::ManualReset, 'dsh-whale-pet-handover')
+	} catch { Log ('handover signal err: ' + $_.Exception.Message) }
+	$deadline = (Get-Date).AddSeconds(8)
+	while ((Get-Date) -lt $deadline) {
+		Start-Sleep -Milliseconds 400
+		try { $mutexAcquired = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $mutexAcquired = $true }
+		if ($mutexAcquired) { Log 'mutex acquired after handover'; break }
+	}
+	if (-not $mutexAcquired) { Log '== duplicate start blocked (mutex held) - exit =='; exit 0 }
+}
+$script:handover = $null
+try { $script:handover = New-Object System.Threading.EventWaitHandle($false, [System.Threading.EventResetMode]::ManualReset, 'dsh-whale-pet-handover') } catch { }
+# v12c (11-13)：事件是 ManualReset——前任换班留下的已信号态必须在本代启动时
+# 复位，否则本代 1s 后被自己的看护误判换班自杀（60s 心跳再孵化再死=死亡循环）。
+try { if ($script:handover) { $script:handover.Reset() } } catch { }
+$script:orphanMode = $false
 Log ('== pet host start ' + (Get-Date -Format 'HH:mm:ss') + ' ==')
 
 Add-Type -AssemblyName PresentationFramework
@@ -89,11 +110,33 @@ public static class Native4 {
   [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr lParam);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-  private static IntPtr _reviveHwnd;
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h, System.Text.StringBuilder sb, int n);
+  private static IntPtr _reviveVis;
+  private static IntPtr _reviveHidden;
+  // v8 (2026-11-13): only the Electron main window class counts — the shell
+  // owns invisible helper top-level windows (Chrome_WidgetWin_0 / IME / tray
+  // host) that a first-hit enum returns once the closed main window sinks in
+  // Z-order; showing those logged success while the user saw nothing.
+  // Visible match wins immediately; else remember the first hidden main
+  // window (close limbo) and keep scanning.
   public static IntPtr FindWindowOfPids(int[] pids) {
-    _reviveHwnd = IntPtr.Zero;
-    EnumWindows(delegate(IntPtr h, IntPtr l) { uint wpid = 0; GetWindowThreadProcessId(h, out wpid); foreach (int p in pids) { if (wpid == (uint)p) { _reviveHwnd = h; return false; } } return true; }, IntPtr.Zero);
-    return _reviveHwnd;
+    _reviveVis = IntPtr.Zero;
+    _reviveHidden = IntPtr.Zero;
+    EnumWindows(delegate(IntPtr h, IntPtr l) {
+      uint wpid = 0; GetWindowThreadProcessId(h, out wpid);
+      bool ours = false;
+      foreach (int p in pids) { if (wpid == (uint)p) { ours = true; break; } }
+      if (ours) {
+        var sb = new System.Text.StringBuilder(64);
+        GetClassName(h, sb, 64);
+        if (sb.ToString() == "Chrome_WidgetWin_1") {
+          if (IsWindowVisible(h)) { _reviveVis = h; return false; }
+          if (_reviveHidden == IntPtr.Zero) { _reviveHidden = h; }
+        }
+      }
+      return true;
+    }, IntPtr.Zero);
+    return _reviveVis != IntPtr.Zero ? _reviveVis : _reviveHidden;
   }
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
   [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
@@ -289,99 +332,58 @@ function script:Resolve-ShellExe {
 	}
 }
 
-# Revive the DSH window after the user closed it (jump/settings requested).
-# 11-12 v2 - the page calls this after EVERY jump/settings request, and two
-# realities must both work:
-# - a DSH window with a handle exists -> just foreground it (the jump
-#   already executed in that window's whale);
-# - no window handle anywhere -> the shell quit/hung while its renderer may
-#   even still linger in close-limbo (observed 11-12: delivered=true with
-#   zero visible windows = the jump executed in an INVISIBLE whale). Plain
-#   Start-Process cannot help then: the single-instance lock is held by the
-#   zombie shell, so the second instance just self-quits. Instead a
-#   DETACHED helper force-kills the zombie shell first, then starts the
-#   stashed shell exe. The helper must outlive this pet (killing the shell
-#   kills this pet through the parent chain). The jump itself replays from
-#   the ledger pendingJump (host hello-flush) once the fresh page connects.
-function script:Revive-DshWindow {
-	if (-not $script:shellExePath) { Log 'revive: shell path unknown'; return }
-	$procName2 = [IO.Path]::GetFileNameWithoutExtension($script:shellExePath)
-	$shellPids = @(Get-Process -Name $procName2 -ErrorAction SilentlyContinue | ForEach-Object { [int]$_.Id })
-	# v7 (11-12): X 之后壳常停在「退出挂起」态——窗口被隐藏但渲染层还活着
-	# （任务栏残留 + delivered=true 实证）。Process.MainWindowHandle 对隐藏
-	# 窗返回 0，必须 EnumWindows 枚举壳名下全部顶层窗口：找到=ShowWindow+
-	# 前台化（跳转已经在隐藏窗里执行成功，只差显示出来）；一个都没有=壳真
-	# 死→走 CIM 杀僵尸+重拉兜底。
-	if ($shellPids.Count -gt 0) {
-		try {
-			$h = [Native4]::FindWindowOfPids($shellPids)
-			if ($h -ne [IntPtr]::Zero) {
-				if ([Native4]::IsIconic($h)) { [void][Native4]::ShowWindow($h, 9) }
-				[void][Native4]::ShowWindow($h, 5)
-				[void][Native4]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)
-				[void][Native4]::SetForegroundWindow($h)
-				[void][Native4]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
-				Log 'revive: hidden shell window shown + foregrounded (jump already executed in it)'
-				return
-			}
-			Log 'revive: shell alive but windowless (close-limbo) -> CIM kill+relaunch'
-		} catch {
-			Log ('revive enum err: ' + $_.Exception.Message)
-		}
-	}
-	# 11-12 v5 FILE-based cooldown (20s): the detached relaunch respawns THIS
-	# pet (new process = in-memory cooldown lost), so consecutive clicks used
-	# to re-kill the freshly booting shell forever - death spiral, observed
-	# 03:38-03:39: three kill+relaunch cycles in 50s ending with NO DSH at
-	# all. The file survives pet respawns and blocks overlapping helpers.
-	$cdFile = Join-Path $env:USERPROFILE '.dsh\pet\last-revive'
-	$nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+# v18 (11-13) EcoQoS 反制（v21 修复：v20 收缩时函数被删、调用残留——每个
+# 看护 tick 都抛 CommandNotFoundException，首次 tick 即进假 ORPHAN MODE，
+# pet.log 00:13:09.590 实锤；父死检测因 Get-Process 先于本调用仍有效，
+# 属日志失真非功能失效）。Windows 会把含隐藏窗口的进程树降为 Idle 优先级
+# （EcoQoS，线程验尸 priority=Idle 实锤）——定时器钳制+SSE 重连变慢。
+# 看护每 tick 对壳同名进程树调 PetNative 的 DisablePowerThrottlingPid
+# （幂等；DLL 缺失/回退内联 Native4 无此方法=静默无操作，绝不影响看护）。
+function script:Unthrottle-ShellTree {
 	try {
-		if (Test-Path $cdFile) {
-			$last = [int64](Get-Content $cdFile -TotalCount 1 -ErrorAction Stop)
-			if ($nowMs - $last -lt 20000) {
-				Log 'revive: file cooldown (relaunch in flight) - skipped'
-				return
-			}
+		$procName = [IO.Path]::GetFileNameWithoutExtension([string]$env:DSH_PET_HOSTPROC)
+		if (-not $procName) { return }
+		$targets = Get-Process -Name $procName -ErrorAction SilentlyContinue
+		if (-not $targets) { return }
+		foreach ($t in @($targets)) {
+			try { [void][Native4]::DisablePowerThrottlingPid([uint32]$t.Id) } catch { return }
 		}
 	} catch { }
-	if (-not (Test-Path $script:shellExePath)) { Log ('revive: shell exe missing: ' + $script:shellExePath); return }
-	try {
-		# v6 (11-12): write the revive script to a FILE and launch it via
-		# WMI/CIM. Two hard lessons from v4/v5:
-		# 1) embedded quotes in a -Command string get eaten by Start-Process
-		#    argument re-parsing (the helper silently no-oped);
-		# 2) the killed shell owns a JOB OBJECT that holds this whole process
-		#    tree (pet + detached helpers) with kill-on-close - when the shell
-		#    dies, every helper dies with it and the relaunch never runs
-		#    (observed: kill works, relaunch never does). A CIM-created
-		#    process is parented to WmiPrvSE and escapes the job entirely.
-		# The helper logs its own steps to revive-helper.log.
-		$helperFile = Join-Path $env:USERPROFILE '.dsh\pet\revive-helper.ps1'
-		$helperLog = Join-Path $env:USERPROFILE '.dsh\pet\revive-helper.log'
-		$helperScript = @'
-$ErrorActionPreference = 'Continue'
-$log = Join-Path $env:USERPROFILE '.dsh\pet\revive-helper.log'
-function L($m) { Add-Content -Path $log -Value ((Get-Date).ToString('HH:mm:ss.fff') + ' ' + $m) }
-L 'helper start'
-try {
-	Stop-Process -Name "DeepSeek Harness" -Force -ErrorAction SilentlyContinue
-	L 'zombie shell killed'
-	Start-Sleep -Seconds 2
-	Start-Process -FilePath "SHELLEXE_PLACEHOLDER"
-	L 'shell relaunched'
-} catch {
-	L ('helper err: ' + $_.Exception.Message)
 }
-'@
-		$helperScript = $helperScript.Replace('SHELLEXE_PLACEHOLDER', $script:shellExePath)
-		Set-Content -Path $helperFile -Value $helperScript -Encoding UTF8 -ErrorAction Stop
-		try { Set-Content -Path $cdFile -Value $nowMs -ErrorAction Stop } catch { }
-		Log ('revive: helper file written, launching via CIM (zombie ' + $procName2 + ' kill + relaunch)')
-		Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ('powershell -NoProfile -ExecutionPolicy Bypass -File "' + $helperFile + '"') } | Out-Null
-	} catch {
-		Log ('revive helper err: ' + $_.Exception.Message)
+
+# Revive the DSH window after the user closed it (jump/settings requested).
+# v21 (11-14)：第二实例信号 + **环境消毒**。唤醒本体仍是「再启动一次壳
+# exe」，其余交给宿主自己的状态机：
+#   - 窗口隐藏（X=preventDefault+hide，进托盘后台）→ 单实例锁转发
+#     focusOwner → isMinimized→restore + show + focus（asar 实读）；
+#   - 窗口已销毁（退出确认走完）→ createMainWindow 重建；
+#   - 壳已死 → 本实例直接成为新主实例全新启动，pendingJump 由 hello 补投。
+# ⚠️ v20 关键勘误：信号失败从来不是「附加参数」问题——是**环境继承**。
+# pet 由引擎 spawn，而引擎=壳的 Electron utilityProcess（同 exe
+# --expose-internals dsh-desktop-host），其 env 带 ELECTRON_RUN_AS_NODE=1；
+# Start-Process 原样把它传给第二实例 → 第二实例变成裸 Node 进程（无 GUI、
+# 无单实例锁）启动即静默退出——用户视角=「信号发了、窗口永远不来」
+# （00:14:46-00:15:14 四连点击实锤；对照实验：带 env 必哑 / 剥掉必弹，
+# 均 <300ms 定界；v20 的 04:55/05:02 两轮同样此因，「端口绑定崩溃」结论
+# 作废）。启动参数保持纯净，env 只剥 ELECTRON_RUN_AS_NODE 与 NODE_OPTIONS。
+function script:Revive-DshWindow {
+	if (-not $script:shellExePath) { Log 'revive: shell path unknown'; return }
+	if (-not (Test-Path $script:shellExePath)) { Log ('revive: shell exe missing: ' + $script:shellExePath); return }
+	$psi = New-Object System.Diagnostics.ProcessStartInfo
+	$psi.FileName = $script:shellExePath
+	$psi.UseShellExecute = $false
+	try { $psi.WorkingDirectory = Split-Path -Parent $script:shellExePath } catch { }
+	# EnvironmentVariables 惰性预填当前进程环境；只剥 Electron 相关键
+	foreach ($bad in @('ELECTRON_RUN_AS_NODE', 'NODE_OPTIONS')) {
+		try { [void]$psi.EnvironmentVariables.Remove($bad) } catch { }
 	}
+	try {
+		[void][System.Diagnostics.Process]::Start($psi)
+	} catch {
+		Log ('revive: start failed: ' + $_.Exception.Message)
+		return
+	}
+	Log 'revive: clean-env second-instance signal sent (host focusOwner/createMainWindow owns the wake)'
 }
 
 function script:Shutdown-Pet($reason) {
@@ -508,11 +510,22 @@ $script:parentWatch = New-Object System.Windows.Threading.DispatcherTimer
 $script:parentWatch.Interval = [TimeSpan]::FromSeconds(1)
 $script:parentWatch.Add_Tick({
 	try {
+		# v11 (11-13)：握手换班——新一代桌宠 spawn 时信号本事件，前任 1s 内退场
+		try { if ($script:handover -and $script:handover.WaitOne(0)) { Log 'handover signaled - new pet generation taking over'; Shutdown-Pet 'handover'; return } } catch { }
 		$ppid = 0
 		try { $ppid = [int]$env:DSH_PET_PARENT_PID } catch { }
 		if ($ppid -gt 0) { [void](Get-Process -Id $ppid -ErrorAction Stop) }
+		Unthrottle-ShellTree
 	} catch {
-		Shutdown-Pet 'parent process gone'
+		# v11 (11-13)：父死 → 孤儿常驻（不再自退）。壳的退出流程现在能真正
+		# 走完（服务端 dispose 已掐 SSE + 页面离线停轮询），桌宠转孤儿模式
+		# 服务「唤回」：用户点历史任务 → Start-Process 重拉壳（壳死后其 Job
+		# 对象随之销毁，孤儿桌宠的子进程不再被连坐）→ pendingJump 补投自动
+		# 兑现。新一代桌宠 spawn 时经握手信号完成换班。
+		if (-not $script:orphanMode) {
+			$script:orphanMode = $true
+			Log 'parent process gone - ORPHAN MODE (stay resident; jump click will relaunch DSH)'
+		}
 	}
 })
 $script:parentWatch.Start()
@@ -574,7 +587,11 @@ $script:poll.Add_Tick({
 							# control frame from the pet page (form changes / fatal / jump)
 							if ($obj.c -eq 'form') { Apply-PetForm ([string]$obj.v) }
 							elseif ($obj.c -eq 'fatal') { Log ('fatal from page: ' + $obj.r); Shutdown-Pet ('fatal-' + $obj.r) }
-							elseif ($obj.c -eq 'jump') { Show-DshWindow }
+							# v8 (11-13): jump/revive 统一走 Revive-DshWindow——通知双击
+							# (c:'jump') 原走 Show-DshWindow（MainWindowHandle 对隐藏
+							# 窗=0，关窗后同样哑火），现在两条消息同一套类名过滤+复验
+							# +CIM 降级链。
+							elseif ($obj.c -eq 'jump') { Revive-DshWindow }
 							elseif ($obj.c -eq 'revive') { Revive-DshWindow }
 							return
 						}

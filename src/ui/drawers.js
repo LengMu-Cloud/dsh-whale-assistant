@@ -125,7 +125,16 @@
 										if (out && out.ok === true && out.delivered === false) {
 											uiSay('DSH 窗口已关——正在重开并自动跳转，稍等 🐳', 3500, sessionId);
 										}
-									}).catch(function () {});
+									}).catch(function () {
+										/* v8（11-13）：引擎不可达时 fetch 秒拒、.then 不跑，
+										 * 唤窗消息就丢了——catch 里也要尝试唤回（壳真死由
+										 * CIM 重拉），别让「点了没反应」连窗口都不弹。 */
+										try {
+											if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+												window.chrome.webview.postMessage({ c: 'revive' });
+											}
+										} catch (e3) { }
+									});
 									uiSay('正在打开对话… 🐳', 1500, sessionId);
 								} catch (e) {
 									uiSay('跳转失败，稍后再试 🥲', 2000, sessionId);

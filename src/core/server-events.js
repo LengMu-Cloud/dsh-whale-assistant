@@ -645,6 +645,7 @@
 			}
 		consume([f], sseBootId || undefined);
 	}
+	var sseFails = 0;
 	function connectSSE() {
 		/* 11-06 枚举 SSE 流（用户实报「任务通知有延时」）：宿主现在按 pet
 		 * token 把 SSE 连接分流——桌宠连接收到的是逐帧枚举载荷（与 /pet/feed
@@ -653,9 +654,36 @@
 		 * poll 恢复跑 /pet/feed 补漏帧，lastSeq 闸门去重）。 */
 		if (typeof EventSource !== 'function') return; /* vm sandbox / ancient browsers */
 		try { sse = new EventSource('/api/whale-assistant/events/stream'); } catch (e) { return; }
-		sse.onopen = function () { sseUp = true; };
-		sse.onerror = function () { sseUp = false; }; /* EventSource auto-reconnects */
+		sse.onopen = function () { sseUp = true; sseFails = 0; };
+		sse.onerror = function () {
+			sseUp = false; /* EventSource auto-reconnects */
+			/* v15（11-13）：离线熔断——壳退出时宿主服务器排空连接，EventSource
+			 * 的 3s 自动重连会不断造出新的活跃连接，把排空拖成死锁（壳停在退
+			 * 出挂起态=单实例锁握着=用户重开 DSH 无响应，挂起复现实测 40s+，
+			 * 桌宠连接归零后依然挂=重连风暴才是主阻塞）。连续 3 次失败（约
+			 * 9s）即关闭事件源停止重连，让壳干净退场；恢复钩子=可见/聚焦/上线
+			 * 三事件重新 connectSSE（关窗唤醒后页鲸照常回线，hello 补投兑现）。 */
+			if (++sseFails >= 3 && sse) {
+				try { sse.close(); } catch (e2) { }
+				sse = null;
+			}
+		};
 		sse.onmessage = function (ev) { handleSseData(ev.data); };
+	}
+	/* v15：熔断后的恢复钩子——窗口重新可见/获得焦点/系统网络恢复时重连。
+	 * 退出挂起期的隐藏页不会触发这些事件=保持断开=排空不被打扰。 */
+	if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+		document.addEventListener('visibilitychange', function () {
+			try { if (!document.hidden && !sse) { sseFails = 0; connectSSE(); } } catch (e) { }
+		});
+	}
+	if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+		window.addEventListener('focus', function () {
+			try { if (!sse) { sseFails = 0; connectSSE(); } } catch (e) { }
+		});
+		window.addEventListener('online', function () {
+			try { if (!sse) { sseFails = 0; connectSSE(); } } catch (e) { }
+		});
 	}
 	/* test seam: this whole module is a closure, so exports.js can't see it —
 	 * mirror the _pollConsume pattern and hang the handler on the window seam */

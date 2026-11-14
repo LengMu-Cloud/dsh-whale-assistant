@@ -369,6 +369,42 @@
 	}
 	lookupTitlesFromHistory(true);
 
+	/* pet 即时帧「执行一次」闸（11-14，用户实报「桌宠菜单刷新一次，DSH
+	 * 页连刷好几次」）：pet/jump、pet/reload-page、pet/open-settings 在
+	 * consume 的 seq 闸门之前处理（即时动作语义），帧的 seq 永不入账
+	 * ——10s 时间窗内每次 boot 轮询/SSE 重放都会重新送达：reload 重放
+	 * =连刷 N 次（reload 循环 ~2s < 10s 窗），jump/open-settings 重放
+	 * =动作重演。sessionStorage 按「类型+时间戳」记账：同一帧只在首个
+	 * 消费者执行一次；新点击=新时间戳=照常执行。sessionStorage 跨
+	 * reload 存活（同 tab）=重载链上的全部重放被拦；无账本环境（桩缺
+	 * 席/隐私模式）降级为旧行为照旧执行。 */
+	var petFrameOnce = function (kind, time) {
+		if (typeof window === 'undefined' || !window.sessionStorage || typeof window.sessionStorage.getItem !== 'function') return true;
+		try {
+			var key = 'dsh-whale:once-' + kind;
+			if (String(window.sessionStorage.getItem(key)) === String(time)) return false;
+			window.sessionStorage.setItem(key, String(time));
+		} catch (e) { return true; }
+		return true;
+	};
+
+	/* 可见页回执清账（11-14，用户实报「跳转偶发弹开的是设置页」）：页鲸
+	 * 可见态即时消费 jump/settings 后 POST /pet/ctrl clear-pending 清掉
+	 * ledger 留守——pending 意图只服务「页鲸不在场」的补偿场景，可见页
+	 * 已把动作落到用户眼前，留守只会变成下次唤醒的过期重演。隐藏页不
+	 * 回执：v2 僵尸渲染层角落（消费了但窗口不可见）仍由补投兜底。 */
+	var ackPendingClear = function (kind) {
+		if (typeof document === 'undefined' || document.hidden) return;
+		if (typeof fetch !== 'function') return;
+		try {
+			fetch('/api/whale-assistant/pet/ctrl', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ action: 'clear-pending', kind: kind })
+			}).catch(function () {});
+		} catch (e) { /* 回执失败无碍主流程：120s 新鲜闸仍是兜底 */ }
+	};
+
 	function consume(events, bootId) {
 		var replayBatch = false;
 		if (bootId && bootId !== knownBootId) {
@@ -427,6 +463,15 @@
 					 * 开机先藏的页鲸靠它唤醒（幂等闸门不许拦权威状态） */
 					try { applyPetDormant(petDormantOf(f.enabled, f.form, f.up, f.spawning), true); } catch (e) {}
 				}
+				/* 形态即时应用（11-14 用户实报）：桌宠页收到 pet/state 帧即缝给
+				 * page.html 的 applyForm（幂等：同形态零动作）——此前桌宠页的 form
+				 * 变化只有 2s fetchState 兜底轮询一条路。休眠仲裁仍 PET_MODE 短路。 */
+				if (PET_MODE && typeof f.form === 'string') {
+					try {
+						var petHost = typeof window !== 'undefined' && window.__dshPetHost;
+						if (petHost && typeof petHost.applyForm === 'function') petHost.applyForm(f.form);
+					} catch (ePe) {}
+				}
 				continue;
 			}
 			/* 桌宠通知双击跳转（11-03）：宿主把合成码反查回真实 sessionId 后
@@ -439,8 +484,21 @@
 			if (f && f.type === 'pet/jump') {
 				var jTime = f.time || 0;
 				if (Date.now() - jTime < 10000 && f.sessionId &&
-					typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+					typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' &&
+					petFrameOnce('jump', jTime)) {
 					try { window.dispatchEvent(new CustomEvent('dsh-whale:pet-jump', { detail: { sessionId: f.sessionId, atMs: typeof f.atMs === 'number' ? f.atMs : undefined } })); } catch (e) {}
+					ackPendingClear('jump');
+				}
+				continue;
+			}
+			/* 通知已读联动（11-14）：页鲸看到用户在 DSH 里打开某会话时 POST
+			 * dismiss，宿主反查任务码后广播 pet/dismiss——桌宠页把对应任务的
+			 * 未读清掉（红标 -1、队列剔除）。core 不引用 ui 的队列函数（方向
+			 * 闸门）：派发自定义事件，bootstrap.js 自行监听执行。 */
+			if (f && f.type === 'pet/dismiss') {
+				if (PET_MODE && Number.isInteger(f.code) && f.code > 0 &&
+					typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+					try { window.dispatchEvent(new CustomEvent('dsh-whale:pet-dismiss', { detail: { code: f.code } })); } catch (e) {}
 				}
 				continue;
 			}
@@ -451,7 +509,7 @@
 			 * PET_MODE 短路（桌宠页绝不因这条帧自我刷新，否则回环）。 */
 			if (f && f.type === 'pet/reload-page') {
 				var rpTime = f.time || 0;
-				if (!PET_MODE && Date.now() - rpTime < 10000 &&
+				if (!PET_MODE && Date.now() - rpTime < 10000 && petFrameOnce('reload', rpTime) &&
 					typeof window !== 'undefined' && window.location && typeof window.location.reload === 'function') {
 					try { setTimeout(function () { window.location.reload(); }, 80); } catch (e) {}
 				}
@@ -466,9 +524,10 @@
 			 * pet/jump）；PET_MODE 短路（桌宠页无 DSH 面板可开）。 */
 			if (f && f.type === 'pet/open-settings') {
 				var osTime = f.time || 0;
-				if (!PET_MODE && Date.now() - osTime < 10000 &&
+				if (!PET_MODE && Date.now() - osTime < 10000 && petFrameOnce('settings', osTime) &&
 					typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
 					try { window.dispatchEvent(new CustomEvent('dsh-whale:pet-open-settings')); } catch (e) {}
+					ackPendingClear('settings');
 				}
 				continue;
 			}
@@ -485,7 +544,13 @@
 			}
 			if (f.type === 'session/projection') {
 				if (f.key === 'title') {
-					if (f.sessionId !== resolveCurrentSessionId()) {
+					/* 11-14（用户 rc.3 实机「[任务 36] 需要你选择」而侧栏有真名）：
+					 * 「当前会话跳过」在页面语境=标题由 DOM 读取器喂，但桌宠页
+					 * 没有 DOM 读取器——投影帧是唯一真名来源；而 session-key 的
+					 * 缓存扫描兜底会把刚被 feedEventFrame 命名的合成会话
+					 * （session-pet-sN='任务 N'）解析成「当前会话」→ 投影永远
+					 * 被跳过=真名饿死。PET_MODE 下绝不跳过。 */
+					if (f.sessionId !== resolveCurrentSessionId() || PET_MODE) {
 						var v = f.value;
 						var title = typeof v === 'string' ? v : (v && typeof v.title === 'string' ? v.title : null);
 						if (title) {
@@ -493,7 +558,9 @@
 							try {
 								var subs = window.__dshWhale && window.__dshWhale.subagentSessions;
 								var info = subs && subs.get(f.sessionId);
-								if (info && !info.title) info.title = title;
+								/* 占位快照跟随真名（11-14）：注册期快照可能是「任务 N」
+								 * （桌宠首轮命名早于注册）——已有值但为占位时也要刷新 */
+								if (info && (!info.title || /^任务 \d+$/.test(info.title))) info.title = title;
 							} catch (e) {}
 							/* 晚到真名改写（11-06 二轮，SSE 稳态补齐）：title 帧
 							 * 晚于通知入队时（宿主 announceTitle 异步+快速任务

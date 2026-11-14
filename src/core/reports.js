@@ -154,16 +154,28 @@
 	 * drops by one. */
 	var lastShownReport = null;
 
+	/** 通知已读联动·到达侧（11-14 用户实报「我停留在对话页面，通知弹出来
+	 * 刚好也看见了——1 弹出来自然就消成 0，这才叫联动」）：报告所属会话=
+	 * 本窗口 pin 时的「正在看」判定。**只认 pin 不认全局链回退**——回退链
+	 * 会陈旧（别的窗口切走的会话/跳回旧对话的缓存），拿它判定「看见了」
+	 * 会错杀真没看过的通知；pin=本窗口自己的 DOM 活动快照，宁漏勿错。 */
+	function isViewedSession(sid) {
+		if (!sid || typeof sessionStorage === 'undefined') return false;
+		try { return sessionStorage.getItem(WINDOW_PIN_KEY) === sid; } catch (e) { return false; }
+	}
+
 	/** Record one job report for the unread badge (bubble is shown by the caller).
 	 * `snapshot === false` stores NO token/pressure data (used for the
 	 * turn/start report — a task that just started has nothing to report).
 	 * `endTime` (ms epoch of the moment this report is about) powers the
 	 * double-click jump: the bubble jump pages the log back to THAT moment. */
 	function pushReport(text, duration, sessionId, snapshot, endTime) {
-		/* snapshot the task's token/pressure with the report, so reading it
-		 * later can re-show the same numbers. The per-turn burn is only
-		 * snapshotted when it belongs to THIS session (see turnTokenSession) */
-		reportQueue.push({
+		/* 通知已读联动（11-14）：报告到达时用户正看着这个会话（本窗口 pin
+		 * 命中）=当场已读——未读不入队（气泡照常弹、历史照记、红标不涨），
+		 * 并 relay 桌宠端同步清（桌宠的同款通知刚到、红标闪 1 即被
+		 * pet/dismiss 帧消成 0=用户描述的「弹出来消成 0」）。 */
+		var viewedNow = isViewedSession(sessionId);
+		var report = {
 			text: text,
 			duration: duration,
 			sessionId: sessionId,
@@ -172,12 +184,26 @@
 			sessionTokens: snapshot === false ? null : sessionTotalTokens(sessionId),
 			pressure: snapshot === false ? null : sessionPressure.get(sessionId),
 			endTime: typeof endTime === 'number' ? endTime : null
-		});
-		/* generous bound: the badge must keep accumulating long past 20 */
-		if (reportQueue.length > REPORT_QUEUE_CAP) reportQueue.shift();
-		lastShownReport = reportQueue[reportQueue.length - 1];
+		};
+		if (!viewedNow) {
+			reportQueue.push(report);
+			/* generous bound: the badge must keep accumulating long past 20 */
+			if (reportQueue.length > REPORT_QUEUE_CAP) reportQueue.shift();
+		}
+		/* lastShownReport 语义不变（始终=最新报告）：双击跳转的 endTime
+		 * 锚定依赖它，未入队的「已读」报告同样可作跳转锚 */
+		lastShownReport = report;
 		currentSaySession = sessionId || null;
 		renderUnread();
+		if (viewedNow && sessionId && !PET_MODE && typeof fetch === 'function') {
+			try {
+				fetch('/api/whale-assistant/pet/ctrl', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ action: 'dismiss', sessionId: sessionId })
+				}).catch(function () {});
+			} catch (eViewed) { /* 桌宠不在线/桩环境：静默 */ }
+		}
 	}
 
 	/** Read the newest report: pop it, show it, resolve `reading` on its own timer. */

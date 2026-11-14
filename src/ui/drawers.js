@@ -167,13 +167,14 @@
 		var historySearch = '';
 
 		/** ⏰ 提醒: presets in the right-click menu; persisted in
-		 * localStorage so they survive reloads; a 20s interval fires due
-		 * ones as bubble + attention chime + unread badge. */
+		 * localStorage so they survive reloads; the precise fire timer
+		 * (armReminderTimer) rings due ones as bubble + chime ×3 + badge. */
 		function loadReminders() {
 			try { return JSON.parse(localStorage.getItem('dsh-whale:reminders') || '[]'); } catch (e) { return []; }
 		}
 		function saveReminders(list) {
 			try { localStorage.setItem('dsh-whale:reminders', JSON.stringify(list)); } catch (e) {}
+			armReminderTimer(); /* 增删后重臂：新增的更早提醒立刻接管定时（函数声明提升） */
 		}
 		function openReminders() {
 			closeCtxHistory(); /* drawers and floating panels never stack */
@@ -319,7 +320,13 @@
 			ctxPanel = panel;
 			showFloatingPanel(panel, 230, 200);
 		}
-		setInterval(function () {
+		/** 触发环（11-14 重做）：旧 20s 轮询的颗粒度就是延时上界——用户实报
+		 * 「20:33:10 的提醒 15 秒左右才响」。改为精确定时：对最近一条到点
+		 * 时刻 setTimeout 直响（可见窗零节流，误差 ≤1 拍）；saveReminders 后
+		 * 重臂（新增更早的提醒立刻接管）、storage 事件接管同 profile 其他
+		 * 窗口的增删；5s 轮询只做病态兜底（漏 storage 事件/时钟跳变）。 */
+		var remindTimer = null;
+		function fireDueReminders() {
 			var list = loadReminders();
 			var nowT = Date.now();
 			var due = [];
@@ -337,9 +344,34 @@
 				 * later must never resurrect a "此次任务消耗 X tokens" panel
 				 * from whatever turn happened to be last (user-reported bug) */
 				pushReport(msg, 6000, undefined, false);
-				playDing('remind'); /* 音色面板可选（soundRemind，默认铃铛） */
+				/* 连响三声（11-14 用户拍板）：单声与完成通知难以区分，三声
+				 * 顺次入队（DING_GAP_MS 间隔连发，绝不重叠）——一听就是
+				 * 「提醒在叫你」，不是又一个任务完成。音色面板可选
+				 * （soundRemind，默认铃铛）。 */
+				playDing('remind');
+				playDing('remind');
+				playDing('remind');
 			}
-		}, 20000);
+		}
+		function armReminderTimer() {
+			if (remindTimer) { clearTimeout(remindTimer); remindTimer = null; }
+			var list = loadReminders();
+			var next = Infinity;
+			for (var ai = 0; ai < list.length; ai++) { if (list[ai].at < next) next = list[ai].at; }
+			if (next === Infinity) return;
+			remindTimer = setTimeout(function () {
+				remindTimer = null;
+				fireDueReminders(); /* 时钟回拨等导致的空响无害 */
+				armReminderTimer();
+			}, Math.max(0, next - Date.now()));
+		}
+		try {
+			window.addEventListener('storage', function (ev) {
+				if (ev && ev.key === 'dsh-whale:reminders') { fireDueReminders(); armReminderTimer(); }
+			});
+		} catch (eS) { /* 桩环境 */ }
+		setInterval(fireDueReminders, 5000); /* 兜底环：只防病态，正常路径不靠它 */
+		armReminderTimer();
 
 		/** 📊 任务周报: last-7-day buckets from the history records, drawn in
 		 * the same drawer style as the history list (fixed height, list

@@ -396,9 +396,14 @@
 			var atMs = typeof event.time === 'number' ? event.time : Date.now();
 			if (isAborted) {
 				/* stopped by the user: not a success — no completion bell, no
-				 * gear credit; history keeps a neutral ⏹ entry that still jumps */
+				 * gear credit; history keeps a neutral ⏹ entry that still jumps.
+				 * 11-14（用户拍板）：中止/截断/失败同族=「任务没正常跑完」，
+				 * 统一播任务失败音色（免打扰同失败待遇）。 */
 				var stopMsg = '[' + title + ']被中止了 ✋';
-				if (!event.replaySuppress) say(stopMsg, DURATION_END, frame.sessionId);
+				if (!event.replaySuppress) {
+					say(stopMsg, DURATION_END, frame.sessionId);
+					if (!dndActive()) playDing('fail');
+				}
 				pushReport(stopMsg, DURATION_END, frame.sessionId, undefined, atMs);
 				pushHistory({ title: title, sessionId: frame.sessionId, kind: 'killed', at: Date.now(), endTime: atMs, turnTokens: sessionTurnTokens(frame.sessionId) });
 			} else if (isError) {
@@ -465,7 +470,9 @@
 				 * the pair silent (badge only), exactly like the bubble. */
 				if (!dndActive()) {
 					say(endMsg, DURATION_END, frame.sessionId);
-					playDing('done');
+					/* 截断与失败同族（11-14 用户拍板）：任务没正常跑完=失败
+					 * 音色，不再混用完成「叮」 */
+					playDing(isMaxTokens ? 'fail' : 'done');
 					var rep = statusReport(sessionTurnTokens(frame.sessionId), sessionTotalTokens(frame.sessionId), sessionPressure.get(frame.sessionId));
 					// KNOWN-COUPLING: frames->status-panel — push render (completion report opens the panel; the failure twin is the repFail call above)
 					if (rep) showStatusPanel(rep, DURATION_END);
@@ -616,7 +623,12 @@
 		var sessionId = payload.sessionId;
 		var name = '';
 		var info = subagentSessions.get(sessionId);
-		if (info && (info.label || info.title)) name = info.label || info.title;
+		/* 占位过滤（11-14，用户 rc.3 实机「[任务 36] 需要你选择」而侧栏有真名）：
+		 * 注册期快照的 info.title 可能是合成占位（「任务 N」——桌宠首轮
+		 * turn/start 的 feedEventFrame 命名早于注册）——与 reportTurn 同款
+		 * 语义：占位不许压住真名（sessionTitles 已被投影帧更新为真名）。 */
+		if (info && info.label) name = info.label;
+		if (!name && info && info.title && !/^任务 \d+$/.test(info.title)) name = info.title;
 		if (!name) {
 			var stored = sessionTitles.get(sessionId) || bookTitle(sessionId);
 			if (stored) name = stored;

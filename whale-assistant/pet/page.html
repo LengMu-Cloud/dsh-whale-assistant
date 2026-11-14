@@ -79,8 +79,11 @@
     pointer-events: none;
     background: linear-gradient(150deg, rgba(58,58,62,0.60) 0%, rgba(26,26,28,0.58) 48%, rgba(96,96,102,0.42) 100%);
     border: 1px solid rgba(255,255,255,0.14);
-    box-shadow: 0 8px 22px rgba(0,0,0,0.38),
-                inset 0 1px 0 rgba(255,255,255,0.50),
+    /* 外投影禁用（11-14 用户实报「灰色魔方块一样的边缘」）：贴身区域只外扩
+       10px（pet.ps1 bp=10），22px 模糊外影溢出裁剪线=灰晕在区域边缘被硬切
+       出一个方块边。桌宠语境「一律去阴影」既定原则（见上方版面修正）同样
+       适用于气泡卡——玻璃质感由 渐变+高光描边+内投影 三层承担。 */
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.50),
                 inset 0 -8px 14px rgba(200,200,205,0.14),
                 inset 0 0 18px rgba(200,200,205,0.10);
   }

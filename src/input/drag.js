@@ -191,6 +191,8 @@
 		/* openSettings export retired (11-08): the drawer is gone — settings
 		 * live on the sidebar page (panel-page.js via window.__dshWhalePanel) */
 		window.__dshWhale.openReminders = openReminders;
+		/* reminder fire loop seam (回归 11-14): due-consume + triple chime */
+		window.__dshWhale._fireReminders = fireDueReminders;
 		window.__dshWhale.openHealthPanel = openHealthPanel;
 		/* heart spawner lives in the uiInit closure — mood.js idle hearts and
 		 * milestone celebrations reach it through this seam */

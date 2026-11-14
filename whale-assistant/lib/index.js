@@ -574,21 +574,31 @@ function apply(ctx) {
 					try {
 						const pendDoc = loadStore(storeDir());
 						const pj = pendDoc && pendDoc.pendingJump;
-						if (pj && pj.sessionId && Date.now() - (pj.time || 0) < 120000) {
-							pushFrame({ type: 'pet/jump', sessionId: pj.sessionId, atMs: typeof pj.atMs === 'number' && pj.atMs > 0 ? pj.atMs : undefined, time: Date.now() });
-							queueStoreWrite(storeDir(), () => {
-								const d = loadStore(storeDir()) || {};
-								delete d.pendingJump;
-								saveStoreAtomic(storeDir(), d);
-								return d;
-							}).catch(() => {});
-						}
 						const pset = pendDoc && pendDoc.pendingSettings;
-						if (pset && Date.now() - (pset.time || 0) < 120000) {
+						const pjFresh = !!(pj && pj.sessionId && Date.now() - (pj.time || 0) < 120000);
+						const psFresh = !!(pset && Date.now() - (pset.time || 0) < 120000);
+						/* 单一意图语义（11-14，用户实报「跳转偶发弹开的是设置页」）：
+						 * 两个 pending 同窗时只兑现**较新**的一项——用户的最新动作
+						 * 取代旧承诺（点过设置后又点了会话跳转，醒来该去会话不是
+						 * 设置）；被压制的旧意图一并清除（留守只会变成下一次唤醒
+						 * 的过期重演）。 */
+						let deliverJump = pjFresh;
+						let deliverSettings = psFresh;
+						if (deliverJump && deliverSettings) {
+							if ((pj.time || 0) >= (pset.time || 0)) deliverSettings = false;
+							else deliverJump = false;
+						}
+						if (deliverJump) {
+							pushFrame({ type: 'pet/jump', sessionId: pj.sessionId, atMs: typeof pj.atMs === 'number' && pj.atMs > 0 ? pj.atMs : undefined, time: Date.now() });
+						}
+						if (deliverSettings) {
 							pushFrame({ type: 'pet/open-settings', time: Date.now() });
+						}
+						if (pjFresh || psFresh) {
 							queueStoreWrite(storeDir(), () => {
 								const d = loadStore(storeDir()) || {};
-								delete d.pendingSettings;
+								if (pjFresh) delete d.pendingJump;
+								if (psFresh) delete d.pendingSettings;
 								saveStoreAtomic(storeDir(), d);
 								return d;
 							}).catch(() => {});

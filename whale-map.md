@@ -63,7 +63,7 @@
 
 > Server-events consumer (inline module): polls the whale-assistant host's /api/whale-assistant/events route (the host lives in the dsh server's cordis container and buffers session events for EVERY session) and feeds the frames the DOM adapter cannot see:    - turn/start of EVERY session (2026-09-02 
 
-**rememberSeq()** · **petDormantOf()** · **feedEventFrame()** · **registerBackground()** · **lookupTitlesFromHistory()** · **consume()** · **poll()** · **handleSseData()** · **connectSSE()**
+**rememberSeq()** · **petDormantOf()** · **feedEventFrame()** · **registerBackground()** · **lookupTitlesFromHistory()** · **consume()** · **poll()** · **handleSseData()** · **connectSSE()** · **petFrameOnce()** · **ackPendingClear()**
 
 ## **src/core/health.js**
 
@@ -81,7 +81,7 @@
 
 > Unread job-report count: accumulates reports, one click reads one.
 
-**say()** · **renderUnread()** · **sessionTurnTokens()** · **addSessionTurnTokens()** · **armEndBackfill()** · **patchEndSnapshots()** · **backfillEndPanel()** · **sessionTotalTokens()** · **statusReport()** · **pushReport()** · **readNext()**
+**say()** · **renderUnread()** · **sessionTurnTokens()** · **addSessionTurnTokens()** · **armEndBackfill()** · **patchEndSnapshots()** · **backfillEndPanel()** · **sessionTotalTokens()** · **statusReport()** · **isViewedSession()** · **pushReport()** · **readNext()**
 
 ## **src/core/dings.js**（行切片）
 

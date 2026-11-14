@@ -66,6 +66,13 @@ function pinWindowSession(sid) {
 	try {
 		if (typeof sessionStorage === 'undefined' || !isRealSessionId(sid)) return;
 		sessionStorage.setItem(WINDOW_PIN_KEY, sid);
+		/* 通知已读联动（11-14）：pin=「本窗口正在看 sid」的唯一漏斗
+		 * （本地 DOM 活动 + session-jump 双信号汇合）。派发给 bootstrap
+		 * 的已读清理缝——清未读/桌宠中继都在那边（utils 不 import ui，
+		 * 事件是方向闸门合规通道；幂等去重在监听端做）。 */
+		if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof window.CustomEvent === 'function') {
+			window.dispatchEvent(new window.CustomEvent('dsh-whale:session-viewed', { detail: { sessionId: sid } }));
+		}
 	} catch (e) {}
 }
 

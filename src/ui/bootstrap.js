@@ -37,6 +37,109 @@
 			renderUnread();
 		}
 
+		/* 通知已读联动（11-14 用户实报）：用户不点气泡/红标、直接在 DSH 里
+		 * 打开对话看状态时，那条（些）未读要对应清掉——不然一段时间没看，
+		 * 红标堆一串旧通知，点读回时顺序全乱。pin=「正在看」漏斗（本地 DOM
+		 * 活动 + 跳转双信号），同会话去重（DOM 活动是高频信号，不能每次都
+		 * 清/发）；清完红标照 renderUnread 重算。 */
+		var lastViewedSid = null;
+		/** Drop every unread of ONE session (queue entries + the in-flight
+		 * click-replay + the bubble's read-back copy) — the session-wide
+		 * counterpart of markBubbleRead, which only clears the single report
+		 * the user acted on. Returns the number of queue entries removed
+		 * (diagnostics/tests). */
+		function clearUnreadBySession(matchSid) {
+			var removed = 0;
+			for (var qi = reportQueue.length - 1; qi >= 0; qi--) {
+				if (reportQueue[qi].sessionId === matchSid) {
+					reportQueue.splice(qi, 1);
+					removed++;
+				}
+			}
+			if (reading && reading.sessionId === matchSid) {
+				clearTimeout(readTimer);
+				reading = null;
+			}
+			/* 气泡推进（11-14 用户实报「红标消了，但气泡还挂着 B 的通知，
+			 * 双击跳回的还是已读的 B」）：被清会话的内容正占着气泡时，气泡
+			 * 必须跟进——切到最新一条**剩余未读**当预览（不算读：红标不动，
+			 * 双击气泡跳的就是它，跳转即 markBubbleRead 正常消费）；没有
+			 * 剩余未读就收气泡——不许停在已读内容的残影上。 */
+			var bubbleHoldsIt = currentSaySession === matchSid;
+			if (lastShownReport && lastShownReport.sessionId === matchSid) lastShownReport = null;
+			renderUnread();
+			if (bubbleHoldsIt) {
+				var next = reportQueue.length ? reportQueue[reportQueue.length - 1] : null;
+				if (next) {
+					lastShownReport = next;
+					currentSaySession = next.sessionId || null; /* 双击跳转认它 */
+					uiSay(next.text, Math.min(next.duration || 5000, 3500), next.sessionId);
+				} else {
+					lastShownReport = null;
+					currentSaySession = null;
+					var bEl = document.querySelector('.dsh-whale-bubble');
+					if (bEl) {
+						if (uiSay.timer) { clearTimeout(uiSay.timer); uiSay.timer = null; }
+						uiSay.visible = false;
+						bEl.classList.remove('show');
+					}
+					hideStatusPanel(); /* 气泡收，配对面板 1:1 同收 */
+				}
+			}
+			return removed;
+		}
+
+		/* 监听端逐个 try/catch 包裹=vm 桩兼容（armAudioUnlockRetry 先例）：
+		 * 桩环境 window 事件注册表缺席也不许炸启动。 */
+		try {
+			window.addEventListener('dsh-whale:session-viewed', function (ev) {
+				var sid = ev && ev.detail && ev.detail.sessionId;
+				/* 桌宠合成会话守卫：isRealSessionId 只挡 FALLBACK 占位，而
+				 * session-pet-sN 以 'session-' 开头会被放行——桌宠页一旦 pin
+				 * 了合成会话，就会清掉自己的通知队列、还对宿主 POST 一轮
+				 * dismiss 回环。session-viewed 的语义=「用户看了真实 DSH 对
+				 * 话」，所以守卫放监听端（源头一处挡住两个受害者：队列清除
+				 * + relay 回环；桌宠通知的清除只认宿主 pet/dismiss 帧）。 */
+				if (!sid || /^session-pet-s\d+$/.test(sid) || sid === lastViewedSid) return;
+				lastViewedSid = sid;
+				clearUnreadBySession(sid);
+				if (!PET_MODE && typeof fetch === 'function') {
+					/* 桌宠中继：页鲸的队列清了，桌宠窗口的同款未读也要清——
+					 * 宿主把真实会话反查成任务码再广播 pet/dismiss（fire-and-
+					 * forget：桌宠不在线/未知会话宿主侧 delivered:false 无害）。 */
+					try {
+						fetch('/api/whale-assistant/pet/ctrl', {
+							method: 'POST',
+							headers: { 'content-type': 'application/json' },
+							body: JSON.stringify({ action: 'dismiss', sessionId: sid })
+						}).catch(function () { /* 桌宠离线：静默 */ });
+					} catch (eRelay) {}
+				}
+			});
+		} catch (eL1) {}
+		try {
+			window.addEventListener('dsh-whale:pet-dismiss', function (ev) {
+				var code = ev && ev.detail && ev.detail.code;
+				if (typeof code !== 'number' || !(code > 0)) return;
+				/* 宿主广播的任务码（detail.code=N）反查回该任务的合成会话，
+				 * 清桌宠页自己的未读队列（与 session-viewed 同一条清理缝）。 */
+				clearUnreadBySession(PET_SID_PREFIX + code);
+			});
+		} catch (eL2) {}
+
+		/* 已读联动诊断缝（11-14）：真机「红标没消」先看这里——pin=本窗口
+		 * 认定的正在看会话（session-key 漏斗）、lastViewedSid=去重游标、
+		 * queue=当前未读队列的会话清单。三者对不上号即可定位是哪一环。 */
+		window.__dshWhale._viewedState = function () {
+			try {
+				return {
+					pin: typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('dsh-whale:window-session') : null,
+					lastViewedSid: lastViewedSid,
+					queue: reportQueue.map(function (r) { return r.sessionId; })
+				};
+			} catch (eV) { return null; }
+		};
+
 		/** Jump to the conversation behind the CURRENT bubble (double-click
 		 * on the bubble, or on a spot that overlaps it). Idle summaries
 		 * carry no session and only get a hint. */

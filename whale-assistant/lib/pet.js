@@ -161,6 +161,18 @@ export function enumerateFrames(frames, book) {
 	if (!Array.isArray(frames)) return out;
 	for (const frame of frames) {
 		if (!frame || typeof frame !== 'object') continue;
+		/* pet/state / pet/dismiss 直通（11-14 用户实报「设置切形态比桌宠右键
+		 * 菜单慢一拍」）：枚举流此前把非 session/* 全剥，桌宠页感知 form 变化
+		 * 只剩 2s fetchState 兜底轮询。这两类帧全是布尔/枚举串/整数编号，
+		 * 零会话内容，白名单字段放行=枚举化边界不破。 */
+		if (frame.type === 'pet/state') {
+			out.push({ seq: typeof frame.seq === 'number' ? frame.seq : 0, type: 'pet/state', enabled: frame.enabled === true, form: typeof frame.form === 'string' ? frame.form : 'full', up: frame.up === true, spawning: frame.spawning === true });
+			continue;
+		}
+		if (frame.type === 'pet/dismiss') {
+			out.push({ seq: typeof frame.seq === 'number' ? frame.seq : 0, type: 'pet/dismiss', code: Number(frame.code) | 0 });
+			continue;
+		}
 		const sid = typeof frame.sessionId === 'string' ? frame.sessionId : '';
 		if (!sid || typeof frame.seq !== 'number') continue;
 		/* projections: the pet page consumes them through the SAME consume()
@@ -842,10 +854,28 @@ function killTree(pid) {
 					if (action === 'form') {
 						if (PET_FORMS.indexOf(body.value) === -1) throw new Error('form must be one of ' + PET_FORMS.join('|'));
 						form = body.value;
+						/* 先广播后落盘（11-14）：形态是交互动作——SSE 消费端立刻应用；
+						 * 磁盘写只承担跨重启持久化，不挡在广播前面。 */
+						broadcastPetState();
 						writePetDoc({ form }).then(() => {
-							broadcastPetState();
 							plain(res, 200, JSON.stringify({ ok: true, pet: petState() }));
 						}).catch((e) => plain(res, 500, JSON.stringify({ ok: false, error: String(e && e.message || e) })));
+						return;
+					}
+					if (action === 'dismiss') {
+						/* 通知已读联动（11-14 用户实报「在 DSH 里直接看了对话，鲸鱼红标
+						 * 不消失」）：页鲸检测到本窗口正在看某会话 → POST dismiss → 宿主
+						 * 把真实会话反查成桌宠任务码 → 广播 pet/dismiss，桌宠页把该任务
+						 * 的未读清掉。真实 sessionId 只进反查不落盘，边界同 jump。 */
+						const realSid = typeof body.sessionId === 'string' ? body.sessionId : '';
+						const dCode = realSid && book.codes && typeof book.codes.get === 'function' ? book.codes.get(realSid) : null;
+						if (Number.isInteger(dCode) && dCode > 0) {
+							/* pushFrame 调用照抄 jump：管线异常不得挂死响应 */
+							try {
+								if (typeof deps.pushFrame === 'function') deps.pushFrame({ type: 'pet/dismiss', code: dCode });
+							} catch (ePush) { /* 广播失败按未送达回报 */ }
+						}
+						plain(res, 200, JSON.stringify({ ok: true, delivered: Number.isInteger(dCode) && dCode > 0 }));
 						return;
 					}
 					if (action === 'jump') {
@@ -963,6 +993,30 @@ function killTree(pid) {
 									.filter((e) => e && typeof e === 'object' && (e.at || 0) >= cutoff);
 							}
 							doc.clearAt = cutoff === null ? Date.now() : cutoff;
+							saveStoreAtomic(dir, doc);
+							return doc;
+						}).then(
+							() => plain(res, 200, JSON.stringify({ ok: true })),
+							(e) => plain(res, 500, JSON.stringify({ ok: false, error: String(e && e.message || e) }))
+						);
+						return;
+					}
+					if (action === 'clear-pending') {
+						/* 11-14（用户实报「跳转偶发弹开的是设置页」）：页鲸可见态
+						 * 即时消费 jump/settings 后回执清账——pending 意图只该服务
+						 * 「页鲸不在场」的补偿场景；可见页已把动作落到用户眼前，
+						 * 留守只会变成下一次唤醒的过期重演（设置页盖住新跳转）。
+						 * kind: jump | settings（无账本环境同 clear-history 语义）。 */
+						const kind = body && body.kind === 'settings' ? 'settings' : 'jump';
+						if (typeof deps.ledgerDir !== 'function') {
+							plain(res, 500, JSON.stringify({ ok: false, error: 'ledger unavailable' }));
+							return;
+						}
+						const dir = deps.ledgerDir();
+						queueStoreWrite(dir, () => {
+							const doc = loadStore(dir) || {};
+							if (kind === 'settings') delete doc.pendingSettings;
+							else delete doc.pendingJump;
 							saveStoreAtomic(dir, doc);
 							return doc;
 						}).then(

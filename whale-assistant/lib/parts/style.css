@@ -800,6 +800,24 @@ body[data-ds-dark-theme] {
 .dsh-whale-manual-sec[data-folded="1"]::after {
 	content: '▸';
 }
+/* 分组小标题（11-14）：机制内幕区 19 条按 5 组重排后的组头行——
+   小号加粗 muted 字+右侧通长细线，视觉上是「组签」而非又一个分区 */
+.dsh-whale-manual-cat {
+	margin: 12px 2px 6px;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.05em;
+	color: var(--wh-panel-muted);
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.dsh-whale-manual-cat::after {
+	content: '';
+	flex: 1;
+	height: 1px;
+	background: var(--wh-panel-divider);
+}
 /* 折叠行（批B）：独立类名——搜索过滤用 dsh-whale-hide，两套互不干扰 */
 .dsh-whale-manual-folded {
 	display: none;

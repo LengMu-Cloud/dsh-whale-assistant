@@ -46,7 +46,7 @@ const STATIC_CHECKS = [
 	{ id: 'D4', layer: 'D DOM 适配', desc: 'data-tool / data-chat-call-id / data-state', mode: 'all', patterns: ['data-tool', 'data-chat-call-id', 'data-state'] },
 	{ id: 'D5', layer: 'D DOM 适配', desc: '用量文本（bundle 转义时漏报，人工复核）', mode: 'any', patterns: ['用量', '上下文已用'] },
 	{ id: 'D6', layer: 'D DOM 适配', desc: 'document.title 后缀 DeepSeek Harness', mode: 'all', patterns: ['DeepSeek Harness'] },
-	{ id: 'E1', layer: 'E 会话导航 API', desc: 'sessions 服务存在（0.4.0 插件桥 inject 目标）', mode: 'all', patterns: ['const sessions = ctx.sessions'] },
+	{ id: 'E1', layer: 'E 会话导航 API', desc: 'sessions 服务存在（0.4.0 插件桥 inject 目标）', mode: 'any', patterns: ['const sessions = ctx.sessions', 'sessions=ctx.sessions'] }, /* 双形态任一命中：rc.2 起压缩器去空格（0.2.2 体检实证） */
 	{ id: 'E2', layer: 'E 会话导航 API', desc: 'sessions.loadOlder（翻页，插件桥依赖）', mode: 'all', patterns: ['loadOlder'] },
 	{ id: 'F1', layer: 'F 侧边栏插槽', desc: 'sidebar.panellist 条目聚合（11-08 侧边栏入口注册点，ui-sidebar+runner 目录）', mode: 'all', patterns: ['sidebar.panellist'] },
 	{ id: 'F2', layer: 'F 侧边栏插槽', desc: 'layout.selectPanel 页面切换（11-08 设置跳转桥依赖）', mode: 'all', patterns: ['selectPanel'] },

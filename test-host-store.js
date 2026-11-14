@@ -239,7 +239,28 @@ ok(jbook.next === 2, 'jump: replay does not churn the code book (next stays 2)')
 const j2 = enumerateFrames([{ seq: 104, type: 'session/event', sessionId: 'session-A', event: { type: 'turn/start', time: 5, data: {} } }], jbook);
 ok(j2[0].sessionId === 'session-pet-s3', 'jump: a new turn after replay takes the next number (s3)');
 ok(resolvePetCode(jbook, 1) === 'session-A' && resolvePetCode(jbook, 2) === 'session-A', 'jump: reverse index resolves BOTH task codes to the real conversation');
-ok(resolvePetCode(jbook, 4) === null && resolvePetCode(jbook, 0) === null && resolvePetCode(jbook, -1) === null, 'jump: unknown/expired codes resolve to null');
+	ok(resolvePetCode(jbook, 4) === null && resolvePetCode(jbook, 0) === null && resolvePetCode(jbook, -1) === null, 'jump: unknown/expired codes resolve to null');
+
+/* ---- 18d. pet/state / pet/dismiss 枚举直通（11-14，用户实报「设置切形态
+ *      比桌宠右键菜单慢一拍」）：枚举流此前把非 session/* 全剥，桌宠页感知
+ *      form/dismiss 只剩 2s fetchState 兜底轮询。两类帧全是布尔/枚举串/
+ *      整数编号，零会话内容，白名单字段放行=枚举化边界不破。 ---- */
+{
+	const pbook = { codes: new Map(), rev: new Map(), turns: new Map(), next: 0 };
+	const ps1 = enumerateFrames([{ seq: 7, type: 'pet/state', enabled: true, form: 'bubble', up: true, spawning: false, junk: 'x' }], pbook);
+	ok(ps1.length === 1, 'pet/state: frame passes the enumerated stream (form switch reaches the pet page over SSE)');
+	assert.deepStrictEqual(ps1[0], { seq: 7, type: 'pet/state', enabled: true, form: 'bubble', up: true, spawning: false }, 'pet/state: whitelist fields only (junk stripped, exact shape)');
+	const ps2 = enumerateFrames([{ seq: 9, type: 'pet/state', enabled: 1, form: 42, up: 'yes', spawning: null }], pbook);
+	assert.deepStrictEqual(ps2[0], { seq: 9, type: 'pet/state', enabled: false, form: 'full', up: false, spawning: false }, 'pet/state: missing form falls back to full, booleans forced ===true');
+	const pd1 = enumerateFrames([{ seq: 8, type: 'pet/dismiss', code: 3, junk: 'y' }], pbook);
+	ok(pd1.length === 1, 'pet/dismiss: frame passes the enumerated stream');
+	assert.deepStrictEqual(pd1[0], { seq: 8, type: 'pet/dismiss', code: 3 }, 'pet/dismiss: only seq+code survive (junk stripped)');
+	const pd2 = enumerateFrames([{ seq: 10, type: 'pet/dismiss' }], pbook);
+	assert.deepStrictEqual(pd2[0], { seq: 10, type: 'pet/dismiss', code: 0 }, 'pet/dismiss: missing code coerces to 0 (Number(undefined)|0)');
+	/* 原行为不破：无 sessionId 的非 pet 帧仍被丢弃（18 节的 session/event
+	 * 白名单断言继续覆盖正常路径，这里补「pet 帧不得绕过 sid 闸门」回归） */
+	ok(enumerateFrames([{ seq: 1, type: 'session/projection', key: 'title', value: 'x' }], pbook).length === 0, 'enum: sessionId-less non-pet frames stay dropped');
+}
 
 /* ---- heartbeat gate（审计 D-C1/GAP-11，2026-11-04）：自愈判定的五个门 ---- */
 ok(heartbeatGate({ supported: true, enabled: true, spawning: false, childAlive: false, lastSpawnAt: Date.now() - 61000 }, Date.now()) === true, 'heartbeat: dead process + enabled + cooldown passed -> respawn');

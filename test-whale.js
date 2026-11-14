@@ -685,6 +685,90 @@ async function main() {
 		assert.strictEqual(envC.sandbox.localStorage.getItem('dsh-whale:petDormant'), '0', 'wake rewrites the cache to 0');
 	}
 
+	/* 8.7b pet 即时帧「执行一次」闸（11-14，用户实报「桌宠菜单刷新一次，
+	 * DSH 页连刷好几次」）：pet/jump、pet/reload-page、pet/open-settings
+	 * 在 seq 闸门之前消费（帧的 seq 永不入账），10s 时间窗内每次 boot
+	 * 轮询/SSE 重放都会重新送达——reload 重放=连刷 N 次（reload 循环
+	 * ~2s < 10s 窗）。sessionStorage 按「类型+时间戳」记账：同一帧只在
+	 * 首个消费者执行一次；新点击=新时间戳照常执行；陈旧帧照旧被 10s 闸
+	 * 拒掉。 */
+	{
+		const envR = makeEnv();
+		envR.ready();
+		const reloads = [];
+		envR.sandbox.location.reload = function () { reloads.push(1); };
+		envR.sandbox.setTimeout = function (fn) { fn(); return 0; }; /* 80ms 延迟同步化：断言可在同拍进行 */
+		const T1 = Date.now();
+		const frame = (t, n) => ({ seq: n, type: 'pet/reload-page', time: t });
+		envR.sandbox.__dshWhale._pollConsume([frame(T1, 1)], 'boot-r1');
+		assert.strictEqual(reloads.length, 1, 'reload-page frame executes exactly once');
+		envR.sandbox.__dshWhale._pollConsume([frame(T1, 1)], 'boot-r1');
+		assert.strictEqual(reloads.length, 1, 'REPLAYED same frame (same time) within the 10s window does NOT reload again — the multi-reload fix');
+		envR.sandbox.__dshWhale._pollConsume([frame(T1 + 3000, 2)], 'boot-r1');
+		assert.strictEqual(reloads.length, 2, 'a NEW click (new frame time) reloads again — dedupe never blocks fresh intent');
+		envR.sandbox.__dshWhale._pollConsume([{ seq: 9, type: 'pet/reload-page', time: T1 - 20000 }], 'boot-r1');
+		assert.strictEqual(reloads.length, 2, 'stale frame (>10s) still refused by the freshness gate');
+		/* 无账本环境降级：sessionStorage 缺席时保持旧行为照旧执行（可用性优先） */
+		const envR2 = makeEnv();
+		envR2.ready();
+		const reloads2 = [];
+		envR2.sandbox.location.reload = function () { reloads2.push(1); };
+		envR2.sandbox.sessionStorage = null;
+		envR2.sandbox.setTimeout = function (fn) { fn(); return 0; };
+		const T2 = Date.now();
+		envR2.sandbox.__dshWhale._pollConsume([{ seq: 1, type: 'pet/reload-page', time: T2 }], 'boot-r2');
+		envR2.sandbox.__dshWhale._pollConsume([{ seq: 1, type: 'pet/reload-page', time: T2 }], 'boot-r2');
+		assert.strictEqual(reloads2.length, 2, 'no-sessionStorage env degrades to the legacy behaviour (executes on replay)');
+	}
+
+	/* 8.7c 桌宠提问/审核通知真名（11-14，用户 rc.3 实机「[任务 36] 需要你
+	 * 选择」而侧栏有真名「流程测试1」）：桌宠是 SSE 稳态（titles 预填只在
+	 * 轮询跑）——真名唯一来源=宿主投影帧。帧序复现：turn/start→标题投影
+	 * →提问事件 / 审核事件，注意通知必须用真名。 */
+	{
+		const envQ = makeEnv(null, { petMode: true });
+		envQ.ready();
+		const T = Date.now();
+		const corrSeen = [];
+		const origCorr = envQ.sandbox.__dshWhale._correctReports;
+		envQ.sandbox.__dshWhale._correctReports = function (sid, t) { corrSeen.push(String(sid) + '=' + String(t)); return origCorr ? origCorr.apply(this, arguments) : undefined; };
+		envQ.sandbox.__dshWhale._pollConsume([
+			{ seq: 1, type: 'session/event', sessionId: 'session-pet-s36', event: { type: 'turn/start', time: T, data: {} } },
+			{ seq: 2, type: 'session/projection', sessionId: 'session-pet-s36', key: 'title', value: '流程测试1' },
+			{ seq: 3, type: 'session/event', sessionId: 'session-pet-s36', event: { type: 'tool/call', time: T + 100, data: { name: 'ask_user_question', callId: 'pet-q36' } } }
+		], 'boot-q');
+		const qTxt = envQ.bubble() ? envQ.bubble().textContent : '';
+		assert.ok(qTxt.indexOf('流程测试1') >= 0, 'question attention uses the real title, got: ' + qTxt.slice(0, 50) + ' | corr=' + JSON.stringify(corrSeen));
+		envQ.sandbox.__dshWhale._pollConsume([
+			{ seq: 4, type: 'session/event', sessionId: 'session-pet-s37', event: { type: 'turn/start', time: T + 2000, data: {} } },
+			{ seq: 5, type: 'session/projection', sessionId: 'session-pet-s37', key: 'title', value: '流程测试1' },
+			{ seq: 6, type: 'session/event', sessionId: 'session-pet-s37', event: { type: 'approval/asked', time: T + 3000, data: { name: 'Write-Output', toolName: 'Write-Output' } } }
+		], 'boot-q');
+		const aTxt = envQ.bubble() ? envQ.bubble().textContent : '';
+		assert.ok(aTxt.indexOf('流程测试1') >= 0, 'approval attention uses the real title, got: ' + aTxt.slice(0, 50));
+		/* 失败/截断/中止三类通知真名（11-14 用户令实测）：三种 turn/end
+		 * reason 各一轮（turn/start→标题投影→turn/end），文本必须真名+对应
+		 * 后缀。 */
+		const reasons = [
+			{ sid: 'session-pet-s38', kind: 'error', expect: '失败了' },
+			{ sid: 'session-pet-s39', kind: 'max-tokens', expect: '被截断了' },
+			{ sid: 'session-pet-s40', kind: 'aborted', expect: '被中止了' }
+		];
+		let seqN = 10;
+		for (const r of reasons) {
+			seqN += 3;
+			envQ.sandbox.__dshWhale._pollConsume([
+				{ seq: seqN, type: 'session/event', sessionId: r.sid, event: { type: 'turn/start', time: Date.now(), data: {} } },
+				{ seq: seqN + 1, type: 'session/projection', sessionId: r.sid, key: 'title', value: '流程测试1' }
+			], 'boot-q');
+			envQ.sandbox.__dshWhale._pollConsume([
+				{ seq: seqN + 2, type: 'session/event', sessionId: r.sid, event: { type: 'turn/end', time: Date.now() + 50, data: { reason: { kind: r.kind } } } }
+			], 'boot-q');
+			const rt = envQ.bubble() ? envQ.bubble().textContent : '';
+			assert.ok(rt.indexOf('流程测试1') >= 0 && rt.indexOf(r.expect) >= 0, r.kind + ' notification uses the real title + suffix, got: ' + rt.slice(0, 60));
+		}
+	}
+
 	/* 8.8 开机防双鲸第三层（11-05 用户实报「一打开 DSH 就两只小金鱼」）：
 	 * 非桌宠页 uiInit（DOMContentLoaded=首帧渲染前）即隐藏——不信任缓存 0
 	 * （每次关 DSH 桌宠跟随死亡都会把缓存写成 0，冷开必踩 spawn 窗口）；
@@ -1133,6 +1217,12 @@ async function main() {
 	await sleep(140);
 	assert.ok(!AB._runTimer.state().active, `run timer stops on the aborted end: ${JSON.stringify(AB._runTimer.state())}`);
 	assert.ok(envAb.bubble().textContent.includes('被中止了'), `中止 announcement fires for the active session: ${envAb.bubble().textContent}`);
+	/* 11-14（用户拍板）：中止/截断/失败同族=统一任务失败音色——中止此前
+	 * 完全静音。音频频率取证（fail=550/415Hz 双振荡器，闭包 playDing 不
+	 * 可 spy=已知坑），B5 内无其他音效=首两个 start 即本次 ding。 */
+	await sleep(150);
+	const abStarts = envAb.audioStarts().map(Math.round);
+	assert.deepStrictEqual(abStarts.slice(0, 2), [550, 415], `aborted end plays the FAILURE tones (11-14 同族拍板): ${JSON.stringify(abStarts)}`);
 
 	/* B6 (09-06 真机): a completed end dedup-dropped by the ±8s window (the
 	 * DOM chip announced first) must STILL stop the run timer — the stop
@@ -2107,7 +2197,7 @@ async function main() {
 	assert.ok(typeof envCtx.sandbox.window.__dshWhalePanel === 'object' && typeof envCtx.sandbox.window.__dshWhalePanel.mount === 'function', 'panel page mount seam published');
 	const ppHost = envCtx.sandbox.document.createElement('div');
 	envCtx.sandbox.window.__dshWhalePanel.mount(ppHost);
-	assert.ok(ppHost.textContent.includes('⚙️ 设置') && ppHost.textContent.includes('🐋 桌宠') && ppHost.textContent.includes('📊 周报') && ppHost.textContent.includes('📖 使用说明'), 'four tabs rendered');
+	assert.ok(ppHost.textContent.includes('⚙️ 设置') && ppHost.textContent.includes('🐋 小鲸鱼形态') && ppHost.textContent.includes('📊 周报') && ppHost.textContent.includes('📖 使用说明'), 'four tabs rendered');
 	assert.ok(ppHost.textContent.includes('🔔 开工通知'), 'panel settings rows render from CONFIG');
 	const findPpRow = (node, needle) => {
 		if ((node.className || '').indexOf('dsh-whale-pp-row') >= 0 && (node.textContent || '').indexOf(needle) >= 0) return node;
@@ -2141,7 +2231,7 @@ async function main() {
 	findPpRow(ppHost, '🌙 免打扰')._fire('click', { stopPropagation() {} });
 	assert.ok(findPpRow(ppHost, '🌙 免打扰').textContent.includes('关'), 'dnd cycles back to off after the last preset');
 	const ppTabsEl = ppInner(ppHost).children.find((c) => (c.className || '').indexOf('dsh-whale-pp-tabs') >= 0);
-	const ppPetTab = ppTabsEl.children.find((c) => (c.textContent || '').indexOf('🐋 桌宠') >= 0);
+	const ppPetTab = ppTabsEl.children.find((c) => (c.textContent || '').indexOf('🐋 小鲸鱼形态') >= 0);
 	ppPetTab._fire('click', { stopPropagation() {} });
 	assert.ok(ppHost.textContent.includes('🐋 完整形态') && ppHost.textContent.includes('躲猫猫'), 'panel pet tab renders form buttons');
 	/* 📖 manual tab: the FULL manual content (ported from the drawer group —
@@ -2183,7 +2273,11 @@ async function main() {
 	assert.strictEqual(hListM.children.filter((c) => (c.className || '').indexOf('dsh-whale-manual-detail') >= 0).length, 19, '19 mechanism-detail compact rows (no cards, visually separated layer)');
 	const hMxCard = hListM.children.find((c) => c._mCells && c._mCells.length === 8);
 	assert.ok(hMxCard, 'notify mini-matrix card mounts 8 searchable cells (_mCells contract)');
-	assert.ok(hMxCard.children.some((k) => (k.className || '').indexOf('dsh-whale-manual-matrix') >= 0), 'matrix grid element inside the card');
+	/* 11-14 内嵌参考面板：矩阵挂进面板（卡片 > panel > grid），意图不变、
+	 * 路径加深一层 */
+	const hMxPanel = hMxCard.children.find((k) => (k.className || '').indexOf('dsh-whale-manual-panel') >= 0);
+	assert.ok(hMxPanel && hMxPanel.children.some((k) => (k.className || '').indexOf('dsh-whale-manual-matrix') >= 0), 'matrix grid inside the inset panel within the card');
+	assert.ok(hMxPanel.children.some((k) => (k.className || '').indexOf('dsh-whale-manual-panel-h') >= 0), 'inset panel has an icon-chip header');
 	assert.ok(hEl.textContent.includes('常用设置在哪'), 'settings merged entry present (高频设置指向真实入口)');
 	assert.ok(hEl.textContent.includes('免打扰'), 'dnd explained');
 	assert.ok(hEl.textContent.includes('任务周报'), 'weekly report explained');
@@ -2416,7 +2510,7 @@ async function main() {
 
 	/* 36b. turn/end REASON distinguishes failure/success:
 	 * reason.kind === "error"   -> 任务失败了 + fail sound, NOT counted for gear
-	 * reason.kind === "max-tokens" -> 被截断了 + done sound, counted
+	 * reason.kind === "max-tokens" -> 被截断了 + FAIL sound（11-14 同族拍板）, counted
 	 * no reason (legacy)        -> 完成了 + done sound, counted */
 	const envFailDing = makeEnv();
 	envFailDing.ready();
@@ -2436,11 +2530,17 @@ async function main() {
 	await sleep(80);
 	const failStarts = envFailDing.audioStarts().map(Math.round);
 	assert.deepStrictEqual(failStarts.slice(0, 2), [550, 415], `fail tones: ${JSON.stringify(failStarts)}`);
-	/* max-tokens: truncated wording + done sound + counts for gear */
+	/* max-tokens: truncated wording + FAIL sound（11-14 同族拍板） + counts for gear */
 	muxpFb({ type: 'session/event', sessionId: 'session-fb1', event: { type: 'turn/start', seq: 3, time: 2, data: {} } });
 	muxpFb({ type: 'session/event', sessionId: 'session-fb1', event: { type: 'turn/end', seq: 4, time: 3, data: { reason: { kind: 'max-tokens' } } } });
 	assert.ok(envFailDing.bubble().textContent.includes('被截断'), `max-tokens bubble: ${envFailDing.bubble().textContent}`);
 	assert.strictEqual(FB.gearStats.tasksDone, 1, 'truncated task still counts');
+	/* 截断播失败音色（11-14 同族拍板）：前一对=error 的 [550,415]，排队
+	 * DING_GAP(1.9s) 后渲染的这对=本次截断 ding——末两个必须是失败音 */
+	await sleep(2600);
+	const mtStarts = envFailDing.audioStarts().map(Math.round);
+	assert.ok(mtStarts.length >= 4, `queued max-tokens ding rendered: ${JSON.stringify(mtStarts)}`);
+	assert.deepStrictEqual(mtStarts.slice(-2), [550, 415], `max-tokens plays the FAILURE tones (11-14 同族拍板): ${JSON.stringify(mtStarts)}`);
 	/* legacy empty data -> completed as before */
 	muxpFb({ type: 'session/event', sessionId: 'session-fb1', event: { type: 'turn/start', seq: 5, time: 4, data: {} } });
 	muxpFb({ type: 'session/event', sessionId: 'session-fb1', event: { type: 'turn/end', seq: 6, time: 5, data: {} } });
@@ -3779,6 +3879,34 @@ async function main() {
 			'reminders back reopens the right-click menu (not settings)');
 	}
 
+	/* ============ 53c · 定时提醒精确定时 + 三连响（11-14 用户实报） ============
+	 * 用户设了 20:33:10 的提醒，15 秒左右才响——旧 20s 轮询的颗粒度就是延时
+	 * 上界。锁死：到期即被消费（未来的一条毫发无损）+ 气泡文案 + 同一音色
+	 * 三连响（队列 DING_GAP_MS 顺次，绝不重叠）。 */
+	{
+		const envRm = makeEnv();
+		envRm.ready();
+		const RM = envRm.sandbox.__dshWhale;
+		assert.strictEqual(typeof RM._fireReminders, 'function', 'reminder fire seam exposed');
+		const rmStored = () => JSON.parse(envRm.sandbox.localStorage.getItem('dsh-whale:reminders') || '[]');
+		envRm.sandbox.localStorage.setItem('dsh-whale:reminders', JSON.stringify([
+			{ id: 'rm-overdue', at: Date.now() - 500, text: '定时提醒 20:33:10' },
+			{ id: 'rm-future', at: Date.now() + 600000, text: '定时提醒 未来' }
+		]));
+		RM._fireReminders();
+		const rmAfter = rmStored();
+		assert.strictEqual(rmAfter.length, 1, 'overdue reminder consumed, future kept');
+		assert.strictEqual(rmAfter[0].id, 'rm-future', 'the future reminder survives the fire');
+		assert.ok(envRm.bubble().textContent.includes('定时提醒 20:33:10'), 'reminder bubble carries the text');
+		/* triple chime: three bell rings queued at DING_GAP_MS — one ring =
+		 * 2 strikes × 3 partials = 6 oscillator starts, ×3 rings = 18 */
+		await sleep(4200); /* ring1 now, ring2 +1.9s, ring3 +3.8s */
+		const bell = [2400, 4800, 6624, 2400, 4800, 6624];
+		const rmStarts = envRm.audioStarts().map(Math.round);
+		assert.strictEqual(rmStarts.length, 18, 'reminder rings exactly three bell strikes (18 oscillator starts)');
+		assert.deepStrictEqual(rmStarts, bell.concat(bell, bell), 'three CONSECUTIVE rings (same tone ×3, queued — never simultaneous)');
+	}
+
 	/* 60. 0.1.5 cumulative stats label: the total and the cache-hit share are
 	 * SEPARATE text nodes under one span — node-level text never holds both
 	 * halves, so feedSessionUsage must retry on the parent's textContent
@@ -4004,6 +4132,154 @@ async function main() {
 		assert.ok(envR2.audioStarts().length === rpAudioBaseline, 'rp: replayed completion does NOT re-ding');
 		const hist2 = JSON.parse(envR2.sandbox.localStorage.getItem('dsh-whale:history')).data;
 		assert.strictEqual(hist2.length, 2, 'rp: replay re-records history (照记 contract; double-row dedup is a known v0.4.3 item)');
+	}
+
+	/* 64. 通知已读联动（11-14 用户实报）：用户不点气泡/红标、直接在 DSH 里
+	 * 打开对话看状态时（pin 漏斗 → dsh-whale:session-viewed），对应会话的
+	 * 未读要按条清掉——同会话去重（DOM 高频信号）、桌宠合成会话短路（不清
+	 * 不发）、真实会话才 relay POST /pet/ctrl dismiss、宿主 pet/dismiss 帧
+	 * 反向清桌宠页队列、PET_MODE 不外发。事件用普通对象直发（桩没有
+	 * CustomEvent 构造器，listener 只读 ev.detail——sandbox.dispatchEvent
+	 * 按 ev.type 分发）。 */
+	{
+		const envV = makeEnv();
+		envV.ready();
+		const V = envV.sandbox.__dshWhale;
+		const muxpV = (payload) => V.handleMuxPayload(payload);
+		/* fetch spy：/pet/ctrl 记账（载荷断言用），其余照旧放行 */
+		const posts = [];
+		envV.setFetch((url, init) => {
+			if (String(url).indexOf('/pet/ctrl') !== -1) {
+				posts.push({ url: String(url), body: init && init.body });
+			}
+			return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+		});
+		/* 真实喂法（test 36 先例）：title 投影（免 name-hold）→ subagentTiming
+		 * 注册 → turn 对；每次喂用全新 seq/time，防跨用例去重串味 */
+		const feedUnread = (sid, title, seq0) => {
+			muxpV({ type: 'session/projection', sessionId: sid, key: 'title', value: title, seq: seq0 });
+			muxpV({ type: 'session/projection', sessionId: sid, key: 'subagentTiming', value: { settledMs: 0 } });
+			muxpV({ type: 'session/event', sessionId: sid, event: { type: 'turn/start', seq: seq0 + 1, time: seq0, data: {} } });
+			muxpV({ type: 'session/event', sessionId: sid, event: { type: 'turn/end', seq: seq0 + 2, time: seq0 + 1, data: {} } });
+		};
+		const viewed = (sid) => envV.sandbox.dispatchEvent({ type: 'dsh-whale:session-viewed', detail: { sessionId: sid } });
+		/* Array.from=宿主域数组：vm 数组上 .map 返回 vm 域数组，deepStrictEqual
+		 * 按构造器比较会因跨域原型差异假红（内容完全一致也红） */
+		const queueSids = () => Array.from(V.reportQueue(), (r) => r.sessionId);
+
+		/* ① 两个会话各一条未读（真实喂法），红标=2 */
+		feedUnread('session-s1', '已读联动甲', 10);
+		feedUnread('session-s2', '已读联动乙', 20);
+		assert.strictEqual(V.unreadCount(), 2, 'viewed: two sessions seeded two unread');
+		assert.deepStrictEqual(queueSids(), ['session-s1', 'session-s2'], 'viewed: queue holds both sessions');
+
+		/* ② 看 s1（不点气泡不点红标）：红标 -1，队列只剩 s2 的 */
+		viewed('session-s1');
+		assert.strictEqual(V.unreadCount(), 1, 'viewed s1: badge drops by one');
+		assert.deepStrictEqual(queueSids(), ['session-s2'], 'viewed s1: queue keeps only s2');
+
+		/* ③ 同 sid 再派发=DOM 活动高频重放：去重，红标不动 */
+		viewed('session-s1');
+		assert.strictEqual(V.unreadCount(), 1, 'same-session replay is deduped');
+
+		/* ④ 看 s2：红标归 0 */
+		viewed('session-s2');
+		assert.strictEqual(V.unreadCount(), 0, 'viewed s2: badge to zero');
+
+		/* ⑤ 桌宠合成会话守卫：重喂 s1 后派发 session-pet-s3——不炸、不清、
+		 * 且没有 dismiss POST（isRealSessionId 放行 'session-' 前缀的合成
+		 * id，守卫必须拦在监听端）。 */
+		feedUnread('session-s1', '已读联动甲', 30);
+		assert.strictEqual(V.unreadCount(), 1, 'viewed: s1 re-fed before the guard probe');
+		const guardBase = posts.length;
+		viewed('session-pet-s3');
+		assert.strictEqual(V.unreadCount(), 1, 'pet synthetic sid clears nothing');
+		assert.deepStrictEqual(queueSids(), ['session-s1'], 'pet synthetic sid leaves the queue alone');
+		assert.strictEqual(posts.length, guardBase, 'pet synthetic sid sends NO dismiss relay');
+
+		/* ⑥ 真实会话才中继：派发 s1 → 恰一条 POST，载荷={action:dismiss, sessionId} */
+		const realBase = posts.length;
+		viewed('session-s1');
+		assert.strictEqual(V.unreadCount(), 0, 'viewed s1 (re-fed): badge to zero');
+		assert.strictEqual(posts.length, realBase + 1, 'real sid sends exactly one relay POST');
+		assert.ok(posts[realBase] && posts[realBase].url.indexOf('/api/whale-assistant/pet/ctrl') !== -1, 'relay hits /api/whale-assistant/pet/ctrl');
+		assert.deepStrictEqual(JSON.parse(posts[realBase].body), { action: 'dismiss', sessionId: 'session-s1' }, 'relay payload is {action:dismiss, sessionId}');
+
+		/* ⑦ 正在看（reading）的条目也按会话清：点红标把 s2 的报告弹进
+		 * reading（badge 计它在），派发 s2 → reading 解算、红标归零 */
+		feedUnread('session-s2', '已读联动乙', 40);
+		assert.strictEqual(V.unreadCount(), 1, 'viewed: s2 re-fed for the reading probe');
+		envV.badge()._fire('pointerdown', { stopPropagation() {} });
+		envV.badge()._fire('pointerup', { stopPropagation() {}, pointerType: 'mouse', button: 0 });
+		await sleep(320); /* badge 单击的 260ms 定时（test 18 先例） */
+		assert.strictEqual(V.unreadCount(), 1, 'viewed: single badge click moved the report into reading');
+		viewed('session-s2');
+		assert.strictEqual(V.unreadCount(), 0, 'viewed s2: the in-flight reading is resolved too');
+
+		/* ⑧ 桌宠端反向清除：塞一条 session-pet-s9 未读，宿主广播
+		 * pet/dismiss {code:9} → 合成会话队列清空、红标归零 */
+		feedUnread('session-pet-s9', '桌宠反向清除', 50);
+		assert.strictEqual(V.unreadCount(), 1, 'pet-dismiss: synthetic-session unread seeded');
+		envV.sandbox.dispatchEvent({ type: 'dsh-whale:pet-dismiss', detail: { code: 9 } });
+		assert.strictEqual(V.unreadCount(), 0, 'pet-dismiss code 9 clears its synthetic session');
+		assert.deepStrictEqual(queueSids(), [], 'pet-dismiss leaves the queue empty');
+
+		/* ⑨ PET_MODE 不外发：桌宠页的 session-viewed 只清自己队列，永不
+		 * POST /pet/ctrl（桌宠页没有 DSH DOM/adapter，pin 到不了真实会话；
+		 * 即便将来出现 session-viewed，relay 也必须静默）。 */
+		const envPetV = makeEnv(null, { petMode: true });
+		envPetV.ready();
+		const PV = envPetV.sandbox.__dshWhale;
+		const muxpPv = (payload) => PV.handleMuxPayload(payload);
+		const petPosts = [];
+		envPetV.setFetch((url, init) => {
+			if (String(url).indexOf('/pet/ctrl') !== -1) petPosts.push(init && init.body);
+			return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+		});
+		muxpPv({ type: 'session/projection', sessionId: 'session-pv1', key: 'title', value: '桌宠侧联动', seq: 1 });
+		muxpPv({ type: 'session/projection', sessionId: 'session-pv1', key: 'subagentTiming', value: { settledMs: 0 } });
+		muxpPv({ type: 'session/event', sessionId: 'session-pv1', event: { type: 'turn/end', seq: 2, time: 1, data: {} } });
+		assert.strictEqual(PV.unreadCount(), 1, 'petMode: real-shaped unread seeded');
+		envPetV.sandbox.dispatchEvent({ type: 'dsh-whale:session-viewed', detail: { sessionId: 'session-pv1' } });
+		assert.strictEqual(PV.unreadCount(), 0, 'petMode: session-viewed still clears the local queue');
+		assert.deepStrictEqual(petPosts, [], 'petMode: NO /pet/ctrl relay POST');
+
+		/* ⑩ 到达侧联动（11-14 用户实报「我停留在对话页面，通知弹出来刚好
+		 * 也看见了——1 弹出来自然就消成 0」）：本窗口 pin 恰是报告会话=
+		 * 当场已读——未读不入队（红标不涨），桌宠 relay 照发。 */
+		envV.sandbox.sessionStorage.setItem('dsh-whale:window-session', 'session-s3');
+		const arriveBase = posts.length;
+		feedUnread('session-s3', '正在看的会话', 60);
+		assert.strictEqual(V.unreadCount(), 0, 'arrival while viewing: unread NOT enqueued');
+		assert.strictEqual(V.reportQueue().filter((r) => r.sessionId === 'session-s3').length, 0, 'arrival while viewing: queue holds no s3 entry');
+		assert.strictEqual(posts.length, arriveBase + 1, 'arrival while viewing still relays the pet dismiss');
+		assert.deepStrictEqual(JSON.parse(posts[arriveBase].body), { action: 'dismiss', sessionId: 'session-s3' }, 'arrival relay payload is {action:dismiss, sessionId}');
+		/* ⑩b 非 pin 会话照常入队：pin=s3 时 s4 的报告必须正常累积 */
+		feedUnread('session-s4', '没在看的会话', 70);
+		assert.strictEqual(V.unreadCount(), 1, 'arrival for a NON-viewed session still enqueues');
+		/* ⑩c 无 pin（新窗口首活动前）不判定：清 pin 后 s5 正常入队 */
+		envV.sandbox.sessionStorage.removeItem('dsh-whale:window-session');
+		feedUnread('session-s5', '无 pin 窗口', 80);
+		assert.strictEqual(V.unreadCount(), 2, 'no pin = no viewed judgment (conservative, stale-chain proof)');
+		/* ⑩d 诊断缝在位 */
+		const vst = V._viewedState();
+		assert.ok(vst && vst.pin === null && typeof vst.lastViewedSid === 'string' && Array.isArray(vst.queue), '_viewedState seam exposes pin/lastViewedSid/queue');
+
+		/* ⑫ 气泡推进（11-14 用户实报「红标消了，但气泡还挂着 B 的通知，
+		 * 双击跳回的还是已读的 B」）：被清会话正占着气泡时，气泡切到最新
+		 * 剩余未读当预览（不算读，红标不动，双击跳的就是它）；清空后收
+		 * 气泡——不许停在已读内容的残影上。 */
+		feedUnread('session-s6', '气泡推进甲', 90);
+		assert.strictEqual(V.unreadCount(), 3, 'bubble-advance: three unread seeded (s4/s5/s6)');
+		assert.ok(envV.bubble().textContent.includes('气泡推进甲'), 'bubble currently shows s6 (newest arrival)');
+		viewed('session-s6');
+		assert.strictEqual(V.unreadCount(), 2, 'bubble-advance: s6 cleared from the badge');
+		assert.ok(envV.bubble().textContent.includes('无 pin 窗口'), 'bubble ADVANCED to the newest remaining unread (s5)');
+		viewed('session-s5');
+		assert.ok(envV.bubble().textContent.includes('没在看的会话'), 'bubble advances again to s4');
+		viewed('session-s4');
+		assert.strictEqual(V.unreadCount(), 0, 'bubble-advance: queue drained');
+		assert.ok(!envV.bubble().classList.contains('show'), 'bubble DISMISSED when no unread remains (no read-content ghost)');
 	}
 
 	console.log(`ALL TESTS PASSED (${Math.round(performance.now() - t)}ms)`);

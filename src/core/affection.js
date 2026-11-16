@@ -2,6 +2,12 @@
 	 * progression — tiers unlock new reaction lines, future hidden gear. */
 	var AFFECTION_KEY = 'dsh-whale:affection';
 	var affection = 0;
+	/* BUG-1 sync（11-16）：本 boot 好感度已有权威值（本地存量/本地变更/服务端
+	 * 采用三处置位）——桌宠中继端口每-boot 随机 → pet 页 origin 变 →
+	 * localStorage 失忆；petSyncFromHost 只在权威值缺席时采用服务端下发，
+	 * 置位后 2s 轮询回声不再触碰。页鲸（非 PET_MODE）origin 稳定，本旗标
+	 * 恒为 boot 存量语义，无副作用。 */
+	var affectionKnown = false;
 	var AFFECTION_TIERS = [
 		{ min: 0, lines: ['呜…被摸到了 🥹', '唔…舒服，再摸一下？😳', '摸头会变笨的啦！🐋', '干嘛啦，我还在上班呢 😤'] },
 		{ min: 10, lines: ['嘿嘿，就喜欢被摸头 🐳💙', '你是我最好的同事啦 🥰', '摸一次，元气 +10！⚡', '好啦好啦，我知道你疼我 😌'] },
@@ -12,7 +18,12 @@
 			/* migrate { value: N } -> v1 */
 			return (v0 && typeof v0 === 'object' && typeof v0.value === 'number') ? v0 : null;
 		});
-		if (stored && typeof stored.value === 'number') affection = stored.value;
+		if (stored && typeof stored.value === 'number') {
+			affection = stored.value;
+			affectionKnown = true;
+			return true;
+		}
+		return false;
 	}
 	function saveAffection() {
 		safeSet(AFFECTION_KEY, { value: affection });

@@ -2,12 +2,22 @@
 <html>
 <head>
 <meta charset="utf-8">
+<!-- BUG-1 boot seeding：宿主把账本 petDoc 快照（好感度/里程碑/位置）替换进来——
+     新 origin 的 localStorage 在 whale.js 求值前落好，鲸鱼淡入即在上次落点 -->
+<script>__DSH_PET_BOOT__</script>
 <link rel="stylesheet" href="style.css">
 <style>
   html, body { margin: 0; background: transparent; overflow: hidden; }
   /* 首建区域淡入：宿主第一次 SetWindowRgn 的 DWM re-clip 可能闪 1 帧空白
      （POC 坑 20）——鲸鱼从透明淡入 220ms，把这次重贴藏在淡入里 */
   #dsh-whale { opacity: 0; transition: opacity .22s ease; }
+  /* ⑳真机六追修：DSH 官方图标槽（flyout 行首 🖥️ 用官方 icon，emoji 字形
+     各平台不可控；emoji 进 0 尺寸 ghost，textContent 口径不变）。
+     ⑳真机六追修二（用户截图「图标和文字叠成两行」）：.dsh-whale-menu-item
+     是块级+内联流（nowrap 只防文本折行、不防块级断行），img 走 display:block
+     会让 inline-block 槽基线掉到底缘=图标/文字分层；必须与 svg 槽完全同款
+     （inline-block+vertical-align:middle，水平居中由槽的 text-align:center 承担） */
+  .dsh-whale-ico-img { width: 16px; height: 16px; display: inline-block; vertical-align: middle; border-radius: 4px; transform: translateY(-1.8px); }
   /* v12b（11-13）：桌宠文档没有宿主 CSS——--wh-* 全套在此钉死为暗色值
      （桌宠无亮色模式）。必须 !important：client.js 后注入的 style.css
      (:root,body 块，亮色兜底) 同特异性会覆盖这里，暗底深字=用户实锤
@@ -40,7 +50,7 @@
   .dsh-whale-bubble::after, .dsh-whale-note::after {
     border-top-color: #2c2c2e !important; border-bottom-color: #2c2c2e !important;
   }
-  .dsh-whale-menu, .dsh-whale-settings, .dsh-whale-wardrobe, .dsh-whale-history,
+  .dsh-whale-menu, .dsh-whale-menu-sub, .dsh-whale-settings, .dsh-whale-wardrobe, .dsh-whale-history,
   .dsh-whale-status, .dsh-whale-status-report {
     background: #1b1b1c !important;
     box-shadow: none !important;
@@ -68,8 +78,11 @@
      结束后落回贴身圆角矩形（宿主 b 标志跳过多边形用圆角区域）。 */
   /* opacity 淡入必须与 width/height 合并在同一条 transition 里（三轮）：
      后写的 transition 声明会整体覆盖前者——分离写=淡入被静默杀死，
-     桌宠鲸鱼出现变成生硬的瞬间贴出 */
-  #dsh-whale { transition: opacity .22s ease, width .45s cubic-bezier(.34,1.56,.64,1), height .45s cubic-bezier(.34,1.56,.64,1); }
+     桌宠鲸鱼出现变成生硬的瞬间贴出。
+     filter .6s（⑳ 真机三）：打盹唤醒平滑化——DSH 打开 hello/投影帧唤醒
+     睡着的桌宠，灰度滤镜瞬间撤除读成「深蓝变正常色」怪异跳变，缓过渡
+     =自然醒来 */
+  #dsh-whale { transition: opacity .22s ease, filter .6s ease, width .45s cubic-bezier(.34,1.56,.64,1), height .45s cubic-bezier(.34,1.56,.64,1); }
   body.pet-form-bubble #dsh-whale { width: 64px !important; height: 64px !important; }
   #pet-bubble {
     position: absolute; left: 0; top: 0; width: 100%; height: 100%;
@@ -176,7 +189,11 @@
    3) __dshPetHost：whale.js 菜单缝（形态组）+ 形态应用 + 认证自杀
    4) 异常写进 payload.err 便于宿主日志排障 */
 (function () {
-  var CLASSES = ['dsh-whale-bubble', 'dsh-whale-menu', 'dsh-whale-settings', 'dsh-whale-wardrobe', 'dsh-whale-history', 'dsh-whale-status', 'dsh-whale-status-report', 'dsh-whale-zzz', 'dsh-whale-badge', 'dsh-whale-note', 'dsh-whale-heart', 'dsh-whale-ripple', 'dsh-whale-jet', 'dsh-whale-waterring', 'dsh-whale-spray', 'dsh-whale-health-chip'];
+  /* ⑳：.dsh-whale-menu-sub（切换形态二级 flyout）必须入列——rects() 是桌宠
+     区域上报的白名单，漏掉的浮层伸出主菜单包围盒的部分会被 SetWindowRgn
+     硬裁（子菜单只剩贴主菜单右缘 ~12px 的空底壳，行内容全被裁没）；隐藏态
+     opacity<0.05 自然跳过，区域不虚胖 */
+  var CLASSES = ['dsh-whale-bubble', 'dsh-whale-menu', 'dsh-whale-menu-sub', 'dsh-whale-settings', 'dsh-whale-wardrobe', 'dsh-whale-history', 'dsh-whale-status', 'dsh-whale-status-report', 'dsh-whale-zzz', 'dsh-whale-badge', 'dsh-whale-note', 'dsh-whale-heart', 'dsh-whale-ripple', 'dsh-whale-jet', 'dsh-whale-waterring', 'dsh-whale-spray', 'dsh-whale-health-chip'];
   var PAD = 14;
   var EPS = 2;
   var svgEl = document.querySelector('#dsh-whale svg');
@@ -316,6 +333,17 @@
             } catch (e1) { }
           }
         }
+        /* ---- BUG-1 同步（11-16 实机验收）：好感度/里程碑/位置随 state 轮询
+           下发——桌宠页 origin 随中继端口每-boot 变化，localStorage 不可跨
+           重启。采用逻辑在 whale.js petSyncFromHost（幂等：权威值已置位时
+           纯 no-op，重复喂同值零副作用，不需要差分指纹）。 ---- */
+        if (doc && (doc.aff != null || doc.affMs != null || doc.pos != null)) {
+          try {
+            if (window.__dshWhale && typeof window.__dshWhale.petSyncFromHost === 'function') {
+              window.__dshWhale.petSyncFromHost(doc.aff, doc.affMs, doc.pos);
+            }
+          } catch (e2) { }
+        }
       }).catch(function () {
         if (++fetchFails >= 3) { try { clearInterval(stateTimer); } catch (e3) { } }
       });
@@ -330,35 +358,251 @@
   fetchState();
   stateTimer = setInterval(fetchState, 2000);
 
-  /* ---- 宿主缝：whale.js 右键菜单构建时调用，追加桌宠三态形态组 ---- */
-  window.__dshPetHost = {
-    applyForm: applyForm,
-    form: function () { return currentForm; },
-    appendMenuItems: function (menu) {
-      if (!menu || fatal) return;
-      var mark = { full: '🐋 完整形态', bubble: '🫧 缩成气泡', hidden: '🙈 隐藏小鲸鱼' };
-      var sep = document.createElement('div');
-      sep.className = 'dsh-whale-menu-sep';
-      menu.appendChild(sep);
-      var forms = ['full', 'bubble', 'hidden'];
-      for (var i = 0; i < forms.length; i++) {
-        (function (f) {
-          var row = document.createElement('div');
-          row.className = 'dsh-whale-menu-item';
-          row.textContent = mark[f] + (currentForm === f ? ' ✓' : '');
-          row.addEventListener('click', function (ev) {
-            ev.stopPropagation();
+  /* ---- 桌宠形态二级菜单（⑳，TRAE 式「切换形态 ›」flyout）----
+   * 主菜单由 whale.js 每次右键重建，三态行经 appendMenuItems 缝追加。
+   * 子菜单不塞进主菜单：主菜单 overflow-x:hidden 会硬裁 flyout，且主菜单
+   * 的 transform/backdrop-filter 会成为内部 fixed 子元素的 containing
+   * block，照样被裁——所以挂 body、fixed 定位、锚在父项旁，并经
+   * menuFloats() 缝登记给 whale.js（src/ui/menu.js ⑳）：主菜单收=子菜单
+   * 级联收、子菜单行上的 pointerdown 不算外部（否则浮层 pointer-events
+   * 转 none，随后的 click 落空=选形态点了没反应）。 */
+  var DSH_ICON_URI = 'data:image/png;base64,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';
+  /* 行首图标槽解析（与 whale.js setIconLabel 同一条 leading-glyph 规则）：
+     🖥️=DSH 官方图标 img；其余已收录字形（🔄 等）经 menuIcon 缝复用 whale.js
+     内联 SVG 集；未收录（🐋/🎭 等）返回 null=裸文本照旧。ghost 保口径。 */
+  function subIconSlot(label) {
+    var sp = label.indexOf(' ');
+    var glyph = sp >= 1 && sp <= 4 ? label.slice(0, sp) : '';
+    if (!glyph) return null;
+    var ic = document.createElement('span');
+    ic.className = 'dsh-whale-ico';
+    if (glyph === '🖥️' && DSH_ICON_URI) {
+      var img = document.createElement('img');
+      img.className = 'dsh-whale-ico-img';
+      img.src = DSH_ICON_URI;
+      img.alt = '';
+      ic.appendChild(img);
+    } else {
+      var R = window.__dshWhale || { };
+      var svg = typeof R.menuIcon === 'function' ? R.menuIcon(glyph) : null;
+      if (!svg) return null;
+      ic.appendChild(svg);
+    }
+    var ghost = document.createElement('span');
+    ghost.className = 'dsh-whale-ico-ghost';
+    ghost.textContent = glyph;
+    ic.appendChild(ghost);
+    return ic;
+  }
+  var petSub = null;
+  var petSubTimer = 0;
+  /* ⑳真机六（11-17 用户拍板）：第二态视觉=圆角玻璃方卡+线稿小鲸鱼，不是
+     气泡——定名「缩成小窗」（内部键 bubble/类名 pet-form-bubble/账本值不
+     动，只改显示文案）。 */
+  var PET_FORM_MARKS = { full: '🐋 完整形态', bubble: '🪟 缩成小窗', hidden: '🙈 隐藏小鲸鱼' };
+  function cancelPetSubClose() {
+    if (petSubTimer) { try { clearTimeout(petSubTimer); } catch (e) { } petSubTimer = 0; }
+  }
+  function hidePetSub() {
+    cancelPetSubClose();
+    if (petSub) petSub.classList.remove('show');
+  }
+  function armPetSubClose() {
+    cancelPetSubClose();
+    /* 400ms：避鲸竖让后子菜单离父项远了一截，桥程变长——太短会半路收场 */
+    petSubTimer = setTimeout(function () { petSubTimer = 0; hidePetSub(); }, 400);
+  }
+  /* 子菜单壳只建一次；行内容每次按所属父项重建（openPetSub 按组喂行）。
+     ⑳真机六（11-17）：flyout 泛化——「切换形态」不再是唯一子菜单，新
+     「🖥️ DSH 窗口 ›」（刷新/打开两子项，whale.js 从原刷新项升格）共用
+     同一枚 flyout 壳与同一套择位/避鲸/悬停桥；行内容每次按 makeItems()
+     重建（形态组带 radio 圆点，动作组无圆点）。 */
+  function ensurePetSub() {
+    if (!petSub) {
+      petSub = document.createElement('div');
+      petSub.className = 'dsh-whale-menu-sub';
+      petSub.addEventListener('mouseenter', cancelPetSubClose);
+      petSub.addEventListener('mouseleave', armPetSubClose);
+      document.body.appendChild(petSub);
+    }
+    return petSub;
+  }
+  /* 行工厂：dot=null 的动作行无圆点；onPick 在 click（stopPropagation+收
+     flyout）后执行——形态组的 onPick 自己补合成 pointerdown 关主菜单，
+     whale.js 侧的 onPick（DSH 窗口组）自己调 closeCtxMenu */
+  function buildSubRow(item) {
+    var row = document.createElement('div');
+    row.className = 'dsh-whale-menu-subrow' + (item.cur ? ' cur' : '');
+    if (item.dot) {
+      var dot = document.createElement('span');
+      dot.className = 'dsh-whale-menu-dot';
+      dot.textContent = item.dot;
+      row.appendChild(dot);
+    }
+    var slot = subIconSlot(item.label);
+    if (slot) {
+      row.appendChild(slot);
+      row.appendChild(document.createTextNode(item.label.slice(item.label.indexOf(' '))));
+    } else {
+      var label = document.createElement('span');
+      label.textContent = item.label;
+      row.appendChild(label);
+    }
+    row.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      hidePetSub();
+      item.onPick();
+    });
+    return row;
+  }
+  /* 形态组行内容：radio 圆点标当前态（每次打开按 currentForm 重算） */
+  function formSubItems() {
+    var forms = ['full', 'bubble', 'hidden'];
+    var items = [];
+    for (var i = 0; i < forms.length; i++) {
+      (function (f) {
+        items.push({
+          dot: currentForm === f ? '●' : '○',
+          cur: currentForm === f,
+          label: PET_FORM_MARKS[f],
+          onPick: function () {
             try {
               fetch('ctrl', { method: 'POST', headers: { 'content-type': 'application/json' },
                 body: JSON.stringify({ action: 'form', value: f }) }).catch(function () { });
             } catch (e) { }
             applyForm(f);
+            /* 合成 pointerdown 关主菜单（走 whale.js 的外部关闭判定） */
             try { document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 })); } catch (e2) { }
-          });
-          menu.appendChild(row);
-        })(forms[i]);
+          }
+        });
+      })(forms[i]);
+    }
+    return items;
+  }
+  /* ⑳ 真机二轮（用户两张截图）：①锚定改**主菜单纯外缘**——此前锚父项行
+     右缘，行在菜单 padding 内侧 ~6px，子菜单左缘嵌进主菜单右框 ~4px=实报
+     「边缘重合」。②**避鲸**（实报「子菜单把小鲸鱼挡住了」）。
+     ⑳真机三轮（用户截图「右边不足时甩到屏幕左下角，不合理」）：锚位
+     改成**就近优先级**——右侧贴缝 → **菜单下方**（用户拍板：右边不足放
+     菜单下面）；每个锚位先试「行顶对齐」再试「鲸上/鲸下竖让」（悬停桥最
+     短）；带命中罚分择优（嵌进主菜单=最差罚 100000，命中鲸=1000+重叠面
+     积），保证子菜单永远挂在主菜单身边，绝不孤悬远端；offset* 布局盒免疫
+     bob 动画 transform（11-05 先例同款）。
+     ⑳真机五（11-17 用户截图「鲸鱼在右下角时子菜单跑到最上面，应该在它左
+     边」）：**左侧贴缝提到菜单上方之前**——菜单贴底边时「下方」被压进菜单
+     （罚 100000），原链的「上方」零罚先到即赢=子菜单隔了整个菜单高度孤悬
+     在菜单顶上；左侧贴缝与父项行同行高（竖向零位移）才是 flyout 本位。新
+     链=右贴缝 → 下方（右/左对齐）→ **左侧贴缝** → 上方（右/左对齐）→ 鲸
+     右/鲸左兜底：三轮拍板不破（下方放得下时仍优先于左），贴底边场景回落
+     左侧贴缝，全部占满才退上方。 */
+  function subHitsWhale(l, t, w, h, wx, wy, ww, wh) {
+    return l < wx + ww && l + w > wx && t < wy + wh && t + h > wy;
+  }
+  function openPetSub(parentRow, makeItems) {
+    var sub = ensurePetSub();
+    sub.textContent = '';
+    var items = makeItems();
+    for (var ri = 0; ri < items.length; ri++) sub.appendChild(buildSubRow(items[ri]));
+    /* 行必然挂在主菜单里——锚定几何现取父节点（不闭包旧菜单元素） */
+    var menuEl = parentRow.parentElement || parentRow;
+    var mr = menuEl.getBoundingClientRect();
+    var r = parentRow.getBoundingClientRect();
+    var w = sub.offsetWidth || 150;
+    var h = sub.offsetHeight || 110;
+    var MARG = 8, GAP = 10, SUBGAP = 4;
+    var rowTop = Math.min(Math.max(r.top, MARG), window.innerHeight - h - MARG);
+    var wk = document.getElementById('dsh-whale');
+    var wx = 0, wy = 0, ww = 0, wh = 0, hasWhale = false;
+    if (wk && wk.offsetWidth > 0) {
+      wx = wk.offsetLeft; wy = wk.offsetTop; ww = wk.offsetWidth; wh = wk.offsetHeight;
+      hasWhale = true;
+    }
+    function clampT(t) { return Math.min(Math.max(t, MARG), window.innerHeight - h - MARG); }
+    function clampL(l) { return Math.min(Math.max(l, MARG), window.innerWidth - w - MARG); }
+    function hitsMenu(l, t) { return l < mr.right && l + w > mr.left && t < mr.bottom && t + h > mr.top; }
+    /* 每个锚位三试：行顶对齐 → 鲸下竖让 → 鲸上竖让 */
+    var cands = [];
+    function pushCands(l, t) {
+      cands.push({ l: clampL(l), t: clampT(t) });
+      if (hasWhale) {
+        cands.push({ l: clampL(l), t: clampT(wy + wh + GAP) });
+        cands.push({ l: clampL(l), t: clampT(wy - h - GAP) });
       }
-      /* 无退出项（第九轮用户定稿）：桌宠常驻，三态即全部功能 */
+    }
+    if (mr.right + SUBGAP + w <= window.innerWidth - MARG) pushCands(mr.right + SUBGAP, rowTop); /* 右侧贴缝 */
+    pushCands(mr.right - w, mr.bottom + SUBGAP); /* 菜单下方·右对齐 */
+    pushCands(mr.left, mr.bottom + SUBGAP);      /* 菜单下方·左对齐 */
+    if (mr.left - SUBGAP - w >= MARG) pushCands(mr.left - SUBGAP - w, rowTop); /* 左侧贴缝（先于上方：贴底边时下方嵌菜单罚 100000，左侧与父项行同行高=flyout 本位） */
+    pushCands(mr.right - w, mr.top - h - SUBGAP); /* 菜单上方·右对齐 */
+    pushCands(mr.left, mr.top - h - SUBGAP);      /* 菜单上方·左对齐 */
+    if (hasWhale) {
+      cands.push({ l: clampL(wx + ww + GAP), t: rowTop }); /* 鲸右兜底 */
+      cands.push({ l: clampL(wx - w - GAP), t: rowTop });  /* 鲸左兜底 */
+    }
+    var best = null, bestPen = -1;
+    for (var ci = 0; ci < cands.length; ci++) {
+      var c = cands[ci], pen = 0;
+      /* ⑳真机七（11-17 用户两截图）：与父项行的**分离距离必须进罚分**——
+         否则「就近」就近的是菜单不是行：DSH 行的子菜单甩到菜单下方（隔两
+         行，去子菜单的路径横穿切换形态行=两子菜单互踩）、切换形态的子菜单
+         避鲸甩到鲸上方（上压路径横穿 DSH 行）。1px=1 罚；避鲸(1000+)/嵌菜单
+         (100000) 仍压倒距离——行邻位全被占满才退而求其次。 */
+      pen += Math.abs(c.t - rowTop);
+      if (hasWhale && subHitsWhale(c.l, c.t, w, h, wx, wy, ww, wh)) {
+        pen += 1000 + (Math.min(c.l + w, wx + ww) - Math.max(c.l, wx)) * (Math.min(c.t + h, wy + wh) - Math.max(c.t, wy));
+      }
+      if (hitsMenu(c.l, c.t)) pen += 100000; /* 嵌进主菜单=最差 */
+      if (best === null || pen < bestPen) { best = c; bestPen = pen; }
+    }
+    sub.style.left = Math.round(best.l) + 'px';
+    sub.style.top = Math.round(best.t) + 'px';
+    cancelPetSubClose();
+    sub.classList.add('show');
+  }
+  /* ---- 宿主缝：whale.js 右键菜单构建时调用，追加「切换形态」二级组 ----
+     ⑳真机六（11-17）：makeFlyoutRow(label, makeItems) 工厂同时服务内部形
+     态组与 whale.js 传入的外部组（🖥️ DSH 窗口）；行必然挂在主菜单里，
+     openPetSub 用 parentRow.parentElement 现取锚定几何（不闭包旧菜单）。 */
+  window.__dshPetHost = {
+    applyForm: applyForm,
+    form: function () { return currentForm; },
+    /* DSH 窗口唤回（ps1 c:'revive' → Revive-DshWindow：前台化/壳死重生） */
+    reviveDsh: function () { sendCtrl({ c: 'revive' }); },
+    /* whale.js 缝：主菜单收起/外部关闭判定要带上子菜单（见 src/ui/menu.js ⑳） */
+    menuFloats: function () { return petSub ? [petSub] : []; },
+    /* flyout 父项工厂：whale.js 把返回的行 append 到菜单任意位置（本批用
+     * 在原「刷新 DSH 页面」位=设置行下方）；hover 展开、点击兜底 */
+    makeFlyoutRow: function (label, makeItems) {
+      var row = document.createElement('div');
+      row.className = 'dsh-whale-menu-item dsh-whale-menu-parent';
+      var pSlot = subIconSlot(label);
+      if (pSlot) {
+        row.appendChild(pSlot);
+        row.appendChild(document.createTextNode(label.slice(label.indexOf(' '))));
+      } else {
+        row.textContent = label;
+      }
+      var arrow = document.createElement('span');
+      arrow.className = 'dsh-whale-menu-arrow';
+      arrow.textContent = '›';
+      row.appendChild(arrow);
+      row.addEventListener('mouseenter', function () { openPetSub(row, makeItems); });
+      row.addEventListener('mouseleave', armPetSubClose);
+      row.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        openPetSub(row, makeItems);
+      });
+      return row;
+    },
+    appendMenuItems: function (menu) {
+      if (!menu || fatal) return;
+      hidePetSub(); /* 菜单每次重建，子菜单不残留上一场的 .show */
+      var sep = document.createElement('div');
+      sep.className = 'dsh-whale-menu-sep';
+      menu.appendChild(sep);
+      /* 父项：切换形态 ›（工厂同款）；无退出项（第九轮用户定稿：桌宠常驻，
+       * 三态即全部功能） */
+      menu.appendChild(window.__dshPetHost.makeFlyoutRow('🎭 切换形态', formSubItems));
     }
   };
 

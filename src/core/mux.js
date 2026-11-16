@@ -62,6 +62,11 @@
 	loadConfig();
 	loadGearStats();
 	loadAffection();
+	/* BUG-1 boot 推（11-16）：origin 幸存时把本地好感度补推服务端（账本缺货
+	 * 兜底，与 pushPetConfig boot 一推同款；里程碑有变更即推、不随 boot 推）。
+	 * origin 全新（重启后端口变了）本地无存量——不推，反向等 /pet/state
+	 * 下发采用。pushPetSync 声明在 exports.js（跨模块提升，运行时顺序无关）。 */
+	if (PET_MODE && affectionKnown) pushPetSync({ aff: affection });
 	loadHistory();
 
 	/* ------------------------------------------------------------------ */

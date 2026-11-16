@@ -52,7 +52,12 @@ body[data-ds-dark-theme] {
 	-webkit-user-select: none;
 	color: #4176e6;
 	opacity: 0.95;
-	transition: none;
+	/* 打盹唤醒平滑化（⑳ 真机三：用户实报「DSH 一打开小鲸鱼从深蓝变成正常色」
+	 * =常驻桌宠闲置 5 分钟睡着[grayscale+brightness]，DSH 打开 hello/投影帧
+	 * touchActivity 唤醒撤滤镜——transition:none 让灰度瞬间跳变读成怪异变色；
+	 * 0.6s 缓过渡=自然「缓缓醒来」，睡下同样柔和。其余属性仍瞬时（位置/
+	 * 尺寸不许过渡，游泳是逐帧 rAF） */
+	transition: filter 0.6s ease;
 	filter: drop-shadow(0 6px 14px rgba(37, 99, 235, 0.28));
 	animation: dsh-whale-bob 5s ease-in-out infinite;
 }
@@ -468,11 +473,17 @@ body[data-ds-dark-theme] {
 }
 /* 行首图标 P1（2026-10-28）：字形本体换成内联 SVG——stroke 随
  * currentColor 跟随面板文字色，跨平台字形/配色一致；emoji 原文留在
- * 0 尺寸 ghost span 里，textContent 与读屏口径不变 */
+ * 0 尺寸 ghost span 里，textContent 与读屏口径不变
+ * ⑳真机六追修三（11-17，用户反馈「图标偏下」）：vertical-align:middle 的
+ * 数学（基线+x-height/2）对 CJK 系统性偏低 1.8px（Range 实测 img/svg 同值
+ * ——镂空线条看不出、实心方块肉眼可见）。光学归中：inline-block 化（内联
+ * 盒不可 transform）+translateY(-1.8px)，不占布局、菜单/抽屉/设置全语境通用 */
 .dsh-whale-ico svg {
 	width: 14px;
 	height: 14px;
 	vertical-align: middle;
+	display: inline-block;
+	transform: translateY(-1.8px);
 }
 .dsh-whale-ico-ghost {
 	display: inline-block;
@@ -931,6 +942,70 @@ body[data-ds-dark-theme] {
 	height: 1px;
 	margin: 4px 12px;
 	background: var(--wh-panel-border);
+}
+
+/* 切换形态二级菜单（⑳）：flyout 挂 body——主菜单 overflow-x:hidden 会硬裁，
+ * 且主菜单的 transform/backdrop-filter 让内部 fixed 子元素照样被裁。锚在
+ * 父项旁，生命周期经 menuFloats 缝挂在主菜单上（见 src/ui/menu.js ⑳） */
+.dsh-whale-menu-sub {
+	position: fixed;
+	z-index: 46; /* 主菜单 45 之上：右侧展开时压住主菜单边缘 */
+	min-width: 148px;
+	box-sizing: border-box;
+	padding: 6px;
+	border-radius: var(--wh-radius-m);
+	/* 壳面变量与主菜单同源（半透明玻璃），缺席落回实底面板 */
+	background: var(--dsw-menu-surface-fill, var(--wh-panel-bg));
+	color: var(--wh-panel-text);
+	border: 1px solid var(--wh-panel-border);
+	box-shadow: var(--wh-shadow-panel);
+	-webkit-backdrop-filter: var(--wh-glass);
+	backdrop-filter: var(--wh-glass);
+	font-size: 12px;
+	line-height: 20px;
+	font-family: var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
+	pointer-events: none;
+	opacity: 0;
+	transform: translateX(-4px);
+	transition: opacity 0.15s ease, transform 0.15s ease;
+	user-select: none;
+	-webkit-user-select: none;
+}
+.dsh-whale-menu-sub.show {
+	opacity: 1;
+	transform: translateX(0);
+	pointer-events: auto;
+}
+.dsh-whale-menu-subrow {
+	display: flex;
+	align-items: center;
+	padding: 6px 10px;
+	border-radius: var(--wh-radius-s);
+	cursor: pointer;
+	white-space: nowrap;
+}
+.dsh-whale-menu-subrow:hover {
+	background: var(--wh-panel-hover);
+}
+.dsh-whale-menu-subrow:active {
+	background: var(--wh-panel-active);
+}
+/* radio 圆点位（TRAE 式）：当前形态实心点+主题蓝，其余空心点弱化 */
+.dsh-whale-menu-dot {
+	width: 16px;
+	flex: none;
+	text-align: center;
+	font-size: 10px;
+	color: var(--wh-panel-muted);
+}
+.dsh-whale-menu-subrow.cur .dsh-whale-menu-dot {
+	color: var(--wh-accent);
+}
+/* 父项行尾箭头（hover 展开二级菜单） */
+.dsh-whale-menu-arrow {
+	float: right;
+	margin-left: 12px;
+	color: var(--wh-panel-muted);
 }
 
 /* manual keyword search (#5) */

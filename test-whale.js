@@ -265,7 +265,9 @@ function makeEnv(initStore, opts) {
 	}
 
 	let rafQueue = [];
-	let fetchStub = null;
+	/* BUG-1（11-16）：opts.fetch 预置抓包——boot 期（脚本求值内）的 POST
+	 * （pushPetSync boot 一推等）发生在 makeEnv 返回前，事后 setFetch 挂不上 */
+	let fetchStub = (opts && typeof opts.fetch === 'function') ? opts.fetch : null;
 	/* env-scoped AudioContext: every env records into its own instance list,
 	 * so a silent env never sees another env's rings */
 	const myAudioCtxs = [];
@@ -634,6 +636,68 @@ async function main() {
 		assert.ok(!envP.bubble() || !envP.bubble().textContent.includes('躲'), 'peek arrival stays silent (body is about to fold into the eye)');
 	}
 
+	/* 8.5e BUG-1 同步（11-16 实机验收）：桌宠中继端口每-boot 随机 → pet 页
+	 * origin 变 → localStorage 按 origin 隔离=重启失忆。好感度/里程碑/位置
+	 * 改走服务端 petDoc：下行采用（origin 全新）/ boot 推（origin 幸存）/
+	 * 回声免疫 / 页鲸（非 PET_MODE）不参与。 */
+	{
+		const rd = (ls, k) => { try { return JSON.parse(ls.getItem(k)); } catch (e) { return null; } };
+		/* ① origin 全新（重启后端口变了，localStorage 空）：下行采用 */
+		const envA = makeEnv(null, { petMode: true });
+		envA.ready();
+		assert.strictEqual(envA.sandbox.__dshWhale.affection(), 0, 'BUG-1: fresh origin starts at 0');
+		envA.sandbox.__dshWhale.petSyncFromHost(9, null, null);
+		assert.strictEqual(envA.sandbox.__dshWhale.affection(), 9, 'BUG-1: petSyncFromHost adopts the server affection');
+		assert.strictEqual(rd(envA.sandbox.localStorage, 'dsh-whale:affection').data.value, 9, 'BUG-1: adopted affection lands in localStorage');
+		/* 里程碑旗标 + 位置一并下行采用；鲸鱼按服务端锚点落位（对称钳制） */
+		envA.sandbox.__dshWhale.petSyncFromHost(null, '10', { rx: 30, by: 40 });
+		assert.strictEqual(envA.sandbox.localStorage.getItem('dsh-whale:affMs'), '10', 'BUG-1: milestone flags adopted from the server');
+		const posAdopted = rd(envA.sandbox.localStorage, 'dsh-whale:pos');
+		assert.ok(posAdopted && posAdopted.data.v === 2 && posAdopted.data.rx === 30 && posAdopted.data.by === 40, 'BUG-1: server pos adopted as a v2 anchor');
+		assert.strictEqual(envA.whale.style.left, '1082px', 'BUG-1: whale re-seated from the server anchor (1200-88-30)');
+		assert.strictEqual(envA.whale.style.top, '672px', 'BUG-1: re-seat bottom offset 800-88-40');
+		/* 幂等：同值重喂零副作用（2s 轮询回声） */
+		envA.sandbox.__dshWhale.petSyncFromHost(9, '10', { rx: 30, by: 40 });
+		assert.strictEqual(envA.sandbox.__dshWhale.affection(), 9, 'BUG-1: repeated identical feed is a no-op');
+		/* 回声免疫：本地变更后（权威值置位）旧服务端值不再反向覆盖 */
+		envA.sandbox.__dshWhale.petWhale();
+		assert.strictEqual(envA.sandbox.__dshWhale.affection(), 10, 'BUG-1: petting increments to 10');
+		assert.strictEqual(envA.sandbox.localStorage.getItem('dsh-whale:affMs'), '10', 'BUG-1: crossing 10 fires the milestone flag locally');
+		envA.sandbox.__dshWhale.petSyncFromHost(2, null, null);
+		assert.strictEqual(envA.sandbox.__dshWhale.affection(), 10, 'BUG-1: stale server affection does NOT overwrite after a local change');
+		/* ② origin 幸存：本地存量 boot 推服务端（账本缺货兜底） */
+		const posts = [];
+		const envB = makeEnv([
+			['dsh-whale:affection', JSON.stringify({ v: 1, data: { value: 7 } })],
+			['dsh-whale:pos', JSON.stringify({ v: 1, data: { v: 2, rx: 30, by: 40, x: 1082, y: 672 } })],
+		], {
+			petMode: true,
+			fetch(url, init) {
+				posts.push({ url: String(url), body: init && init.body ? JSON.parse(init.body) : null });
+				return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+			},
+		});
+		envB.ready();
+		const affPost = posts.find((p) => p.url.indexOf('/pet/ctrl') !== -1 && p.body && typeof p.body.aff === 'number');
+		const posPost = posts.find((p) => p.url.indexOf('/pet/ctrl') !== -1 && p.body && p.body.pos);
+		assert.ok(affPost && affPost.body.action === 'sync' && affPost.body.aff === 7, 'BUG-1: surviving origin boot-pushes the local affection via ctrl sync');
+		assert.ok(posPost && posPost.body.action === 'sync', 'BUG-1: surviving origin boot-pushes the local anchor via ctrl sync');
+		assert.deepStrictEqual(posPost.body.pos, { rx: 30, by: 40, x: 1082, y: 672 }, 'BUG-1: boot push carries the anchor verbatim');
+		/* ③ 页鲸（非 PET_MODE）不参与：无 sync POST、下行不采用 */
+		const postsC = [];
+		const envC = makeEnv(null, {
+			fetch(url) {
+				postsC.push(String(url));
+				return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+			},
+		});
+		envC.ready();
+		assert.ok(!postsC.some((u) => u.indexOf('/pet/ctrl') !== -1), 'BUG-1: page mode never POSTs the pet sync channel');
+		envC.sandbox.__dshWhale.petSyncFromHost(99, '50', { rx: 1, by: 1 });
+		assert.strictEqual(envC.sandbox.__dshWhale.affection(), 0, 'BUG-1: petSyncFromHost is a no-op outside PET_MODE');
+		assert.strictEqual(envC.sandbox.localStorage.getItem('dsh-whale:affMs'), null, 'BUG-1: affMs not adopted outside PET_MODE');
+	}
+
 	/* 8.6 桌宠仲裁（第一批）：pet/state 帧 + SSE hello 双通道驱动页内休眠
 	 * （2026-10-31 真机洞：SSE 在线的页面不跑轮询，缺帧通道=页内鲸鱼在
 	 * 退出桌宠后永久隐藏）。form 语义（11-01 真机取证修正）：休眠与形态
@@ -708,6 +772,13 @@ async function main() {
 		assert.strictEqual(reloads.length, 2, 'a NEW click (new frame time) reloads again — dedupe never blocks fresh intent');
 		envR.sandbox.__dshWhale._pollConsume([{ seq: 9, type: 'pet/reload-page', time: T1 - 20000 }], 'boot-r1');
 		assert.strictEqual(reloads.length, 2, 'stale frame (>10s) still refused by the freshness gate');
+		/* ⑳真机九（11-17 用户实报「点 1 次刷新，DSH 页刷了 3 次」）：**单槽键
+		 * 的洞**——连点两次（T1→T1+3000）后，T1 的重放（≤10s 窗内的轮询/
+		 * 重连重放）与槽里的新时间戳不等=当新帧再执行=第三次刷新。多槽清单
+		 * 把旧点击的时间戳一并记账，幽灵重放堵死。 */
+		envR.sandbox.__dshWhale._pollConsume([frame(T1, 3)], 'boot-r1');
+		assert.strictEqual(reloads.length, 2, '真机九: a REPLAY of the OLDER click (T1) after a newer click does NOT reload again — the one-slot key hole (ghost reload) is closed');
+		assert.strictEqual(envR.sandbox.sessionStorage.getItem('dsh-whale:once-reload'), String(T1) + ',' + String(T1 + 3000), '真机九: the multi-slot ledger keeps BOTH recent frame times');
 		/* 无账本环境降级：sessionStorage 缺席时保持旧行为照旧执行（可用性优先） */
 		const envR2 = makeEnv();
 		envR2.ready();
@@ -1585,6 +1656,30 @@ async function main() {
 	muxpTok({ type: 'session/projection', sessionId: 'session-tk1', key: 'contextPressure', value: { pressureTokens: 800000, projectedTokens: 800000, contextWindow: 1000000 } });
 	assert.ok(envTok.bubble().textContent.includes('compact'), `pressure warning shown: ${envTok.bubble().textContent}`);
 	assert.strictEqual(TK.unreadCount(), 0, 'pressure warning never adds unread');
+	/* ⑳ 真机答疑补链（同上）：设置页「压力提醒」的值必须真正驱动 maybeWarn
+	 * 阈值 + 警告一次性 + 回落重臂。观察缝=气泡文本：开工报告替换警告气泡后，
+	 * 未重置时再越线不得重说（一次性），跌破 50% 重置后再越线必须重说（重臂） */
+	const envPw = makeEnv();
+	envPw.ready();
+	const PW = envPw.sandbox.__dshWhale;
+	const muxpPw = (payload) => PW.handleMuxPayload(payload);
+	envPw.setFetch(() => Promise.resolve({ ok: false, json: () => Promise.resolve({}) }));
+	PW.CONFIG.pressureWarnPct = 90; /* 用户把阈值调到 90% */
+	muxpPw({ type: 'session/projection', sessionId: 'session-pw1', key: 'subagentTiming', value: { settledMs: 0 } });
+	muxpPw({ type: 'session/projection', sessionId: 'session-pw1', key: 'title', value: '压力阈值', seq: 1 });
+	muxpPw({ type: 'session/projection', sessionId: 'session-pw1', key: 'contextPressure', value: { pressureTokens: 800000, projectedTokens: 800000, contextWindow: 1000000 } }); /* 80% < 90% */
+	assert.ok(!envPw.bubble().textContent.includes('compact'), 'configured threshold respected: 80% stays quiet under 90% setting');
+	muxpPw({ type: 'session/projection', sessionId: 'session-pw1', key: 'contextPressure', value: { pressureTokens: 920000, projectedTokens: 920000, contextWindow: 1000000 } }); /* 92% ≥ 90% */
+	assert.ok(envPw.bubble().textContent.includes('compact'), 'configured threshold respected: 92% warns under 90% setting');
+	PW.CONFIG.pressureWarnPct = 70; /* 还原默认，继续测一次性/重臂 */
+	muxpPw({ type: 'session/event', sessionId: 'session-pw1', event: { type: 'turn/start', seq: 2, time: 2, data: {} } });
+	muxpPw({ type: 'session/projection', sessionId: 'session-pw1', key: 'title', value: '压力阈值', seq: 3 }); /* 冲掉警告气泡=开工报告上场 */
+	assert.ok(!envPw.bubble().textContent.includes('compact'), 'start report replaced the warning bubble (observation point ready)');
+	muxpPw({ type: 'session/projection', sessionId: 'session-pw1', key: 'contextPressure', value: { pressureTokens: 830000, projectedTokens: 830000, contextWindow: 1000000 } }); /* 83% ≥ 70%，未重置 */
+	assert.ok(!envPw.bubble().textContent.includes('compact'), 'one-shot: crossing again before relief does NOT re-warn');
+	muxpPw({ type: 'session/projection', sessionId: 'session-pw1', key: 'contextPressure', value: { pressureTokens: 300000, projectedTokens: 300000, contextWindow: 1000000 } }); /* 30% < 50% 重置线 */
+	muxpPw({ type: 'session/projection', sessionId: 'session-pw1', key: 'contextPressure', value: { pressureTokens: 840000, projectedTokens: 840000, contextWindow: 1000000 } }); /* 84% 再越线 */
+	assert.ok(envPw.bubble().textContent.includes('compact'), 're-arm after relief: warns again once pressure climbs back past the threshold');
 	/* turn/start begins the count; model replies accumulate (including the
 	 * ones inside the name-hold window) */
 	muxpTok({ type: 'session/event', sessionId: 'session-tk1', event: { type: 'turn/start', seq: 1, time: 0, data: {} } });
@@ -2823,6 +2918,22 @@ async function main() {
 	muxpStk({ type: "session/event", sessionId: "session-st1", event: { type: "turn/end", seq: 5, time: 5, data: {} } });
 	SK.scanStuckTools();
 	assert.ok(!statusStk() || !statusStk().classList.contains("dsh-whale-status-stuck"), "turn/end clears stuck");
+	/* ⑳ 真机答疑补链（用户问「这两个功能有没有实际测过」）：设置页「工具超时」
+	 * 的值必须真正驱动运行时 watchdog——改 60s 后 30s 的 pending 不再误报、
+	 * 65s 才报（此前只测过默认 15s 下的行为，设置值→运行时这条链无断言） */
+	SK.CONFIG.toolStuckMs = 60000;
+	muxpStk({ type: "session/jobs", sessionId: "session-st1", jobs: [{ id: "j1", kind: "bash", label: "sleep 30", status: "completed", startedAt: 1 }] }); /* 结束块 40 的慢任务——豁免不再压住阈值测试 */
+	muxpStk({ type: "session/event", sessionId: "session-st1", event: { type: "tool/call", seq: 6, time: 6, data: { callId: "c3", name: "pwsh" } } });
+	SK.toolSlot.get("c3").at = Date.now() - 30000; /* 30s < 新阈值 60s */
+	SK.scanStuckTools();
+	assert.ok(!statusStk() || !statusStk().classList.contains("dsh-whale-status-stuck"), "configured threshold respected: 30s pending stays quiet under 60s setting");
+	SK.toolSlot.get("c3").at = Date.now() - 65000; /* 65s > 60s */
+	SK.scanStuckTools();
+	assert.ok(statusStk() && statusStk().classList.contains("dsh-whale-status-stuck"), "configured threshold respected: 65s pending flags under 60s setting");
+	muxpStk({ type: "session/event", sessionId: "session-st1", event: { type: "tool/result", seq: 7, time: 7, data: { callId: "c3" } } });
+	SK.CONFIG.toolStuckMs = 15000; /* restore default for later blocks */
+	SK.scanStuckTools();
+	assert.ok(!statusStk() || !statusStk().classList.contains("dsh-whale-status-stuck"), "cleanup: tool/result clears under custom threshold too");
 
 	/* 40b. 09-12 multi-session stuck rows (用户拍板): every stuck session
 	 * gets its own NAMED line, stacked one per line, worst first — and the
@@ -3366,6 +3477,45 @@ async function main() {
 	 * pet-token SSE 连接——桌宠常驻期间它恒在，size>0 计数=delivered 恒
 	 * true=关窗后的补偿链（pending/revive）整个死路 */
 	assert.ok(petIndexSrc.includes('!c.pet') && petIndexSrc.includes('hasPageClients'), 'host: hasPageClients EXCLUDES the pet own SSE connection (root fix)');
+
+	/* 45g. 切换形态二级菜单缝源码契约（⑳ 11-15 用户拍板 TRAE 式：两侧各半
+	 * 缺一即断——menuFloats 缝缺席=子菜单孤儿漂浮；外部关闭判定不豁免子
+	 * 菜单行=pointerdown 收起后 pointer-events 转 none，click 落空） */
+	assert.ok(src.includes('closePetFloats') && src.includes('__dshPetHost.menuFloats'), 'whale.js: menu cascade closes pet floats via the menuFloats seam');
+	assert.ok(src.includes('if (petFloatHas(t)) return') && src.includes('petFloatShown()'), 'whale.js: outside pointerdown exempts pet float rows + right-click counts them as open floats');
+	assert.ok(petPageSrc.includes('menuFloats') && petPageSrc.includes('dsh-whale-menu-sub') && petPageSrc.includes('切换形态'), 'pet page: registers the flyout submenu and builds the 切换形态 parent row');
+	/* 区域上报白名单（⑳ 真机实锤）：rects() 的 CLASSES 漏了子菜单=伸出主菜单
+	 * 包围盒的部分被 SetWindowRgn 硬裁，只剩贴缘 ~12px 空底壳（PAD=14-2px 缝） */
+	assert.ok(petPageSrc.includes("'dsh-whale-menu-sub', 'dsh-whale-settings'"), 'pet page: submenu class is in the region-report CLASSES whitelist (else clipped by SetWindowRgn)');
+	/* 真机二轮（⑳ 用户两张截图）：锚主菜单纯外缘（不嵌进菜单框）+避鲸四象限
+	 * （子菜单不许压住小鲸鱼——沿菜单右缘竖让优先，鲸右/鲸左兜底） */
+	assert.ok(petPageSrc.includes('subHitsWhale') && petPageSrc.includes('openPetSub(parentRow, makeItems)') && petPageSrc.includes("getElementById('dsh-whale')"), 'pet page: submenu anchors to the menu outer edge and dodges the whale (offset-box four-way pick)');
+	/* 真机三轮（⑳ 用户截图「右边不足时甩到屏幕左下角」）：锚位就近优先级——
+	 * 右侧贴缝 → 菜单下方 → 左侧贴缝 → 菜单上方，不孤悬远端 */
+	assert.ok(petPageSrc.includes('mr.bottom + SUBGAP') && petPageSrc.includes('mr.top - h - SUBGAP'), 'pet page: submenu falls below/above the menu when the right side is short (anchor priority, never stranded far away)');
+	/* 真机五（11-17 用户截图「鲸鱼在右下角时子菜单跑到最上面」）：左侧贴缝必须
+	 * 先于菜单上方——贴底边场景「下方」嵌菜单罚 100000、上方零罚先到即赢=
+	 * 子菜单隔整个菜单高度孤悬菜单顶上；左侧与父项行同行高才是 flyout 本位 */
+	assert.ok(petPageSrc.indexOf('mr.left - SUBGAP - w, rowTop') !== -1
+		&& petPageSrc.indexOf('mr.left - SUBGAP - w, rowTop') < petPageSrc.indexOf('mr.top - h - SUBGAP'), 'pet page: LEFT-EDGE flyout outranks ABOVE-menu (corner case: row-height beats menu-height detachment)');
+	/* 真机七（11-17 用户两截图「两个子菜单互踩」）：与父项行的分离距离必须进
+	 * 罚分（1px=1 罚）——否则 DSH 行的子菜单甩菜单下方、切换形态的甩鲸上方，
+	 * 去子菜单的路径横穿兄弟父项行=行进途中被互踩换装 */
+	assert.ok(petPageSrc.includes('pen += Math.abs(c.t - rowTop);'), 'pet page: detachment distance is scored (flyout stays at its parent row, travel paths never cross the sibling parent row)');
+	/* 真机六（11-17 用户拍板）：flyout 泛化——DSH 窗口组与切换形态组共用同一
+	 * 枚壳/择位链；whale.js 从原刷新项升格父项，子项=刷新（reload-page 原语义）
+	 * +打开（ps1 c:'revive' 唤回）；第二态定名「缩成小窗」（视觉=玻璃方卡非气泡） */
+	assert.ok(petPageSrc.includes('makeFlyoutRow') && petPageSrc.includes('reviveDsh') && petPageSrc.includes('缩成小窗'), 'pet page: generalized flyout factory + revive seam + form renamed to 缩成小窗');
+	/* 真机六追修二（11-17 用户截图「图标和文字叠成两行」）：.dsh-whale-menu-item
+	 * 是块级+内联流（nowrap 只防文本折行、不防块级断行），官方图标 img 走
+	 * display:block 会让 inline-block 槽基线掉到底缘=图标/文字分层；必须与
+	 * svg 槽完全同款（inline-block+vertical-align:middle） */
+	assert.ok(petPageSrc.includes('display: inline-block; vertical-align: middle; border-radius: 4px; transform: translateY(-1.8px); }'), 'pet page: official-icon img mirrors the svg-slot alignment + optical centering (block img stacks on menu-item inline flow; vertical-align:middle sits 1.8px low vs CJK text)');
+	assert.ok(src.includes('DSH 窗口') && src.includes('makeFlyoutRow') && src.includes("action: 'reload-page'") && src.includes('reviveDsh'), 'whale.js: pet menu swaps the refresh row for the DSH-window flyout parent (refresh kept, revive added)');
+	/* 真机四（⑳ 用户实报「DSH 打开小鲸鱼从深蓝变正常色」）：常驻桌宠闲置睡着
+	 * [grayscale+brightness]，DSH 打开 hello/投影帧唤醒撤滤镜——transition:none
+	 * 瞬间跳变读成怪异变色，改 0.6s 缓过渡=自然醒来 */
+	assert.ok(petPageSrc.includes('filter .6s ease'), 'pet page: nap-wake filter cross-fades instead of snapping (dark-blue to normal on DSH open)');
 
 	/* 45e. 首条通知无声回归（11-11 三轮，用户实报「第一条通知无声，双击
 	 * 红标后恢复」）：WebView2 autoplay 策略=窗口无用户激活时 resume 被拒，

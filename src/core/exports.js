@@ -26,9 +26,54 @@
 	}
 	pushPetConfig(); /* boot 一推：宿主 ledger 缺货（首次启用/重装）时兜底 */
 
+	/** BUG-1 同步（11-16 实机验收，用户实报「好感度/位置重启清零」）：桌宠
+	 * 中继端口每-boot 随机（DSH_PET_PORT 由 DSH desktop 分配，插件侧无法
+	 * 固定）→ pet 页 origin 变 → localStorage 按 origin 隔离=每次重启都是
+	 * 新网站。好感度/里程碑/位置改走服务端 petDoc（与形态持久化同一条跨
+	 * 重启通道）：本页变化经 /pet/ctrl action:sync 上报（fence-only，与 form
+	 * 同信任级），宿主 /pet/state 随 2s 轮询下发（petSyncFromHost 只在「本
+	 * boot 尚无权威值」时采用，幂等防回声）。fire-and-forget：失败静默
+	 * （下次改动自然补上）。PET_MODE 专属：页鲸 origin 稳定，无此病。
+	 * 函数声明提升：affection.js/mux.js/menu.js/drag.js 的调用点在本定义
+	 * 之前也可用。 */
+	function pushPetSync(fields) {
+		if (!PET_MODE || typeof fetch !== 'function') return;
+		try {
+			fetch('/api/whale-assistant/pet/ctrl', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify(Object.assign({ action: 'sync' }, fields))
+			}).catch(function () { /* 宿主离线/桌宠页直开：静默 */ });
+		} catch (e) { /* 防御 */ }
+	}
+
+	/** BUG-1 下行采用（11-16）：宿主 /pet/state 每拍带 petDoc 的
+	 * aff/affMs/pos；本函数幂等——权威值已置位（affectionKnown/本地
+	 * affMs/posSyncKnown）时是纯 no-op，重复喂同值零副作用。affMs 只在
+	 * 本地空白时采用（本地是累计旗标、只会多不会少）。位置半区在 uiInit
+	 * 闭包里（seatFromAnchor 是闭包内函数），经 _petSyncPos 缝转发。 */
+	function petSyncFromHost(aff, affMs, pos) {
+		if (!PET_MODE) return;
+		if (!affectionKnown && typeof aff === 'number' && isFinite(aff) && aff >= 0 && Math.floor(aff) !== affection) {
+			affection = Math.floor(aff);
+			affectionKnown = true;
+			saveAffection();
+		}
+		var affMsHave = '';
+		try { affMsHave = localStorage.getItem('dsh-whale:affMs') || ''; } catch (e0) { }
+		if (!affMsHave && typeof affMs === 'string' && affMs) {
+			try { localStorage.setItem('dsh-whale:affMs', affMs); } catch (e1) { }
+		}
+		try {
+			if (pos && typeof window.__dshWhale._petSyncPos === 'function') window.__dshWhale._petSyncPos(pos);
+		} catch (e2) { }
+	}
+
 	/* diagnostic seam */
 	window.__dshWhale.version = PATCH_VERSION;
 	window.__dshWhale._pushPetConfig = pushPetConfig;
+	window.__dshWhale._pushPetSync = pushPetSync;
+	window.__dshWhale.petSyncFromHost = petSyncFromHost;
 	window.__dshWhale.handleJobsFrame = handleJobsFrame;
 	window.__dshWhale.handleSubscribedFrame = handleSubscribedFrame;
 	window.__dshWhale.handleMuxPayload = handleMuxPayload;

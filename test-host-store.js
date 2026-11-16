@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadStore, mergeHistory, saveStoreAtomic, storePath } from './whale-assistant/lib/store.js';
 import { isTrustedRequest } from './whale-assistant/lib/index.js';
-import { applyPet, checkPetToken, enumerateFrames, enumerateHistory, normalizePetDoc, resolvePetCode, PET_FORMS, heartbeatGate } from './whale-assistant/lib/pet.js';
+import { applyPet, checkPetToken, enumerateFrames, enumerateHistory, normalizePetDoc, normalizePetSyncPatch, petBootStateScript, resolvePetCode, PET_FORMS, heartbeatGate } from './whale-assistant/lib/pet.js';
 
 let passed = 0;
 function ok(cond, msg) { passed++; assert.ok(cond, msg); }
@@ -141,9 +141,73 @@ ok(checkPetToken(fakeReq({ 'x-dsh-pet-token': TOKEN }), TOKEN), 'pet token: corr
 ok(!checkPetToken(fakeReq({ 'x-dsh-pet-token': TOKEN }), null), 'pet token: no configured token refuses');
 
 /* 17. pet doc normalization: unknown shapes fall back to defaults */
-ok(JSON.stringify(normalizePetDoc(null)) === '{"enabled":false,"form":"full"}', 'normalize: null doc -> defaults');
+ok(JSON.stringify(normalizePetDoc(null)) === '{"enabled":false,"form":"full","aff":null,"affMs":null,"pos":null}', 'normalize: null doc -> defaults (BUG-1: petDoc carries aff/affMs/pos)');
 ok(normalizePetDoc({ pet: { enabled: 1, form: 'weird' } }).enabled === false && normalizePetDoc({ pet: { enabled: 1, form: 'weird' } }).form === 'full', 'normalize: junk form falls back, non-boolean enabled is NOT enabled');
 ok(normalizePetDoc({ pet: { enabled: true } }).enabled === true, 'normalize: exact-boolean enabled sticks');
+
+/* ---- BUG-1（11-16 实机验收）：桌宠中继端口每-boot 随机 → pet 页 origin 变
+ * → localStorage 失忆。好感度/里程碑/位置随 petDoc 跨重启（与 form 同一条
+ * 通道）。normalizePetDoc 容错读 + normalizePetSyncPatch 载荷校验（纯函数，
+ * 处理器在 applyPet 闭包内、直接驱动会写真实 ~/.dsh 账本，故测纯函数）。 ---- */
+{
+	/* roundtrip: 写入形状（writePetDoc 的合并产物）经 normalizePetDoc 原样读回 */
+	const doc = normalizePetDoc({ pet: { enabled: true, form: 'bubble', aff: 7.9, affMs: '10,50', pos: { rx: 18, by: 24, x: 100, y: 200 } } });
+	assert.deepStrictEqual(doc, { enabled: true, form: 'bubble', aff: 7, affMs: '10,50', pos: { rx: 18, by: 24, x: 100, y: 200 } }, 'BUG-1: petDoc aff(整数化)/affMs/pos roundtrip');
+	/* 脏数据回落 null，手改账本不得杀死 boot */
+	const junk = normalizePetDoc({ pet: { form: 'bubble', aff: -3, affMs: 42, pos: { rx: 'x', by: null } } });
+	assert.deepStrictEqual(junk, { enabled: false, form: 'bubble', aff: null, affMs: null, pos: null }, 'BUG-1: junk aff/affMs/pos fall back to null (hand-edited ledger must not kill boot)');
+	/* pos 缺 x/y 补 0（savePos 恒带 x/y，账本缺字段不致命） */
+	const partial = normalizePetDoc({ pet: { pos: { rx: 5, by: 6 } } });
+	assert.deepStrictEqual(partial.pos, { rx: 5, by: 6, x: 0, y: 0 }, 'BUG-1: pos without x/y defaults them to 0');
+	/* 非有限数一律拒 */
+	ok(normalizePetDoc({ pet: { aff: Number.NaN } }).aff === null && normalizePetDoc({ pet: { pos: { rx: Number.POSITIVE_INFINITY, by: 1 } } }).pos === null, 'BUG-1: non-finite aff/rx rejected');
+	/* sync 载荷校验：有效三字段 */
+	assert.deepStrictEqual(
+		normalizePetSyncPatch({ aff: 12.7, affMs: '10', pos: { rx: 3, by: 4 } }),
+		{ aff: 12, affMs: '10', pos: { rx: 3, by: 4, x: 0, y: 0 } },
+		'BUG-1: sync patch accepts aff+affMs+pos (aff floored, pos x/y defaulted)'
+	);
+	/* 字段级合并语义：只带 aff 的 patch 不带出 affMs/pos 键 */
+	assert.deepStrictEqual(normalizePetSyncPatch({ aff: 3 }), { aff: 3 }, 'BUG-1: sync patch carries ONLY the fields present (partial merge)');
+	/* 无有效字段 -> null（处理器回 400） */
+	ok(normalizePetSyncPatch({}) === null && normalizePetSyncPatch(null) === null && normalizePetSyncPatch({ aff: -1, affMs: 9, pos: 'x' }) === null, 'BUG-1: sync patch with no valid field -> null (400)');
+	/* affMs 截 64、aff 钳顶 */
+	ok(normalizePetSyncPatch({ affMs: 'x'.repeat(100) }).affMs.length === 64, 'BUG-1: affMs clamped to 64 chars');
+	ok(normalizePetSyncPatch({ aff: 99999999 }).aff === 9999999, 'BUG-1: aff clamped to 9999999');
+}
+
+/* ---- BUG-1 boot seeding（11-17 二轮，用户实报「先开在右下角然后闪到上次
+ * 位置」）：宿主把 petDoc 快照注入 /pet/page <head>——新 origin 的
+ * localStorage 在 whale.js 求值前落好，loadPos 走本地存量路径=鲸鱼淡入即在
+ * 上次落点（轮询下发那条路保留作兜底，从此对新 boot 不再承担落位）。 ---- */
+{
+	/* 有效快照 → 自包含种入脚本：信封形状与 savePos/saveAffection 写出同构
+	 * （boot 快照 JSON 携带值，种入模板决定信封形状——运行时产物与
+	 * savePos/saveAffection 的 localStorage 逐字节同形） */
+	const s = petBootStateScript(3, '10', { rx: 278, by: 158, x: 1186, y: 681 });
+	ok(s.includes('"dsh-whale:pos"') && s.includes('"dsh-whale:affection"') && s.includes('"dsh-whale:affMs"'), 'BUG-1: boot script seeds all three keys');
+	ok(s.includes('"pos":{"rx":278,"by":158,"x":1186,"y":681}') && s.includes('data:{v:2,rx:b.pos.rx,by:b.pos.by,x:b.pos.x,y:b.pos.y}'), 'BUG-1: pos snapshot verbatim + envelope matches savePos shape');
+	ok(s.includes('"aff":3') && s.includes('data:{value:b.aff}'), 'BUG-1: affection snapshot + envelope matches saveAffection shape');
+	ok(s.includes('try{') && s.includes('}catch(e){}})();'), 'BUG-1: script is self-contained and failure-silent');
+	/* 幂等：只在 localStorage 缺键时种（origin 幸存时本地是最新的） */
+	ok((s.match(/!localStorage.getItem/g) || []).length === 3, 'BUG-1: every seed is gated on the key being absent');
+	/* `</script>` 逃逸防护：affMs 里的 < 必须转义 */
+	const evil = petBootStateScript(0, '</script><script>alert(1)</script>', null);
+	ok(!evil.includes('</script>') && evil.includes('\\u003c'), 'BUG-1: < in affMs escaped (script-breakout impossible)');
+	/* pos 缺 x/y 补 0、脏 aff 过滤 */
+	const partial = petBootStateScript(-2, '', { rx: 5, by: 6 });
+	ok(partial.includes('"x":0,"y":0') && !partial.includes('"aff"') && !partial.includes('"affMs"'), 'BUG-1: junk aff dropped, pos without x/y defaults them');
+	/* 全空 → 空注释占位（首次启用/账本缺货：鲸鱼在默认角，照旧） */
+	ok(petBootStateScript(null, null, null).includes('pet boot state: none'), 'BUG-1: empty ledger -> inert placeholder');
+	/* 双侧契约：page.html 占位在 <head> 内（先于 whale.js 求值）+ 宿主真替换 */
+	const page = readFileSync(new URL('./whale-assistant/pet/page.html', import.meta.url), 'utf8');
+	const headEnd = page.indexOf('</head>');
+	const whaleTag = page.indexOf('<script src="whale.js">');
+	ok(page.indexOf('__DSH_PET_BOOT__') !== -1 && page.indexOf('__DSH_PET_BOOT__') < headEnd, 'BUG-1: page.html carries the boot marker inside <head>');
+	ok(headEnd !== -1 && whaleTag !== -1 && headEnd < whaleTag, 'BUG-1: head (seeding point) precedes the whale.js script tag');
+	const petSrc = readFileSync(new URL('./whale-assistant/lib/pet.js', import.meta.url), 'utf8');
+	ok(petSrc.includes("replace('__DSH_PET_BOOT__'") && petSrc.includes('petBootStateScript(petAff, petAffMs, petPos)'), 'BUG-1: /pet/page handler substitutes the marker with the ledger snapshot');
+}
 ok(PET_FORMS.join('|') === 'full|bubble|hidden', 'form enum is the three-state contract');
 
 /* 18. enumerated feed: content stripped, whitelist only, stable synthetic ids,

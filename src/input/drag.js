@@ -154,6 +154,30 @@
 
 		loadPos();
 
+		/* BUG-1 boot 推 + 采用缝（11-16 实机验收）：桌宠中继端口每-boot 随机 →
+		 * pet 页 origin 变 → localStorage 失忆。origin 幸存时本地落点补推服务端
+		 * （账本缺货兜底，与 pushPetConfig boot 一推同款）；origin 全新（重启
+		 * 后端口变了）本地无存量——不推，等 /pet/state 下发经 _petSyncPos 采用
+		 * （seatFromAnchor 自带对称钳制，窗口形状无关）。 */
+		if (loadPos()) {
+			posSyncKnown = true;   /* 本地存量=本 boot 权威值（v2 锚点或 legacy x/y） */
+			var bootAnchor = PET_MODE ? anchorFromStorage() : null;
+			if (bootAnchor && typeof bootAnchor.rx === 'number' && typeof bootAnchor.by === 'number') {
+				pushPetSync({ pos: { rx: bootAnchor.rx, by: bootAnchor.by, x: bootAnchor.x, y: bootAnchor.y } });
+			}
+		}
+		window.__dshWhale._petSyncPos = function (pos) {
+			if (!pos || posSyncKnown) return;
+			if (typeof pos.rx !== 'number' || typeof pos.by !== 'number') return;
+			posSyncKnown = true;
+			try {
+				seatFromAnchor(pos.rx, pos.by);
+				/* 落盘与 savePos 同构（v2 锚点 + x/y 兜底）：此后 resize 重摆、
+				 * 下一次 savePos 都从这份锚点出发。 */
+				safeSet(POS_KEY, { v: 2, rx: pos.rx, by: pos.by, x: whale.offsetLeft, y: whale.offsetTop });
+			} catch (e) {}
+		};
+
 		/* 桌宠入场（第一批）：PET_MODE 下落位后同步执行——首帧即画在「落点
 		 * 向屏幕中心回拉」的拉入位，随后游向最近边缘（弧线+涟漪+到达水花+
 		 * 引导台词），uiInit 同步无跳变。见 swim.js petEntranceSwim。 */
@@ -174,6 +198,13 @@
 		};
 		window.__dshWhale.whale = whale;
 		window.__dshWhale.openCtxMenu = openCtxMenu;
+		/* ⑳真机六追修（11-17 用户拍板）：桌宠 flyout 行首图标缝——🔄 等已收录
+		 * 字形复用本图标集（跨面板一致），🖥️ 由 page.html 走 DSH 官方图标
+		 * （img 槽）；未收录字形返回 null=裸 emoji 照旧 */
+		window.__dshWhale.menuIcon = function (glyph) {
+			var spec = ICON_PATHS[glyph];
+			return spec ? buildIconSvg(spec) : null;
+		};
 		window.__dshWhale.petWhale = petWhale;
 		window.__dshWhale.ctxMenuOpen = function () {
 			return !!(ctxMenu && ctxMenu.classList.contains('show'));

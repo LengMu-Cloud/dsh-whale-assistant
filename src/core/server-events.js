@@ -376,14 +376,29 @@
 	 * =连刷 N 次（reload 循环 ~2s < 10s 窗），jump/open-settings 重放
 	 * =动作重演。sessionStorage 按「类型+时间戳」记账：同一帧只在首个
 	 * 消费者执行一次；新点击=新时间戳=照常执行。sessionStorage 跨
-	 * reload 存活（同 tab）=重载链上的全部重放被拦；无账本环境（桩缺
-	 * 席/隐私模式）降级为旧行为照旧执行。 */
+	 * reload 存活（同 tab，⑳真机八 dsh-app:// 源实测锤死）=重载链上的
+	 * 全部重放被拦；无账本环境（桩缺席/隐私模式）降级为旧行为照旧执行。
+	 * ⑳真机九（11-17 用户实报「点 1 次刷新，DSH 页刷了 3 次」）：**单槽键
+	 * 的洞**——槽里只有最后一个时间戳，10s 窗内连点两次（T1→T2）后，T1
+	 * 的轮询/重连重放与槽里的 T2 不相等=当新帧再执行=第三次刷新（旧帧
+	 * 的重放被新点击顶出槽位）。改**多槽清单**：记最近 6 个时间戳、命中
+	 * 任一即拦；12s 过期清理（>10s 重放窗，防无界增长）。 */
 	var petFrameOnce = function (kind, time) {
 		if (typeof window === 'undefined' || !window.sessionStorage || typeof window.sessionStorage.getItem !== 'function') return true;
 		try {
 			var key = 'dsh-whale:once-' + kind;
-			if (String(window.sessionStorage.getItem(key)) === String(time)) return false;
-			window.sessionStorage.setItem(key, String(time));
+			var now = Date.now();
+			var raw = String(window.sessionStorage.getItem(key) || '');
+			var times = raw ? raw.split(',') : [];
+			var fresh = [];
+			for (var i = 0; i < times.length; i++) {
+				var t = Number(times[i]);
+				if (isFinite(t) && now - t < 12000) fresh.push(times[i]);
+			}
+			if (fresh.indexOf(String(time)) !== -1) return false;
+			fresh.push(String(time));
+			while (fresh.length > 6) fresh.shift();
+			window.sessionStorage.setItem(key, fresh.join(','));
 		} catch (e) { return true; }
 		return true;
 	};

@@ -54,7 +54,24 @@ export function normalizePetDoc(doc) {
 	const enabled = !!(pet && pet.enabled === true);
 	let form = pet && typeof pet.form === 'string' ? pet.form : 'full';
 	if (PET_FORMS.indexOf(form) === -1) form = 'full';
-	return { enabled, form };
+	/* BUG-1（11-16 实机验收）：桌宠中继端口每-boot 随机（DSH_PET_PORT 由 DSH
+	 * desktop 分配，插件侧无法固定）→ pet 页 origin 变 → localStorage 按
+	 * origin 隔离=每次重启都是新网站，好感度/里程碑/位置失忆（形态幸存是
+	 * 因为走本账本）。三样随 petDoc 跨重启（与 form 同一条通道）。容错读：
+	 * 脏数据回落 null，手改账本不得杀死 boot。 */
+	const aff = pet && typeof pet.aff === 'number' && isFinite(pet.aff) && pet.aff >= 0
+		? Math.floor(pet.aff) : null;
+	const affMs = pet && typeof pet.affMs === 'string' ? pet.affMs.slice(0, 64) : null;
+	const p = pet && pet.pos && typeof pet.pos === 'object' && !Array.isArray(pet.pos) ? pet.pos : null;
+	const pos = p && typeof p.rx === 'number' && isFinite(p.rx) && typeof p.by === 'number' && isFinite(p.by)
+		? {
+			rx: p.rx,
+			by: p.by,
+			x: typeof p.x === 'number' && isFinite(p.x) ? p.x : 0,
+			y: typeof p.y === 'number' && isFinite(p.y) ? p.y : 0
+		}
+		: null;
+	return { enabled, form, aff, affMs, pos };
 }
 
 /** Pure token check (exported for test-host-store.js): constant-time
@@ -69,6 +86,70 @@ export function checkPetToken(req, tokenHex) {
 	} catch (e) {
 		return false;
 	}
+}
+
+/** BUG-1（11-16）：/pet/ctrl action:sync 载荷校验（纯函数，测试可及——
+ * 处理器本体落在 applyPet 闭包里，直接驱动会写真实 ~/.dsh 账本）。
+ * 返回 null=无有效字段（处理器回 400）；否则返回只含有效字段的 patch：
+ * aff 整数≥0（钳 9999999）、affMs 字符串（截 64）、pos v2 锚点 rx/by 必带
+ * （x/y 缺失补 0）。与 normalizePetDoc 的容错读互为镜像。 */
+export function normalizePetSyncPatch(body) {
+	const patch = {};
+	let touched = false;
+	if (body && typeof body === 'object' && !Array.isArray(body)) {
+		if (typeof body.aff === 'number' && isFinite(body.aff) && body.aff >= 0) {
+			patch.aff = Math.min(9999999, Math.floor(body.aff));
+			touched = true;
+		}
+		if (typeof body.affMs === 'string') {
+			patch.affMs = body.affMs.slice(0, 64);
+			touched = true;
+		}
+		if (body.pos && typeof body.pos.rx === 'number' && isFinite(body.pos.rx)
+			&& typeof body.pos.by === 'number' && isFinite(body.pos.by)) {
+			patch.pos = {
+				rx: body.pos.rx,
+				by: body.pos.by,
+				x: typeof body.pos.x === 'number' && isFinite(body.pos.x) ? body.pos.x : 0,
+				y: typeof body.pos.y === 'number' && isFinite(body.pos.y) ? body.pos.y : 0
+			};
+			touched = true;
+		}
+	}
+	return touched ? patch : null;
+}
+
+/** BUG-1 boot seeding（11-17 二轮，用户实报「先开在右下角，然后闪到上次退出
+ * 的位置」）：boot 时宿主已从账本读出 aff/affMs/pos（镜像变量）——把它种进
+ * /pet/page 的 <head>：新 origin 的 localStorage 在 whale.js 求值前就落好，
+ * loadPos/loadAffection 走本地存量路径，鲸鱼淡入即在上次落点（消除「默认
+ * 角→2s 后闪到老位置」两拍）。信封形状与 savePos/saveAffection 写出的完全
+ * 同构（v:1 外层 + v:2 锚点 / value）；幂等（localStorage 已有键则跳过——
+ * origin 幸存时本地是最新的）。affMs/affMs 含 `<` 时 JSON 转义防 </script>
+ * 逃逸。全空（首次启用/账本缺货）返回空注释占位=首次运行鲸鱼在默认角，
+ * 照旧。纯函数（测试可及，处理器在 applyPet 闭包内）。 */
+export function petBootStateScript(aff, affMs, pos) {
+	const boot = {};
+	if (typeof aff === 'number' && isFinite(aff) && aff >= 0) boot.aff = Math.floor(aff);
+	if (typeof affMs === 'string' && affMs) boot.affMs = affMs.slice(0, 64);
+	if (pos && typeof pos.rx === 'number' && isFinite(pos.rx)
+		&& typeof pos.by === 'number' && isFinite(pos.by)) {
+		boot.pos = {
+			rx: pos.rx,
+			by: pos.by,
+			x: typeof pos.x === 'number' && isFinite(pos.x) ? pos.x : 0,
+			y: typeof pos.y === 'number' && isFinite(pos.y) ? pos.y : 0
+		};
+	}
+	if (Object.keys(boot).length === 0) return '/* pet boot state: none (first run / empty ledger) */';
+	const json = JSON.stringify(boot).replace(/</g, '\\u003c');
+	return '(function(){try{var b=' + json + ';'
+		+ 'if(b.pos&&typeof b.pos.rx==="number"&&!localStorage.getItem("dsh-whale:pos")){'
+		+ 'localStorage.setItem("dsh-whale:pos",JSON.stringify({v:1,data:{v:2,rx:b.pos.rx,by:b.pos.by,x:b.pos.x,y:b.pos.y}}));}'
+		+ 'if(typeof b.aff==="number"&&!localStorage.getItem("dsh-whale:affection")){'
+		+ 'localStorage.setItem("dsh-whale:affection",JSON.stringify({v:1,data:{value:b.aff}}));}'
+		+ 'if(b.affMs&&!localStorage.getItem("dsh-whale:affMs")){localStorage.setItem("dsh-whale:affMs",b.affMs);}'
+		+ '}catch(e){}})();';
 }
 
 /* --- enumerated feed ----------------------------------------------------- */
@@ -402,6 +483,11 @@ function killTree(pid) {
 		 * 重启后桌宠 boot 也能拿到（页面 boot 也会补推一拍）。只含设置
 		 * 不含会话内容——枚举化边界不破。 */
 		let petRelay = null;
+		/* BUG-1 sync（11-16）镜像：/pet/state 2s 轮询下发用——轮询高频，不重读
+		 * 账本盘；boot 从 petDoc 恢复、ctrl sync 动作实时更新。 */
+		let petAff = null;
+		let petAffMs = null;
+		let petPos = null;
 
 		/** Broadcast a pet/state frame through the host's event pipeline:
 		 * lands in recentFrames (pollers) AND fans out to every live SSE
@@ -472,6 +558,22 @@ function killTree(pid) {
 			const next = normalizePetDoc(doc);
 			if (typeof patch.enabled === 'boolean') next.enabled = patch.enabled;
 			if (patch.form && PET_FORMS.indexOf(patch.form) !== -1) next.form = patch.form;
+			/* BUG-1 sync（11-16）：字段级合并——桌宠页是唯一写者、last-writer-wins；
+			 * 未携带的字段保留账本现值（与页鲸 pushPetConfig 的整体替换不同，
+			 * 这里的 patch 永远是部分字段）。normalizePetDoc 已做同款校验。 */
+			if (typeof patch.aff === 'number' && isFinite(patch.aff) && patch.aff >= 0) {
+				next.aff = Math.min(9999999, Math.floor(patch.aff));
+			}
+			if (typeof patch.affMs === 'string') next.affMs = patch.affMs.slice(0, 64);
+			if (patch.pos && typeof patch.pos.rx === 'number' && isFinite(patch.pos.rx)
+				&& typeof patch.pos.by === 'number' && isFinite(patch.pos.by)) {
+				next.pos = {
+					rx: patch.pos.rx,
+					by: patch.pos.by,
+					x: typeof patch.pos.x === 'number' && isFinite(patch.pos.x) ? patch.pos.x : 0,
+					y: typeof patch.pos.y === 'number' && isFinite(patch.pos.y) ? patch.pos.y : 0
+				};
+			}
 			doc.pet = next;
 			saveStoreAtomic(join(homedir(), '.dsh'), doc);
 			return next;
@@ -697,7 +799,14 @@ function killTree(pid) {
 				/* svg lives in lib/ (build-synced copy) — a plugin-root path reads
 				 * NOTHING and ships an invisible whale (2026-10-31 真机实测） */
 				const svg = readAsset(join(dirname(fileURLToPath(import.meta.url)), 'whale-logo.svg')) || '';
-				plain(res, 200, html.replace(/__WHALE_SVG__/, () => svg), 'text/html; charset=utf-8');
+				/* BUG-1 boot seeding（11-17 二轮）：petDoc 快照种进 <head>——新
+				 * origin 的 localStorage 在 whale.js 求值前落好，鲸鱼淡入即在上次
+				 * 落点（消除「默认角→2s 后闪到老位置」）。镜像=boot 账本快照 +
+				 * sync 动作实时跟更。函数替换防 $ 字符替换语义（同 SVG）。 */
+				const bootScript = petBootStateScript(petAff, petAffMs, petPos);
+				plain(res, 200, html
+					.replace(/__WHALE_SVG__/, () => svg)
+					.replace('__DSH_PET_BOOT__', () => bootScript), 'text/html; charset=utf-8');
 			}
 		},
 		{
@@ -819,7 +928,14 @@ function killTree(pid) {
 					/* 设置 relay（11-11 真机修复轮）：页面 CONFIG/总静音快照随
 					 * 2s 轮询下发，桌宠页差分应用（桌宠 WebView2 独立分区，
 					 * 页面设置此前永远到不了桌宠=「设了叮叮响单声叮」根因） */
-					petConfig: petRelay
+					petConfig: petRelay,
+					/* BUG-1（11-16）：好感度/里程碑/位置随 state 轮询下发——桌宠
+					 * 页 origin 随中继端口每-boot 变化，localStorage 不可跨重启；
+					 * petSyncFromHost 只在「本 boot 尚无权威值」时采用（幂等）。
+					 * 全 null=账本缺货，桌宠页保持现值等首次上报。 */
+					aff: petAff,
+					affMs: petAffMs,
+					pos: petPos
 				}));
 			}
 		},
@@ -859,6 +975,27 @@ function killTree(pid) {
 						broadcastPetState();
 						writePetDoc({ form }).then(() => {
 							plain(res, 200, JSON.stringify({ ok: true, pet: petState() }));
+						}).catch((e) => plain(res, 500, JSON.stringify({ ok: false, error: String(e && e.message || e) })));
+						return;
+					}
+					if (action === 'sync') {
+						/* BUG-1（11-16 实机验收，用户实报「好感度/位置重启清零」）：
+						 * 桌宠中继端口每-boot 随机 → pet 页 origin 变 → localStorage
+						 * 按 origin 隔离。桌宠页把好感度/里程碑/位置经本动作上报进
+						 * petDoc（与 form 同一条跨重启通道）；/pet/state 随 2s 轮询
+						 * 下发回桌宠页。fence-only 与 form/dismiss 同信任级：只落
+						 * 设置级标量，无会话内容，枚举化边界不破。字段级合并：
+						 * 只更新携带的字段，镜像先更（轮询不等磁盘写）。 */
+						const patch = normalizePetSyncPatch(body);
+						if (!patch) {
+							plain(res, 400, JSON.stringify({ ok: false, error: 'aff|affMs|pos required' }));
+							return;
+						}
+						if (typeof patch.aff === 'number') petAff = patch.aff;
+						if (typeof patch.affMs === 'string') petAffMs = patch.affMs;
+						if (patch.pos) petPos = patch.pos;
+						writePetDoc(patch).then(() => {
+							plain(res, 200, JSON.stringify({ ok: true }));
 						}).catch((e) => plain(res, 500, JSON.stringify({ ok: false, error: String(e && e.message || e) })));
 						return;
 					}
@@ -1076,6 +1213,11 @@ function killTree(pid) {
 	} catch (e) { petRelay = null; }
 	enabled = supported;
 	form = boot.form;
+	/* BUG-1（11-16）：好感度/里程碑/位置镜像随 petDoc boot 恢复——桌宠页首个
+	 * state 轮询即拿到（新 origin 的 localStorage 是空的，全靠这里下发）。 */
+	petAff = boot.aff;
+	petAffMs = boot.affMs;
+	petPos = boot.pos;
 	spawnPet();
 	/* 审计 D-C1（11-04）：自愈心跳=宿主自主定时器（30s，unref），任何页面
 	 * 状态都跑——页鲸 SSE 在线时 /events 轮询被短路（sseUp return），

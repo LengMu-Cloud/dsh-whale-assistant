@@ -2034,14 +2034,29 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	 * =连刷 N 次（reload 循环 ~2s < 10s 窗），jump/open-settings 重放
 	 * =动作重演。sessionStorage 按「类型+时间戳」记账：同一帧只在首个
 	 * 消费者执行一次；新点击=新时间戳=照常执行。sessionStorage 跨
-	 * reload 存活（同 tab）=重载链上的全部重放被拦；无账本环境（桩缺
-	 * 席/隐私模式）降级为旧行为照旧执行。 */
+	 * reload 存活（同 tab，⑳真机八 dsh-app:// 源实测锤死）=重载链上的
+	 * 全部重放被拦；无账本环境（桩缺席/隐私模式）降级为旧行为照旧执行。
+	 * ⑳真机九（11-17 用户实报「点 1 次刷新，DSH 页刷了 3 次」）：**单槽键
+	 * 的洞**——槽里只有最后一个时间戳，10s 窗内连点两次（T1→T2）后，T1
+	 * 的轮询/重连重放与槽里的 T2 不相等=当新帧再执行=第三次刷新（旧帧
+	 * 的重放被新点击顶出槽位）。改**多槽清单**：记最近 6 个时间戳、命中
+	 * 任一即拦；12s 过期清理（>10s 重放窗，防无界增长）。 */
 	var petFrameOnce = function (kind, time) {
 		if (typeof window === 'undefined' || !window.sessionStorage || typeof window.sessionStorage.getItem !== 'function') return true;
 		try {
 			var key = 'dsh-whale:once-' + kind;
-			if (String(window.sessionStorage.getItem(key)) === String(time)) return false;
-			window.sessionStorage.setItem(key, String(time));
+			var now = Date.now();
+			var raw = String(window.sessionStorage.getItem(key) || '');
+			var times = raw ? raw.split(',') : [];
+			var fresh = [];
+			for (var i = 0; i < times.length; i++) {
+				var t = Number(times[i]);
+				if (isFinite(t) && now - t < 12000) fresh.push(times[i]);
+			}
+			if (fresh.indexOf(String(time)) !== -1) return false;
+			fresh.push(String(time));
+			while (fresh.length > 6) fresh.shift();
+			window.sessionStorage.setItem(key, fresh.join(','));
 		} catch (e) { return true; }
 		return true;
 	};
@@ -3850,6 +3865,12 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	 * progression — tiers unlock new reaction lines, future hidden gear. */
 	var AFFECTION_KEY = 'dsh-whale:affection';
 	var affection = 0;
+	/* BUG-1 sync（11-16）：本 boot 好感度已有权威值（本地存量/本地变更/服务端
+	 * 采用三处置位）——桌宠中继端口每-boot 随机 → pet 页 origin 变 →
+	 * localStorage 失忆；petSyncFromHost 只在权威值缺席时采用服务端下发，
+	 * 置位后 2s 轮询回声不再触碰。页鲸（非 PET_MODE）origin 稳定，本旗标
+	 * 恒为 boot 存量语义，无副作用。 */
+	var affectionKnown = false;
 	var AFFECTION_TIERS = [
 		{ min: 0, lines: ['呜…被摸到了 🥹', '唔…舒服，再摸一下？😳', '摸头会变笨的啦！🐋', '干嘛啦，我还在上班呢 😤'] },
 		{ min: 10, lines: ['嘿嘿，就喜欢被摸头 🐳💙', '你是我最好的同事啦 🥰', '摸一次，元气 +10！⚡', '好啦好啦，我知道你疼我 😌'] },
@@ -3860,7 +3881,12 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			/* migrate { value: N } -> v1 */
 			return (v0 && typeof v0 === 'object' && typeof v0.value === 'number') ? v0 : null;
 		});
-		if (stored && typeof stored.value === 'number') affection = stored.value;
+		if (stored && typeof stored.value === 'number') {
+			affection = stored.value;
+			affectionKnown = true;
+			return true;
+		}
+		return false;
 	}
 	function saveAffection() {
 		safeSet(AFFECTION_KEY, { value: affection });
@@ -4736,6 +4762,11 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	loadConfig();
 	loadGearStats();
 	loadAffection();
+	/* BUG-1 boot 推（11-16）：origin 幸存时把本地好感度补推服务端（账本缺货
+	 * 兜底，与 pushPetConfig boot 一推同款；里程碑有变更即推、不随 boot 推）。
+	 * origin 全新（重启后端口变了）本地无存量——不推，反向等 /pet/state
+	 * 下发采用。pushPetSync 声明在 exports.js（跨模块提升，运行时顺序无关）。 */
+	if (PET_MODE && affectionKnown) pushPetSync({ aff: affection });
 	loadHistory();
 
 	/* ------------------------------------------------------------------ */
@@ -5623,6 +5654,9 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 
 		function closeCtxMenu() {
 			if (ctxMenu) ctxMenu.classList.remove('show');
+			/* 桌宠子菜单跟随主菜单生命周期（⑳）：凡收主菜单的路径都汇到
+			 * 这里，子菜单级联收起——否则主菜单没了、子菜单孤儿漂浮 */
+			closePetFloats();
 		}
 		function closeCtxPanel() {
 			if (ctxPanel) ctxPanel.classList.remove('show');
@@ -5631,6 +5665,44 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			closeCtxMenu();
 			closeCtxPanel();
 			closeCtxHistory();
+		}
+		/* ---- 桌宠浮层缝（⑳ 切换形态子菜单）----
+		 * 桌宠页经 __dshPetHost.menuFloats() 登记额外浮层（形态二级菜单），
+		 * 与主菜单同进退：
+		 *  1) closeCtxMenu 级联收起（closeCtxFloats 与一切单收路径都汇于它）；
+		 *  2) 外部 pointerdown 的关闭判定把它们视作主菜单的一部分——子菜单行
+		 *     上按下时不误收（pointerdown 收起会把浮层 pointer-events 转 none，
+		 *     随后的 click 落空=选形态点了没反应）；
+		 *  3) 右键 double-pet 判定同样计入，避免子菜单开着时右键落成摸头。
+		 * 页鲸（侧边栏）无此缝：menuFloats 缺席=空数组=零行为变化。 */
+		function petFloatEls() {
+			try {
+				if (window.__dshPetHost && typeof window.__dshPetHost.menuFloats === 'function') {
+					var els = window.__dshPetHost.menuFloats();
+					if (els && els.length) return els;
+				}
+			} catch (e) { }
+			return [];
+		}
+		function petFloatHas(t) {
+			var els = petFloatEls();
+			for (var i = 0; i < els.length; i++) {
+				try { if (els[i] && els[i].contains(t)) return true; } catch (e2) { }
+			}
+			return false;
+		}
+		function petFloatShown() {
+			var els = petFloatEls();
+			for (var i = 0; i < els.length; i++) {
+				try { if (els[i] && els[i].classList && els[i].classList.contains('show')) return true; } catch (e3) { }
+			}
+			return false;
+		}
+		function closePetFloats() {
+			var els = petFloatEls();
+			for (var i = 0; i < els.length; i++) {
+				try { if (els[i]) els[i].classList.remove('show'); } catch (e4) { }
+			}
 		}
 
 		/* ---- 内联 SVG 图标集（P1 2026-10-28）----
@@ -5818,6 +5890,11 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			touchActivity(); /* an explicit interaction wakes the whale */
 			affection++;
 			saveAffection();
+			/* BUG-1 sync（11-16）：好感度上报服务端 petDoc（桌宠页 origin 每-boot
+			 * 变、localStorage 不可跨重启）；本地变更后本 boot 权威值在本地，
+			 * /pet/state 轮询回声不再反向覆盖。 */
+			affectionKnown = true;
+			pushPetSync({ aff: affection });
 			uiSay(petLine(), 3200);
 			whale.classList.remove('dsh-whale-pet');
 			void whale.offsetWidth;
@@ -5852,6 +5929,10 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				try {
 					localStorage.setItem('dsh-whale:affMs', Object.keys(done).join(','));
 				} catch (e) {}
+				/* BUG-1 sync（11-16）：里程碑随好感度同一条通道上报——不然好感度
+				 * 跨重启恢复后、里程碑旗标还在新 origin 的空 localStorage 里，
+				 * 10/50/100 的庆祝会在每次重启后重放。 */
+				pushPetSync({ affMs: Object.keys(done).join(',') });
 				setTimeout(function (mm) {
 					return function () {
 						uiSay(mm.line, 4200);
@@ -5868,6 +5949,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		function openCtxMenu(clientX, clientY) {
 			closeCtxPanel();
 			closeCtxHistory();
+			closePetFloats(); /* 重开卫生：菜单每次重建，子菜单不许带着上一场的 .show 残留 */
 			var menu = ctxMenu || document.createElement('div');
 			menu.className = 'dsh-whale-menu';
 			menu.textContent = '';
@@ -5993,34 +6075,51 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			 * =用户眼中的「失效」）。现桌宠分支改走宿主广播：POST /pet/ctrl
 			 * reload-page → pet/reload-page 帧 → 页鲸执行真正的 reload；页鲸
 			 * 不在场（DSH 窗口关着）时宿主回 delivered=false，桌宠提示而不是
-			 * 假装刷新成功。 */
-			var refreshItem = document.createElement('div');
-			refreshItem.className = 'dsh-whale-menu-item';
-			setIconLabel(refreshItem, PET_MODE ? '🔄 刷新 DSH 页面' : '🔄 刷新页面');
-			refreshItem.addEventListener('click', function (event) {
-				event.stopPropagation();
-				closeCtxMenu();
-				if (PET_MODE) {
-					try {
-						fetch('/api/whale-assistant/pet/ctrl', {
-							method: 'POST',
-							headers: { 'content-type': 'application/json' },
-							body: JSON.stringify({ action: 'reload-page' })
-						}).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (out) {
-							if (out && out.ok === true && out.delivered === false) {
-								uiSay('DSH 窗口已关闭——打开 DSH 后页面会自动加载新版 🐳', 3500);
-							} else if (out && out.ok === true) {
-								uiSay('已让 DSH 页面刷新 🐳', 2000);
-							} else {
-								uiSay('刷新指令没有送达，稍后再试 🥲', 2500);
-							}
-						}).catch(function () { uiSay('刷新指令没有送达，稍后再试 🥲', 2500); });
-					} catch (e) { uiSay('刷新失败，稍后再试 🥲', 2500); }
-					return;
-				}
-				setTimeout(function () { location.reload(); }, 80);
-			});
-			menu.appendChild(refreshItem);
+			 * 假装刷新成功。
+			 * ⑳真机六（11-17 用户拍板）：桌宠菜单的刷新项升格为「🖥️ DSH 窗口 ›」
+			 * flyout 父项（子项=🔄 刷新 DSH 窗口[原刷新语义原位保留] +
+			 * 🖥️ 打开 DSH 窗口[ps1 c:'revive' 唤回前台/壳死重生]），与「切换
+			 * 形态」同款交互、共用同一枚 flyout 壳与择位/避鲸链；页鲸菜单
+			 * （非 PET_MODE）保持 🔄 刷新页面不变。 */
+			if (PET_MODE && window.__dshPetHost && typeof window.__dshPetHost.makeFlyoutRow === 'function') {
+				menu.appendChild(window.__dshPetHost.makeFlyoutRow('🖥️ DSH 窗口', function () {
+					return [
+						{ label: '🔄 刷新 DSH 窗口', onPick: function () {
+							closeCtxMenu();
+							try {
+								fetch('/api/whale-assistant/pet/ctrl', {
+									method: 'POST',
+									headers: { 'content-type': 'application/json' },
+									body: JSON.stringify({ action: 'reload-page' })
+								}).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (out) {
+									if (out && out.ok === true && out.delivered === false) {
+										uiSay('DSH 窗口已关闭——打开 DSH 后页面会自动加载新版 🐳', 3500);
+									} else if (out && out.ok === true) {
+										uiSay('已让 DSH 页面刷新 🐳', 2000);
+									} else {
+										uiSay('刷新指令没有送达，稍后再试 🥲', 2500);
+									}
+								}).catch(function () { uiSay('刷新指令没有送达，稍后再试 🥲', 2500); });
+							} catch (e) { uiSay('刷新失败，稍后再试 🥲', 2500); }
+						} },
+						{ label: '🖥️ 打开 DSH 窗口', onPick: function () {
+							closeCtxMenu();
+							try { window.__dshPetHost.reviveDsh(); } catch (eRevive) { }
+							uiSay('已唤 DSH 窗口 🐬', 2000);
+						} }
+					];
+				}));
+			} else {
+				var refreshItem = document.createElement('div');
+				refreshItem.className = 'dsh-whale-menu-item';
+				setIconLabel(refreshItem, '🔄 刷新页面');
+				refreshItem.addEventListener('click', function (event) {
+					event.stopPropagation();
+					closeCtxMenu();
+					setTimeout(function () { location.reload(); }, 80);
+				});
+				menu.appendChild(refreshItem);
+			}
 			/* 桌宠常驻（第九轮用户定稿）：页面侧不再有「桌宠模式」开关——小鲸鱼
 			 * 默认活动范围=整个桌面，开机即常驻（不支持平台由页内鲸鱼兜底）。
 			 * 桌宠窗口里由 __dshPetHost 缝追加三态形态组 */
@@ -6253,6 +6352,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			if (ctxMenu && ctxMenu.contains(t)) return;
 			if (ctxPanel && ctxPanel.contains(t)) return;
 			if (ctxHistory && ctxHistory.contains(t)) return;
+			if (petFloatHas(t)) return; /* 桌宠子菜单行上按下不算外部（⑳） */
 			closeCtxFloats();
 		});
 
@@ -6261,7 +6361,8 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		document.addEventListener('contextmenu', function (event) {
 			var floatsOpen = (ctxMenu && ctxMenu.classList.contains('show')) ||
 				(ctxPanel && ctxPanel.classList.contains('show')) ||
-				(ctxHistory && ctxHistory.classList.contains('show'));
+				(ctxHistory && ctxHistory.classList.contains('show')) ||
+				petFloatShown(); /* 桌宠子菜单开着也算浮层在场（⑳） */
 			if (!floatsOpen) return; /* outside the whale: browser menu as usual */
 			event.preventDefault();
 			var now = Date.now();
@@ -6285,6 +6386,10 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			whale.style.bottom = 'auto';
 		}
 
+		/* BUG-1 sync（11-16）：本 boot 位置已有权威值（boot 存量/本地落笔/服务端
+		 * 采用三处置位）——_petSyncPos 只在权威值缺席时采用服务端下发落点。 */
+		var posSyncKnown = false;
+
 		function savePos() {
 			/* v2 ANCHOR store: keep the whale anchored to the RIGHT-BOTTOM
 			 * corner as pixel offsets, so a window resize re-seats it at the
@@ -6300,6 +6405,10 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				x: whale.offsetLeft,
 				y: whale.offsetTop
 			});
+			/* BUG-1 sync（11-16）：落点上服务端 petDoc（拖动结束/游回角落/躲猫猫
+			 * 落点共用 savePos=四个调用点一处收口）。 */
+			posSyncKnown = true;
+			pushPetSync({ pos: { rx: rx, by: by, x: whale.offsetLeft, y: whale.offsetTop } });
 		}
 
 		/* v2 anchor re-seat with symmetric clamp: offsets are kept verbatim
@@ -7443,7 +7552,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				host.appendChild(status);
 				var btns = document.createElement('div');
 				btns.className = 'dsh-whale-pp-petbtns';
-				var FORMS = [['full', '🐋 完整形态'], ['bubble', '🫧 缩成气泡'], ['hidden', '🙈 躲猫猫']];
+				var FORMS = [['full', '🐋 完整形态'], ['bubble', '🪟 缩成小窗'], ['hidden', '🙈 躲猫猫']];
 				var btnMap = {};
 				var petEnabled = true; /* /state 返回未启用时按钮置灰+忽略点击 */
 				function markForm(form) {
@@ -7520,13 +7629,14 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		 * 信息），渲染层 pre-line 出两行，搜索高亮/恢复按整串契约不动；
 		 * badge/hint=分区头右侧徽标与摘要。
 		 * 入口描述与真实入口逐一核对：右键菜单 6 项（⏰ 提醒我 / 声音 /
-		 * 🎨 我的装扮 / 📜 历史任务 / ⚙️ 设置 / 🔄 刷新页面，menu.js 11-11
-		 * 收口后现状）+ 桌宠窗口缝入的形态三项；侧边栏 4 Tab（TABS 表）。 */
+			 * 🎨 我的装扮 / 📜 历史任务 / ⚙️ 设置 / 🔄 刷新页面，menu.js 11-11
+			 * 收口后现状）+ 桌宠窗口缝入的「🎭 切换形态」二级组（⑳ 起三项收进
+			 * 子菜单，radio 圆点标当前态）；侧边栏 4 Tab（TABS 表）。 */
 		var PP_MANUAL_DATA = [
 			{ sec: '🚀 三步上手', badge: '默认展开', items: [
 				{ g: 1, t: '打开菜单', d: '右键小鲸鱼即可打开菜单：提醒我 / 声音 / 我的装扮 / 历史任务 / 设置 / 刷新页面。\n完整配置页在 DSH 左侧栏「小鲸鱼助手」：设置 / 小鲸鱼形态 / 周报 / 使用说明 四个 Tab。' },
 				{ g: 2, t: '看通知、点跳转', d: '任务开始 / 完成 / 需要你操作时，小鲸鱼会响铃 + 冒气泡，双击气泡或通知直接跳到对应对话。\n气泡上的红标数字 = 未读条数：单击读一条，双击全部清空。' },
-				{ g: 3, t: '移动与形态', d: '按住鲸鱼拖到喜欢的位置，位置会自动记住。\n侧边栏「🐋 小鲸鱼形态」Tab 或小鲸鱼右键菜单可切换：🐋 完整形态 / 🫧 缩成气泡 / 🙈 躲猫猫。' }
+				{ g: 3, t: '移动与形态', d: '按住鲸鱼拖到喜欢的位置，位置会自动记住。\n侧边栏「🐋 小鲸鱼形态」Tab，或小鲸鱼右键菜单「🎭 切换形态」子菜单（当前形态带实心圆点）可切换：🐋 完整形态 / 🪟 缩成小窗 / 🙈 躲猫猫。' }
 			] },
 			{ sec: '🎮 日常操作', hint: '手势 · 通知 · 常用设置', items: [
 				{ g: 1, t: '按住拖动：移动我', d: '拖到喜欢的角落，位置会记住。' },
@@ -8444,6 +8554,30 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 
 		loadPos();
 
+		/* BUG-1 boot 推 + 采用缝（11-16 实机验收）：桌宠中继端口每-boot 随机 →
+		 * pet 页 origin 变 → localStorage 失忆。origin 幸存时本地落点补推服务端
+		 * （账本缺货兜底，与 pushPetConfig boot 一推同款）；origin 全新（重启
+		 * 后端口变了）本地无存量——不推，等 /pet/state 下发经 _petSyncPos 采用
+		 * （seatFromAnchor 自带对称钳制，窗口形状无关）。 */
+		if (loadPos()) {
+			posSyncKnown = true;   /* 本地存量=本 boot 权威值（v2 锚点或 legacy x/y） */
+			var bootAnchor = PET_MODE ? anchorFromStorage() : null;
+			if (bootAnchor && typeof bootAnchor.rx === 'number' && typeof bootAnchor.by === 'number') {
+				pushPetSync({ pos: { rx: bootAnchor.rx, by: bootAnchor.by, x: bootAnchor.x, y: bootAnchor.y } });
+			}
+		}
+		window.__dshWhale._petSyncPos = function (pos) {
+			if (!pos || posSyncKnown) return;
+			if (typeof pos.rx !== 'number' || typeof pos.by !== 'number') return;
+			posSyncKnown = true;
+			try {
+				seatFromAnchor(pos.rx, pos.by);
+				/* 落盘与 savePos 同构（v2 锚点 + x/y 兜底）：此后 resize 重摆、
+				 * 下一次 savePos 都从这份锚点出发。 */
+				safeSet(POS_KEY, { v: 2, rx: pos.rx, by: pos.by, x: whale.offsetLeft, y: whale.offsetTop });
+			} catch (e) {}
+		};
+
 		/* 桌宠入场（第一批）：PET_MODE 下落位后同步执行——首帧即画在「落点
 		 * 向屏幕中心回拉」的拉入位，随后游向最近边缘（弧线+涟漪+到达水花+
 		 * 引导台词），uiInit 同步无跳变。见 swim.js petEntranceSwim。 */
@@ -8464,6 +8598,13 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		};
 		window.__dshWhale.whale = whale;
 		window.__dshWhale.openCtxMenu = openCtxMenu;
+		/* ⑳真机六追修（11-17 用户拍板）：桌宠 flyout 行首图标缝——🔄 等已收录
+		 * 字形复用本图标集（跨面板一致），🖥️ 由 page.html 走 DSH 官方图标
+		 * （img 槽）；未收录字形返回 null=裸 emoji 照旧 */
+		window.__dshWhale.menuIcon = function (glyph) {
+			var spec = ICON_PATHS[glyph];
+			return spec ? buildIconSvg(spec) : null;
+		};
 		window.__dshWhale.petWhale = petWhale;
 		window.__dshWhale.ctxMenuOpen = function () {
 			return !!(ctxMenu && ctxMenu.classList.contains('show'));
@@ -8986,9 +9127,54 @@ if (typeof window !== 'undefined' && (window.__dshWhaleSessions || window.__dshW
 	}
 	pushPetConfig(); /* boot 一推：宿主 ledger 缺货（首次启用/重装）时兜底 */
 
+	/** BUG-1 同步（11-16 实机验收，用户实报「好感度/位置重启清零」）：桌宠
+	 * 中继端口每-boot 随机（DSH_PET_PORT 由 DSH desktop 分配，插件侧无法
+	 * 固定）→ pet 页 origin 变 → localStorage 按 origin 隔离=每次重启都是
+	 * 新网站。好感度/里程碑/位置改走服务端 petDoc（与形态持久化同一条跨
+	 * 重启通道）：本页变化经 /pet/ctrl action:sync 上报（fence-only，与 form
+	 * 同信任级），宿主 /pet/state 随 2s 轮询下发（petSyncFromHost 只在「本
+	 * boot 尚无权威值」时采用，幂等防回声）。fire-and-forget：失败静默
+	 * （下次改动自然补上）。PET_MODE 专属：页鲸 origin 稳定，无此病。
+	 * 函数声明提升：affection.js/mux.js/menu.js/drag.js 的调用点在本定义
+	 * 之前也可用。 */
+	function pushPetSync(fields) {
+		if (!PET_MODE || typeof fetch !== 'function') return;
+		try {
+			fetch('/api/whale-assistant/pet/ctrl', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify(Object.assign({ action: 'sync' }, fields))
+			}).catch(function () { /* 宿主离线/桌宠页直开：静默 */ });
+		} catch (e) { /* 防御 */ }
+	}
+
+	/** BUG-1 下行采用（11-16）：宿主 /pet/state 每拍带 petDoc 的
+	 * aff/affMs/pos；本函数幂等——权威值已置位（affectionKnown/本地
+	 * affMs/posSyncKnown）时是纯 no-op，重复喂同值零副作用。affMs 只在
+	 * 本地空白时采用（本地是累计旗标、只会多不会少）。位置半区在 uiInit
+	 * 闭包里（seatFromAnchor 是闭包内函数），经 _petSyncPos 缝转发。 */
+	function petSyncFromHost(aff, affMs, pos) {
+		if (!PET_MODE) return;
+		if (!affectionKnown && typeof aff === 'number' && isFinite(aff) && aff >= 0 && Math.floor(aff) !== affection) {
+			affection = Math.floor(aff);
+			affectionKnown = true;
+			saveAffection();
+		}
+		var affMsHave = '';
+		try { affMsHave = localStorage.getItem('dsh-whale:affMs') || ''; } catch (e0) { }
+		if (!affMsHave && typeof affMs === 'string' && affMs) {
+			try { localStorage.setItem('dsh-whale:affMs', affMs); } catch (e1) { }
+		}
+		try {
+			if (pos && typeof window.__dshWhale._petSyncPos === 'function') window.__dshWhale._petSyncPos(pos);
+		} catch (e2) { }
+	}
+
 	/* diagnostic seam */
 	window.__dshWhale.version = PATCH_VERSION;
 	window.__dshWhale._pushPetConfig = pushPetConfig;
+	window.__dshWhale._pushPetSync = pushPetSync;
+	window.__dshWhale.petSyncFromHost = petSyncFromHost;
 	window.__dshWhale.handleJobsFrame = handleJobsFrame;
 	window.__dshWhale.handleSubscribedFrame = handleSubscribedFrame;
 	window.__dshWhale.handleMuxPayload = handleMuxPayload;

@@ -41,7 +41,7 @@ jobs:
       - name: Built artifacts match src
         run: |
           node build-whale.js
-          git diff --exit-code -- whale.js whale-map.md whale-assistant/lib/whale.js whale-assistant/lib/parts/style.css whale-assistant/whale-logo.svg || {
+          git diff --exit-code -- whale.js whale-map.md whale-assistant/lib/whale.js whale-assistant/lib/parts/style.css whale-assistant/lib/whale-logo.svg || {
             echo "::error::committed artifacts drifted from src/ — run: node build-whale.js, commit the rebuilt files"
             exit 1
           }

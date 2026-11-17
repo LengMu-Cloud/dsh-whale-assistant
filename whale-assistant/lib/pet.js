@@ -29,7 +29,7 @@
  */
 import { spawn } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -546,10 +546,20 @@ function killTree(pid) {
 
 	function log(line) {
 		try { console.log('[dsh-whale-assistant/pet] ' + line); } catch (e) { /* console gone */ }
-		/* 11-06 一次性诊断（宿主 spawn 链取证，收口后删）：引擎 stdout 无处
-		 * 可见（壳 GUI 吞掉），pet 生命周期问题（静默 spawn 失败/秒死）只能
-		 * 落盘查。 */ 
-		try { appendFileSync(join(homedir(), '.dsh', 'pet', 'host-debug.log'), new Date().toISOString().slice(11, 23) + ' ' + line + '\n'); } catch (e2) { }
+		/* 宿主 spawn 链取证落盘（11-06 起诊断；2026-11-18 全面分析 C-8 转正
+		 * 为常驻诊断并加 1MB 单槽轮转）：引擎 stdout 无处可见（壳 GUI 吞掉），
+		 * pet 生命周期问题（静默 spawn 失败/秒死）只能落盘查。超 1MB 即改名
+		 * host-debug.old.log（单槽，直接覆盖上上代）——心跳退避每 30s 一行、
+		 * 死亡风暴期也烧不满两代，磁盘不再无界增长。 */
+		try {
+			const logPath = join(homedir(), '.dsh', 'pet', 'host-debug.log');
+			try {
+				if (statSync(logPath).size > 1024 * 1024) {
+					renameSync(logPath, join(homedir(), '.dsh', 'pet', 'host-debug.old.log'));
+				}
+			} catch (e3) { /* 还没有日志文件——正常 */ }
+			appendFileSync(logPath, new Date().toISOString().slice(11, 23) + ' ' + line + '\n');
+		} catch (e2) { }
 	}
 
 	function writePetDoc(patch) {

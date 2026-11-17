@@ -159,6 +159,12 @@ body[data-ds-dark-theme] {
 	position: absolute;
 	bottom: calc(100% + 12px);
 	right: -8px;
+	/* 2026-11-18（全面分析 B-1 复现实锤）：气泡是 #dsh-whale（~90px）的绝对
+	 * 定位子元素，shrink-to-fit 被含块宽度锁死（overflow-wrap:break-word 把
+	 * min-content 降到近零）——文本折行后行首宽词溢出，`[` 左笔画在气泡
+	 * 左缘被切（90px 含块 1.5x 探针复现）。width:max-content 释放为内容宽，
+	 * 仍受下方 max-width 340/72vw 封顶。 */
+	width: max-content;
 	max-width: min(340px, 72vw);
 	box-sizing: border-box;
 	padding: 8px 12px;

@@ -7,6 +7,12 @@
 
 > **桌宠第一批（屏幕级常驻小鲸鱼，仅 Windows）**：架构 v6 插件落地——`whale-assistant/pet/`（pet.ps1 宿主窗口进程 + page.html 页面模板 + WebView2 固定版 DLL 三件官方 NuGet 进货+SHA 门禁）与 `whale-assistant/lib/pet.js` 宿主模块（token env+头注入、/pet 路由枚举化 feed、ledger 开关）。**宿主半区与页面半区都有改动——升级后需重启 DSH 服务**。
 
+### 全面分析轮 · 立即修复批（11-18）
+
+- **修复七件**：ci.yml logo 漂移门禁 pathspec 修正（原指向不存在文件静默失效）；压力提醒重臂线与可配阈值脱钩修复（低阈值一次性警告变唠叨的实弹 bug，改分级回落）；mergeHistory 宿主键保留集从 `{pet}` 扩为 `{pet, petConfig, pendingJump, pendingSettings, _debug}`（此前页鲸任意一次历史推送都会整键抹掉设置 relay 快照/跳转·设置补偿/调试取证）；subagentSessions 补 cap(150)+host-debug.log 1MB 轮转+删除永不可达死分支；mux 僵尸通道 3 败熔停（宿主已无 /api/events.mux 路由后的永动失败重连）；check-pet 新门禁（pet spawn env 出现 remote-debugging-port 即红）；通知气泡左缘裁切修复（气泡宽度被鲸鱼本体含块锁死，`width: max-content` 释放+340 封顶）
+- **命名与文案**：形态卡片「躲猫猫」统一为菜单定稿「🙈 隐藏小鲸鱼」（说明文字保留昵称）；使用说明对齐实测菜单（页内 6 行/桌宠 8 行双口径+DSH 窗口二级组）
+- 测试：test-whale 952（+8）、host-store 113（+6）、chip 19、check-pet（+1 门禁）、audit-deps 全绿
+
 ### 实机验收轮 + BUG-1 修复（11-16 夜~11-17）
 
 - **30 卡实机验收收官**（《功能验收手册》逐卡真机执行，报告见手册同目录 `实机验收报告-2026-11-16.md`）：27 PASS / 3 PARTIAL（失败通知=工具报错被模型兜住属「不打扰」设计、截断与压力=外部条件不可造，均非缺陷）/ 1 真实缺陷=BUG-1；方法资产=CDP 双通道驱动（主窗 9222+桌宠 WebView2 9223）+**音频旁路取证**（包装 `OscillatorNode.start` 记频率×时间戳——thud 550/415、chime 784/1046、提醒三连响间隔精确 1900ms 全部真实播放链路实证）

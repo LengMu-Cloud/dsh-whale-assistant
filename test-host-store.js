@@ -111,6 +111,28 @@ const m8 = mergeHistory(
 );
 ok(m8.history.length === 1, 'junk rows filtered, good row kept');
 
+/* 13b. host-key retention（2026-11-18 全面分析 C-1 终版 Top1）：页鲸 /save
+ *    不携带宿主管辖键时必须继承存量而不是抹掉——11-11 relay 轮之后账本
+ *    新增的 petConfig/pendingJump/pendingSettings/_debug 曾被页鲸任意一次
+ *    历史推送整键抹掉（设置 relay 跨重启失效/跳转补偿失约/取证丢失），
+ *    原保留集只有 `pet`。 */
+const mH1 = mergeHistory(
+	{ clearAt: 0, history: [], pet: { form: 'full' }, petConfig: { volume: 80 }, pendingJump: { code: 's3' }, pendingSettings: { volume: 80 }, _debug: { at: 1 } },
+	{ clearAt: 0, history: [{ sessionId: 'h', at: 5, kind: 'done', title: '页鲸推送' }] }
+);
+ok(mH1.pet && mH1.pet.form === 'full', 'host key pet survives a page save');
+ok(mH1.petConfig && mH1.petConfig.volume === 80, 'host key petConfig survives a page save');
+ok(mH1.pendingJump && mH1.pendingJump.code === 's3', 'host key pendingJump survives a page save');
+ok(mH1.pendingSettings && mH1.pendingSettings.volume === 80, 'host key pendingSettings survives a page save');
+ok(mH1._debug && mH1._debug.at === 1, 'host key _debug survives a page save');
+/* 13c. incoming DOES carry a host key → incoming wins（宿主自己写自己的键，
+ *    写路径不变） */
+const mH2 = mergeHistory(
+	{ clearAt: 0, history: [], pet: { form: 'full' }, petConfig: { volume: 80 } },
+	{ clearAt: 0, history: [], pet: { form: 'bubble' }, petConfig: { volume: 30 } }
+);
+ok(mH2.pet && mH2.pet.form === 'bubble' && mH2.petConfig && mH2.petConfig.volume === 30, 'incoming host keys win (host write path unchanged)');
+
 /* 14. browser fence (isTrustedRequest): the page half's own calls pass,
  *    every forgery vector is refused */
 ok(isTrustedRequest(fakeReq({ host: '127.0.0.1:3099', 'sec-fetch-site': 'same-origin', origin: 'http://127.0.0.1:3099' })), 'fence: same-origin browser POST passes');

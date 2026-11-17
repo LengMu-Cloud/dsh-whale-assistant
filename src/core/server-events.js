@@ -178,7 +178,10 @@
 			 * 实证）。若它流经 session 事件总线，这里转成注意帧（⚠️
 			 * [会话名]需要你审核，reportAttention 现成）；active+后台都走
 			 * （页鲸休眠期间 DOM 不可见=桌宠/页鲸唯一通知源），seeAttention
-			 * 共享去重（SSE/轮询双通道 race + 未来 DOM 检测同 key 合流）。 */
+			 * 共享去重（SSE/轮询双通道 race + 未来 DOM 检测同 key 合流）。
+			 * 2026-11-18（全面分析）：此处在其后已 return，原「PET_MODE
+			 * 第二分支」（'pet-a:'+seq 去重键）永不可达，已删除——本分支
+			 * 对页鲸/桌宠两语境一律生效。 */
 			var aData = event.data || {};
 			var aKey = aData.callId || aData.id || ('a:' + (frame.time || ''));
 			if (seeAttention(aKey)) {
@@ -199,16 +202,6 @@
 			var t = event.data && event.data.title;
 			if (t && typeof t === 'string') {
 				handleMuxPayload({ type: 'session/projection', sessionId: sid, key: 'title', value: t });
-			}
-			return;
-		}
-		if (type === 'approval/asked' && PET_MODE) {
-			/* 桌宠（11-06）：枚举 feed/SSE 里的审核请求（宿主白名单只放行
-			 * toolName）→ ⚠️ 注意帧。去重键带 frame.seq——feed 轮询整环重放
-			 * 靠 consume 的 lastSeq 闸门，这里再兜 SSE/poll 双通道 race。 */
-			if (seeAttention('pet-a:' + (frame.seq || event.time || ''))) {
-				try { registerBackground(sid); } catch (e) {}
-				handleMuxPayload({ type: 'approval/requested', sessionId: sid, time: frame.time || Date.now() });
 			}
 			return;
 		}

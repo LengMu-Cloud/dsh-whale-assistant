@@ -1836,7 +1836,10 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			 * 实证）。若它流经 session 事件总线，这里转成注意帧（⚠️
 			 * [会话名]需要你审核，reportAttention 现成）；active+后台都走
 			 * （页鲸休眠期间 DOM 不可见=桌宠/页鲸唯一通知源），seeAttention
-			 * 共享去重（SSE/轮询双通道 race + 未来 DOM 检测同 key 合流）。 */
+			 * 共享去重（SSE/轮询双通道 race + 未来 DOM 检测同 key 合流）。
+			 * 2026-11-18（全面分析）：此处在其后已 return，原「PET_MODE
+			 * 第二分支」（'pet-a:'+seq 去重键）永不可达，已删除——本分支
+			 * 对页鲸/桌宠两语境一律生效。 */
 			var aData = event.data || {};
 			var aKey = aData.callId || aData.id || ('a:' + (frame.time || ''));
 			if (seeAttention(aKey)) {
@@ -1857,16 +1860,6 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			var t = event.data && event.data.title;
 			if (t && typeof t === 'string') {
 				handleMuxPayload({ type: 'session/projection', sessionId: sid, key: 'title', value: t });
-			}
-			return;
-		}
-		if (type === 'approval/asked' && PET_MODE) {
-			/* 桌宠（11-06）：枚举 feed/SSE 里的审核请求（宿主白名单只放行
-			 * toolName）→ ⚠️ 注意帧。去重键带 frame.seq——feed 轮询整环重放
-			 * 靠 consume 的 lastSeq 闸门，这里再兜 SSE/poll 双通道 race。 */
-			if (seeAttention('pet-a:' + (frame.seq || event.time || ''))) {
-				try { registerBackground(sid); } catch (e) {}
-				handleMuxPayload({ type: 'approval/requested', sessionId: sid, time: frame.time || Date.now() });
 			}
 			return;
 		}
@@ -3526,15 +3519,21 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		return pressurePercentOf(lastMainSession ? sessionPressure.get(lastMainSession) : null);
 	}
 
-	/** One-shot warning when the context fills up; re-arms after relief. */
+	/** One-shot warning when the context fills up; re-arms after relief.
+	 * 2026-11-18（全面分析 C-2 实弹 bug）：重臂线原为固定 50%，与可配阈值
+	 * （20~95）脱钩——阈值调到 <50（验收 P1-21 实测就设了 20%）时，投影帧
+	 * 落在 [warnAt, 50) 区间每两帧循环「警告→重臂→警告」，一次性语义被
+	 * 打破。改为分级回落：默认及以上阈值（≥70）保持经典 50% 重置线；低
+	 * 阈值按 30% 回落（warnAt=20 → 6%），任何配置下恒有 resetAt < warnAt。 */
 	function maybeWarnPressure() {
 		var pct = pressurePct();
 		if (pct === null) return;
 		var warnAt = (typeof CONFIG === 'object' && CONFIG && CONFIG.pressureWarnPct) || PRESSURE_WARN_PCT;
+		var resetAt = warnAt >= PRESSURE_WARN_PCT ? PRESSURE_RESET_PCT : Math.round(warnAt * 0.3);
 		if (pct >= warnAt && !pressureWarned) {
 			pressureWarned = true;
 			say('上下文快挤爆了…建议 /compact 🫠', 5200);
-		} else if (pct < PRESSURE_RESET_PCT) {
+		} else if (pct < resetAt) {
 			pressureWarned = false;
 		}
 	}
@@ -4258,6 +4257,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					mode: '',
 					fetching: false
 				});
+				capMap(subagentSessions, 150); /* memory audit（2026-11-18 全面分析）：页生命周期无界增长——cap 纪律的漏网之鱼，对齐 sessionTitles 150 先例 */
 				fetchSubagentLabel(frame.sessionId);
 			}
 			return;
@@ -4272,6 +4272,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				mode: identity.mode,
 				fetching: existing ? existing.fetching : false
 			});
+			capMap(subagentSessions, 150); /* memory audit（2026-11-18 全面分析）：同上 */
 		}
 		/* a null identity never unmarks: sessions do not change nature */
 	}
@@ -4704,6 +4705,8 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	var reconnectDelay = 1000;
 	var reconnectTimer = null;
 	var connectedOnce = false;
+	var muxFails = 0;
+	var muxHoldMs = null; /* test seam: override the reconnect delay（2026-11-18 僵尸守卫回归用） */
 
 	function startMux() {
 		var socket;
@@ -4721,6 +4724,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 
 		socket.addEventListener('open', function () {
 			reconnectDelay = 1000;
+			muxFails = 0; /* 真连上了——清零回常态退避（守卫不误伤降级恢复场景） */
 			if (!connectedOnce) {
 				connectedOnce = true;
 				/* one-time notice that the task channel is live */
@@ -4751,14 +4755,32 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 
 	function scheduleReconnect() {
 		if (reconnectTimer !== null) return;
+		/* 僵尸通道守卫（2026-11-18 全面分析 D-P0-3）：宿主 0.1.2 起
+		 * /api/events.mux 路由已移除——连不上就是永远连不上，1s→15s 永动
+		 * 重连是每窗口一条的纯失败流量（sleep/wake 还会 churn sockets）。
+		 * 3 次重连失败即熔停；切回可见态时放行一次重试（宿主降级/恢复
+		 * 场景），open 成功即清零回常态退避。 */
+		if (muxFails >= 3) return;
+		muxFails++;
+		var delay = (typeof muxHoldMs === 'number' && muxHoldMs >= 0) ? muxHoldMs : reconnectDelay;
 		reconnectTimer = setTimeout(function () {
 			reconnectTimer = null;
 			startMux();
-		}, reconnectDelay);
+		}, delay);
 		reconnectDelay = Math.min(reconnectDelay * 2, 15000);
 	}
 
 	startMux();
+	/* 僵尸守卫的放行阀：切回可见态且已熔停时放行一次重试 */
+	document.addEventListener('visibilitychange', function () {
+		if (document.visibilityState === 'hidden') return;
+		if (muxFails >= 3 && reconnectTimer === null) { muxFails = 0; startMux(); }
+	});
+	/* 诊断/测试缝（2026-11-18）：僵尸守卫状态与重连延时覆盖 */
+	window.__dshWhale._muxState = function () {
+		return { fails: muxFails, timer: reconnectTimer !== null, delay: reconnectDelay, connectedOnce: connectedOnce };
+	};
+	window.__dshWhale._muxHoldMs = function (ms) { muxHoldMs = ms; };
 	loadConfig();
 	loadGearStats();
 	loadAffection();
@@ -7593,7 +7615,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				host.appendChild(status);
 				var btns = document.createElement('div');
 				btns.className = 'dsh-whale-pp-petbtns';
-				var FORMS = [['full', '🐋 完整形态'], ['bubble', '🪟 缩成小窗'], ['hidden', '🙈 躲猫猫']];
+				var FORMS = [['full', '🐋 完整形态'], ['bubble', '🪟 缩成小窗'], ['hidden', '🙈 隐藏小鲸鱼']];
 				var btnMap = {};
 				var petEnabled = true; /* /state 返回未启用时按钮置灰+忽略点击 */
 				function markForm(form) {
@@ -7633,7 +7655,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				host.appendChild(btns);
 				var note = document.createElement('div');
 				note.className = 'dsh-whale-pp-status';
-				note.textContent = '躲猫猫＝游到右下角收成一颗小气泡，点一下气泡随时召回；小鲸鱼跟着 DSH 宿主住，关掉 DSH 才真正退出。';
+				note.textContent = '「隐藏小鲸鱼」（躲猫猫）＝游到右下角收成一颗小气泡，点一下气泡随时召回；小鲸鱼跟着 DSH 宿主住，关掉 DSH 才真正退出。';
 				host.appendChild(note);
 				/* 初始状态：/state 已暴露 pet（enabled/form/up/spawning，lib/index.js） */
 				try {
@@ -7669,15 +7691,17 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		 * 一个 \n：第一行=主句（一句话说清这件事），第二行=补充说明（次要
 		 * 信息），渲染层 pre-line 出两行，搜索高亮/恢复按整串契约不动；
 		 * badge/hint=分区头右侧徽标与摘要。
-		 * 入口描述与真实入口逐一核对：右键菜单 6 项（⏰ 提醒我 / 声音 /
-			 * 🎨 我的装扮 / 📜 历史任务 / ⚙️ 设置 / 🔄 刷新页面，menu.js 11-11
-			 * 收口后现状）+ 桌宠窗口缝入的「🎭 切换形态」二级组（⑳ 起三项收进
-			 * 子菜单，radio 圆点标当前态）；侧边栏 4 Tab（TABS 表）。 */
+		 * 入口描述与真实入口逐一核对（2026-11-18 全面分析 B-3 对齐实测）：
+			 * 页内右键菜单 6 项（⏰ 提醒我 / 声音 / 🎨 我的装扮 / 📜 历史任务 /
+			 * ⚙️ 设置 / 🔄 刷新页面，menu.js 11-11 收口后现状）；桌面形态菜单
+			 * 8 行——刷新页换成两个二级组「🖥️ DSH 窗口 ›」（刷新 / 打开 DSH
+			 * 窗口）与「🎭 切换形态 ›」（三项收进子菜单，radio 圆点标当前态）；
+			 * 侧边栏 4 Tab（TABS 表）。 */
 		var PP_MANUAL_DATA = [
 			{ sec: '🚀 三步上手', badge: '默认展开', items: [
-				{ g: 1, t: '打开菜单', d: '右键小鲸鱼即可打开菜单：提醒我 / 声音 / 我的装扮 / 历史任务 / 设置 / 刷新页面。\n完整配置页在 DSH 左侧栏「小鲸鱼助手」：设置 / 小鲸鱼形态 / 周报 / 使用说明 四个 Tab。' },
+				{ g: 1, t: '打开菜单', d: '右键小鲸鱼：页内菜单 = 提醒我 / 声音 / 我的装扮 / 历史任务 / 设置 / 🔄 刷新页面；桌面形态多两组：「🖥️ DSH 窗口 ›」（刷新 / 打开 DSH 窗口）和「🎭 切换形态 ›」（当前形态带实心圆点）。\n完整配置页在 DSH 左侧栏「小鲸鱼助手」：设置 / 小鲸鱼形态 / 周报 / 使用说明 四个 Tab。' },
 				{ g: 2, t: '看通知、点跳转', d: '任务开始 / 完成 / 需要你操作时，小鲸鱼会响铃 + 冒气泡，双击气泡或通知直接跳到对应对话。\n气泡上的红标数字 = 未读条数：单击读一条，双击全部清空。' },
-				{ g: 3, t: '移动与形态', d: '按住鲸鱼拖到喜欢的位置，位置会自动记住。\n侧边栏「🐋 小鲸鱼形态」Tab，或小鲸鱼右键菜单「🎭 切换形态」子菜单（当前形态带实心圆点）可切换：🐋 完整形态 / 🪟 缩成小窗 / 🙈 躲猫猫。' }
+				{ g: 3, t: '移动与形态', d: '按住鲸鱼拖到喜欢的位置，位置会自动记住。\n侧边栏「🐋 小鲸鱼形态」Tab，或小鲸鱼右键菜单「🎭 切换形态」子菜单（当前形态带实心圆点）可切换：🐋 完整形态 / 🪟 缩成小窗 / 🙈 隐藏小鲸鱼。' }
 			] },
 			{ sec: '🎮 日常操作', hint: '手势 · 通知 · 常用设置', items: [
 				{ g: 1, t: '按住拖动：移动我', d: '拖到喜欢的角落，位置会记住。' },
@@ -7686,7 +7710,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				{ g: 4, t: '双击通知气泡：跳回对话', d: '直达对应对话，并把 DSH 窗口拉到前台。' },
 				{ g: 5, t: '单击红标数字：读一条', d: '读过的自动消失，红标 -1。' },
 				{ g: 6, t: '双击红标数字：清空全部', d: '所有未读一键清零。' },
-				{ g: 7, t: '右键：打开菜单', d: '提醒我 / 声音 / 我的装扮 / 历史任务 / 设置 / 刷新页面。' },
+				{ g: 7, t: '右键：打开菜单', d: '页内：提醒我 / 声音 / 我的装扮 / 历史任务 / 设置 / 🔄 刷新页面；桌面形态还有「🖥️ DSH 窗口 ›」「🎭 切换形态 ›」两个二级组。' },
 				{ g: 8, t: '右键双击：摸摸头', d: '好感 +1，还有小心心飘出。' },
 				{ t: '通知响了 = 该做什么', d: '✅ 完成 → 双击看结果；❌ 失败 / 截断 → 双击去看原因；❓ 需要你选择 / 🛡 需要你审核 → 只有等你点，双击直达决策处；🌡 上下文压力高 → 该收尾了（/compact）。' },
 				{ t: '常用设置在哪', d: '声音 / 音量 / 音色 / 免打扰 / 开工通知 / 导出历史，都在侧边栏「⚙️ 设置」页。\n音色每行 ▶ 试听即点即听、免打扰时段点击循环切换；任务周报有专门的「📊 周报」Tab。' }
@@ -7707,7 +7731,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				{ t: '中止与开工', d: '任务开始只播报、不算未读；手动中止不算失败，但也计入红标。' },
 				{ t: '用量面板', d: '完成通知下方同时弹出本次消耗 / 全对话累计 / 上下文占用，与气泡同生同灭。' },
 				{ cat: '🛠 盯活与健康', t: '工具超时', d: '工具跑超过设定时长，状态面板逐秒显示「⚠️ 工具已运行 Ns」——只是提醒，不打断任务。' },
-				{ t: '压力阈值', d: '上下文占用达到设定百分比提醒 /compact，回降到 50% 以下重新武装。' },
+				{ t: '压力阈值', d: '上下文占用达到设定百分比提醒 /compact，一次性不重复；明显缓解后重新武装（默认回落线 50%，阈值调低时按比例跟降，永不与阈值重叠）。' },
 				{ t: '运行状态', d: '鲸鱼自查后台通知 / 用量读取 / 跳转三条链路；出问题头顶亮 ⚠️，点它看是哪条失效。' },
 				{ t: '调试模式', d: '排障用：控制台输出调试信息 + 写 ~/.dsh/whale-assistant.json 的 _debug 键，平时保持关闭。' },
 				{ cat: '📜 历史与数据', t: '历史双存储', d: '历史保留最近 50 条，本地 + 服务器双存储；支持搜索、清空、导出。' },
@@ -7715,7 +7739,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				{ t: '想彻底遗忘某个对话', d: '两步：先清历史、再「清空通讯录」，两步都做才真正遗忘。' },
 				{ t: '账本损坏', d: '极少数情况会自动隔离重建，~/.dsh/ 留有 .corrupt-时间戳 备份；想救回：先关 DSH、删掉后缀恢复原名再启动。' },
 				{ cat: '🖥 桌面形态', t: '桌面通知同款', d: '桌面小鲸鱼上的通知 / 红标 / 三行用量与页内完全同一套，双击气泡同样跳回对话。' },
-				{ t: '怎么"关掉"小鲸鱼', d: '右键 → 🙈 躲猫猫就是它的"关"：桌面只剩一颗小气泡，点一下随时召回；彻底退出关掉 DSH 即可，没有常驻后台进程。' },
+				{ t: '怎么"关掉"小鲸鱼', d: '右键 → 🙈 隐藏小鲸鱼（躲猫猫）就是它的"关"：桌面只剩一颗小气泡，点一下随时召回；彻底退出关掉 DSH 即可，没有常驻后台进程。' },
 				{ t: '摸摸头与装扮', d: '右键双击摸摸头：好感 +1、小心心飘出；完成任务攒进度解锁新装扮（右键菜单 → 🎨 我的装扮 查看）。' }
 			] }
 		];

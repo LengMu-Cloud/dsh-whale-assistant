@@ -89,6 +89,23 @@ if (!fs.existsSync(pagePath)) {
 	else fail('page.html missing state/ctrl fetches');
 }
 
+/* 4. lib/pet.js spawn-env sanity — 2026-11-18 全面分析 A#6 教训：UI 评审
+ * 曾在 spawn env 里临时注入 --remote-debugging-port=9223（评审后已还原）。
+ * 该口一旦随提交/打包进产物，桌宠 WebView2 就成为本机任意进程可连的常驻
+ * 控制洞（该页持有 pet token 请求通道）。静态门禁：发布面出现调试口即红
+ * ——临时口永远不许溜进 lib/pet.js。 */
+const petLibPath = path.join(__dirname, '..', 'whale-assistant', 'lib', 'pet.js');
+if (!fs.existsSync(petLibPath)) {
+	fail('lib/pet.js missing');
+} else {
+	const petLibSrc = fs.readFileSync(petLibPath, 'utf8');
+	if (/remote-debugging-port/i.test(petLibSrc)) {
+		fail('lib/pet.js contains remote-debugging-port (temporary CDP debug port must never ship in the pet spawn env)');
+	} else {
+		ok('no remote-debugging-port in lib/pet.js spawn env');
+	}
+}
+
 if (failures) {
 	console.error('[check-pet] ' + failures + ' failure(s)');
 	process.exit(1);

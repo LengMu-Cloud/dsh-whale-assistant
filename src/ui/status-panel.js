@@ -314,15 +314,21 @@
 		return pressurePercentOf(lastMainSession ? sessionPressure.get(lastMainSession) : null);
 	}
 
-	/** One-shot warning when the context fills up; re-arms after relief. */
+	/** One-shot warning when the context fills up; re-arms after relief.
+	 * 2026-11-18（全面分析 C-2 实弹 bug）：重臂线原为固定 50%，与可配阈值
+	 * （20~95）脱钩——阈值调到 <50（验收 P1-21 实测就设了 20%）时，投影帧
+	 * 落在 [warnAt, 50) 区间每两帧循环「警告→重臂→警告」，一次性语义被
+	 * 打破。改为分级回落：默认及以上阈值（≥70）保持经典 50% 重置线；低
+	 * 阈值按 30% 回落（warnAt=20 → 6%），任何配置下恒有 resetAt < warnAt。 */
 	function maybeWarnPressure() {
 		var pct = pressurePct();
 		if (pct === null) return;
 		var warnAt = (typeof CONFIG === 'object' && CONFIG && CONFIG.pressureWarnPct) || PRESSURE_WARN_PCT;
+		var resetAt = warnAt >= PRESSURE_WARN_PCT ? PRESSURE_RESET_PCT : Math.round(warnAt * 0.3);
 		if (pct >= warnAt && !pressureWarned) {
 			pressureWarned = true;
 			say('上下文快挤爆了…建议 /compact 🫠', 5200);
-		} else if (pct < PRESSURE_RESET_PCT) {
+		} else if (pct < resetAt) {
 			pressureWarned = false;
 		}
 	}

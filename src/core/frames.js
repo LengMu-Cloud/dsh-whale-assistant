@@ -337,6 +337,7 @@
 					mode: '',
 					fetching: false
 				});
+				capMap(subagentSessions, 150); /* memory audit（2026-11-18 全面分析）：页生命周期无界增长——cap 纪律的漏网之鱼，对齐 sessionTitles 150 先例 */
 				fetchSubagentLabel(frame.sessionId);
 			}
 			return;
@@ -351,6 +352,7 @@
 				mode: identity.mode,
 				fetching: existing ? existing.fetching : false
 			});
+			capMap(subagentSessions, 150); /* memory audit（2026-11-18 全面分析）：同上 */
 		}
 		/* a null identity never unmarks: sessions do not change nature */
 	}

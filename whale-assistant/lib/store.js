@@ -111,14 +111,21 @@ export function queueStoreWrite(dir, mutator) {
  *    incoming) is dropped — a 清空历史 bumps clearAt, and merge-only sync
  *    can never propagate a deletion on its own;
  * 4. newest-first, capped at HISTORY_LIMIT.
- * Host-owned keys survive the replace: `pet` (桌宠开关/形态) is written by
- * lib/pet.js only — windows never author it, so a page save that omits it
- * inherits the stored value instead of wiping the pet switch.
+ * Host-owned keys survive the replace: windows never author these, so a
+ * page save that omits them inherits the stored value instead of wiping
+ * them. 2026-11-18（全面分析 C-1 终版 Top1）：原契约只保 `pet`——11-11
+ * relay 轮之后账本新增的 petConfig（设置 relay 快照）/pendingJump/
+ * pendingSettings（跳转·设置补偿）/_debug（取证）都是宿主管辖键，页鲸
+ * 任意一次 /save 都会整键抹掉它们（relay 跨重启失效/跳转失约/取证丢失）。
+ * 保留集必须随宿主键清单同步扩容——新宿主键落账时这里必须跟着加。
  */
+const HOST_LEDGER_KEYS = ['pet', 'petConfig', 'pendingJump', 'pendingSettings', '_debug'];
 export function mergeHistory(existing, incoming) {
 	if (!incoming || typeof incoming !== 'object') return incoming;
-	if (incoming.pet === undefined && existing && typeof existing === 'object' && existing.pet !== undefined) {
-		incoming.pet = existing.pet;
+	if (existing && typeof existing === 'object') {
+		for (const hk of HOST_LEDGER_KEYS) {
+			if (incoming[hk] === undefined && existing[hk] !== undefined) incoming[hk] = existing[hk];
+		}
 	}
 	if (!Array.isArray(incoming.history)) return incoming;
 	const clearAt = Math.max((existing && existing.clearAt) || 0, incoming.clearAt || 0);

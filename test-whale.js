@@ -1680,6 +1680,24 @@ async function main() {
 	muxpPw({ type: 'session/projection', sessionId: 'session-pw1', key: 'contextPressure', value: { pressureTokens: 300000, projectedTokens: 300000, contextWindow: 1000000 } }); /* 30% < 50% 重置线 */
 	muxpPw({ type: 'session/projection', sessionId: 'session-pw1', key: 'contextPressure', value: { pressureTokens: 840000, projectedTokens: 840000, contextWindow: 1000000 } }); /* 84% 再越线 */
 	assert.ok(envPw.bubble().textContent.includes('compact'), 're-arm after relief: warns again once pressure climbs back past the threshold');
+	/* 2026-11-18 全面分析 C-2（实弹 bug：重臂线与可配阈值脱钩）：旧固定 50%
+	 * 重置线在阈值调到 <50 时（验收 P1-21 实测就设了 20%）让 [20,50) 区间
+	 * 每两帧循环「警告→重臂→警告」。回归：低阈值按 30% 回落（20→6%）——
+	 * 25% 只警告一次，[20,50) 区间连帧不再重臂。 */
+	PW.CONFIG.pressureWarnPct = 20;
+	muxpPw({ type: 'session/projection', sessionId: 'session-pw1', key: 'contextPressure', value: { pressureTokens: 40000, projectedTokens: 40000, contextWindow: 1000000 } }); /* 4% < 6% 新回落线：解除 84% 的已警告态 */
+	muxpPw({ type: 'session/event', sessionId: 'session-pw1', event: { type: 'turn/start', seq: 4, time: 4, data: {} } });
+	muxpPw({ type: 'session/projection', sessionId: 'session-pw1', key: 'title', value: '压力阈值', seq: 5 }); /* 冲气泡 */
+	assert.ok(!envPw.bubble().textContent.includes('compact'), 'flushed observation point for the low-threshold regression');
+	muxpPw({ type: 'session/projection', sessionId: 'session-pw1', key: 'contextPressure', value: { pressureTokens: 250000, projectedTokens: 250000, contextWindow: 1000000 } }); /* 25% ≥ 20%：警告 */
+	assert.ok(envPw.bubble().textContent.includes('compact'), 'low threshold (20%) warns at 25%');
+	muxpPw({ type: 'session/event', sessionId: 'session-pw1', event: { type: 'turn/start', seq: 6, time: 6, data: {} } });
+	muxpPw({ type: 'session/projection', sessionId: 'session-pw1', key: 'title', value: '压力阈值', seq: 7 }); /* 再冲气泡 */
+	assert.ok(!envPw.bubble().textContent.includes('compact'), 'clean observation point in the old nag band');
+	muxpPw({ type: 'session/projection', sessionId: 'session-pw1', key: 'contextPressure', value: { pressureTokens: 260000, projectedTokens: 260000, contextWindow: 1000000 } }); /* 26%：旧逻辑在此重臂 */
+	muxpPw({ type: 'session/projection', sessionId: 'session-pw1', key: 'contextPressure', value: { pressureTokens: 260000, projectedTokens: 260000, contextWindow: 1000000 } }); /* 26%：旧逻辑在此重新警告=唠叨 */
+	assert.ok(!envPw.bubble().textContent.includes('compact'), 'no re-warn inside [warnAt, resetAt) — the nag loop is dead (fix C-2)');
+	PW.CONFIG.pressureWarnPct = 70; /* 还原默认 */
 	/* turn/start begins the count; model replies accumulate (including the
 	 * ones inside the name-hold window) */
 	muxpTok({ type: 'session/event', sessionId: 'session-tk1', event: { type: 'turn/start', seq: 1, time: 0, data: {} } });
@@ -1715,6 +1733,28 @@ async function main() {
 	assert.strictEqual(TK.unreadCount(), 0, 'queue drained after one read');
 	assert.ok(!envTok.bubble().textContent.includes('开工了'), 'no start replay (starts stay out of the queue)');
 	TK._setHoldMs(null);
+
+	/* 2026-11-18 全面分析 D-P0-3（mux 僵尸通道）：宿主 0.1.2 起
+	 * /api/events.mux 路由已移除——1s→15s 永动重连是每窗口一条的纯失败
+	 * 流量。回归：3 次重连失败即熔停（不再排定时器）；open 成功清零回
+	 * 常态退避。_muxHoldMs(0) 压缩真实时序等待。 */
+	const envMz = makeEnv();
+	envMz.ready();
+	const MZ = envMz.sandbox.__dshWhale;
+	MZ._muxHoldMs(0);
+	const closeTopMz = () => MZ.sockets[MZ.sockets.length - 1]._emit('close');
+	/* boot 已建第 1 条连接；连续 4 次 close = 初连 + 3 次重连全败 */
+	closeTopMz(); await sleep(15);
+	closeTopMz(); await sleep(15);
+	closeTopMz(); await sleep(15);
+	closeTopMz(); await sleep(15);
+	assert.strictEqual(MZ._muxState().fails, 3, 'three reconnect failures counted (zombie guard)');
+	assert.strictEqual(MZ._muxState().timer, false, 'reconnect timer stopped after 3 failures');
+	const mzBefore = MZ.sockets.length;
+	closeTopMz(); await sleep(15);
+	assert.strictEqual(MZ.sockets.length, mzBefore, 'stopped: a further close schedules nothing');
+	MZ.sockets[MZ.sockets.length - 1]._emit('open');
+	assert.strictEqual(MZ._muxState().fails, 0, 'successful open clears the failure count (recovery path stays alive)');
 
 	/* 28p. POLLED-path pressure for the ACTIVE session (09-13 压力复活):
 	 * DSH 0.1.5 removed the「上下文已用 N%」DOM text, so the server
@@ -2346,7 +2386,7 @@ async function main() {
 	const ppTabsEl = ppInner(ppHost).children.find((c) => (c.className || '').indexOf('dsh-whale-pp-tabs') >= 0);
 	const ppPetTab = ppTabsEl.children.find((c) => (c.textContent || '').indexOf('🐋 小鲸鱼形态') >= 0);
 	ppPetTab._fire('click', { stopPropagation() {} });
-	assert.ok(ppHost.textContent.includes('🐋 完整形态') && ppHost.textContent.includes('躲猫猫'), 'panel pet tab renders form buttons');
+	assert.ok(ppHost.textContent.includes('🐋 完整形态') && ppHost.textContent.includes('隐藏小鲸鱼'), 'panel pet tab renders form buttons（2026-11-18 命名统一：卡片对齐菜单定稿「隐藏小鲸鱼」）');
 	/* 📖 manual tab: the FULL manual content (ported from the drawer group —
 	 * every content lock below is the original drawer assertion, scoped to
 	 * the tab content) */

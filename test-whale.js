@@ -2302,6 +2302,11 @@ async function main() {
 		}
 		return null;
 	};
+	/* ⑳A select 化（11-17）：行内的原生下拉取用器（row > tone-right > select） */
+	const ppSelOf = (row) => {
+		const right = row.children.find((c) => (c.className || '') === 'dsh-whale-tone-right');
+		return right ? right.children.find((c) => (c.className || '') === 'dsh-whale-sound-sel') : null;
+	};
 	/* 11-11 真机修复轮：滚动分层——host=滚动容器，860px 栏在内层 page。
 	 * 直接 children 遍历的 finder 都要先进一层 */
 	const ppInner = (host) => host.children.find((c) => (c.className || '') === 'dsh-whale-pp');
@@ -2313,18 +2318,31 @@ async function main() {
 	assert.ok(ppNotify2 && ppNotify2 !== ppNotify, 'panel row re-renders after toggle');
 	assert.ok(ppNotify2.textContent.includes(ppNotifyBefore ? '关' : '开'), 'panel notify toggle flips CONFIG');
 	ppNotify2._fire('click', { stopPropagation() {} }); /* restore for downstream groups */
-	/* 免打扰循环修复（11-09）：关态第一次点击必须直达首个时段（旧逻辑
-	 * dndIdx=-1 回到 null 档=永远点不开），循环一圈后回关 */
+	/* ⑳A select 化（11-17 用户拍板，第 48 章八节 A 项）：免打扰行换原生
+	 * 下拉（音色行同款模式）——「能选不填」根治循环行「调小先变大」；
+	 * 改选即应用+持久化，关/时段一目了然 */
 	const ppDnd = findPpRow(ppHost, '🌙 免打扰');
-	assert.ok(ppDnd.textContent.includes('关'), 'dnd row starts off');
-	ppDnd._fire('click', { stopPropagation() {} });
-	const ppDnd2 = findPpRow(ppHost, '🌙 免打扰');
-	assert.ok(ppDnd2.textContent.includes('23:00') && ppDnd2.textContent.includes('08:00'), 'dnd off -> first time preset (cycle fix)');
-	ppDnd2._fire('click', { stopPropagation() {} });
-	findPpRow(ppHost, '🌙 免打扰')._fire('click', { stopPropagation() {} });
-	findPpRow(ppHost, '🌙 免打扰')._fire('click', { stopPropagation() {} });
-	findPpRow(ppHost, '🌙 免打扰')._fire('click', { stopPropagation() {} });
-	assert.ok(findPpRow(ppHost, '🌙 免打扰').textContent.includes('关'), 'dnd cycles back to off after the last preset');
+	assert.ok(ppDnd && ppDnd.textContent.includes('关'), 'dnd row starts off');
+	const dndSel = ppSelOf(ppDnd);
+	assert.ok(dndSel && dndSel.value === 'off', 'dnd select renders with 关 selected');
+	dndSel.value = '23:00-08:00';
+	dndSel._fire('change', {});
+	assert.strictEqual(JSON.parse(envCtx.sandbox.localStorage.getItem('dsh-whale:config')).data.dndEnabled, true, 'dnd preset applies + persists');
+	assert.strictEqual(JSON.parse(envCtx.sandbox.localStorage.getItem('dsh-whale:config')).data.dndFrom, '23:00', 'dnd window stored');
+	dndSel.value = 'off';
+	dndSel._fire('change', {});
+	assert.strictEqual(JSON.parse(envCtx.sandbox.localStorage.getItem('dsh-whale:config')).data.dndEnabled, false, 'dnd off applies');
+	/* 自定义时段兜底（⑳A 显示不撒谎）：存量配置带非预设时段 → select 动态
+	 * 补「（当前）」选项并选中，显示与真实状态一致 */
+	const envDnd = makeEnv([['dsh-whale:config', JSON.stringify({ v: 1, data: { dndEnabled: true, dndFrom: '01:00', dndTo: '05:00' } })]]);
+	envDnd.ready();
+	const dndHost = envDnd.sandbox.document.createElement('div');
+	envDnd.sandbox.window.__dshWhalePanel.mount(dndHost);
+	const dndSel2 = ppSelOf(findPpRow(dndHost, '🌙 免打扰'));
+	assert.ok(dndSel2, 'dnd select renders on a fresh env');
+	const customOpt = dndSel2.children.find((c) => c.value === '01:00-05:00');
+	assert.ok(customOpt && customOpt.textContent.includes('当前'), 'custom window gets an honest 当前 option (display never lies)');
+	assert.strictEqual(dndSel2.value, '01:00-05:00', 'custom window selected');
 	const ppTabsEl = ppInner(ppHost).children.find((c) => (c.className || '').indexOf('dsh-whale-pp-tabs') >= 0);
 	const ppPetTab = ppTabsEl.children.find((c) => (c.textContent || '').indexOf('🐋 小鲸鱼形态') >= 0);
 	ppPetTab._fire('click', { stopPropagation() {} });
@@ -2391,16 +2409,13 @@ async function main() {
 	settingsTabIdem._fire('click', { stopPropagation() {} });
 	assert.ok(ppHost.textContent.includes('v' + envCtx.sandbox.__dshWhale.version) && ppHost.textContent.includes('当前版本'), `about row reads 当前版本 + the build version (11-11 三报：让其他用户看懂这是版本号): v${envCtx.sandbox.__dshWhale.version}`);
 	const ppPress0 = findPpRow(ppHost, '🚨 压力提醒');
-	const pressBefore = (ppPress0.textContent.match(/(\d+)%/) || [])[1];
-	assert.ok(!!pressBefore, `pressure row renders a percent: ${ppPress0.textContent}`);
-	ppPress0._fire('click', { stopPropagation() {} });
-	const pressNext = (findPpRow(ppHost, '🚨 压力提醒').textContent.match(/(\d+)%/) || [])[1];
-	assert.ok(pressNext !== pressBefore, 'pressure first click leaves the start value');
-	findPpRow(ppHost, '🚨 压力提醒')._fire('click', { stopPropagation() {} });
-	findPpRow(ppHost, '🚨 压力提醒')._fire('click', { stopPropagation() {} });
-	findPpRow(ppHost, '🚨 压力提醒')._fire('click', { stopPropagation() {} });
-	findPpRow(ppHost, '🚨 压力提醒')._fire('click', { stopPropagation() {} });
-	assert.strictEqual((findPpRow(ppHost, '🚨 压力提醒').textContent.match(/(\d+)%/) || [])[1], pressBefore, 'pressure cycles back to the start value after the full preset circle');
+	const pressSel = ppSelOf(ppPress0);
+	assert.ok(pressSel && /^\d+$/.test(pressSel.value), `pressure select renders a percent: ${pressSel ? pressSel.value : 'null'}`);
+	const pressBefore = pressSel.value;
+	pressSel.value = pressBefore === '80' ? '90' : '80';
+	pressSel._fire('change', {});
+	assert.strictEqual(JSON.parse(envCtx.sandbox.localStorage.getItem('dsh-whale:config')).data.pressureWarnPct, Number(pressSel.value), 'pressure change applies + persists (⑳A select 化)');
+	assert.strictEqual(ppSelOf(findPpRow(ppHost, '🚨 压力提醒')).value, pressSel.value, 'pressure select keeps its value (no re-render clobber)');
 	/* export flash reports the REAL outcome: the vm has no clipboard, so a
 	 * fake 「✓ 已复制」 here would be the P2-3 regression */
 	envCtx.sandbox.navigator = {}; /* vm 沙箱无 navigator：补空壳走「不可用」分支 */
@@ -2419,12 +2434,17 @@ async function main() {
 	const toneHost = envTone.sandbox.document.createElement('div');
 	envTone.sandbox.window.__dshWhalePanel.mount(toneHost);
 	const toneSel = (() => {
+		/* ⑳A 后页面里有 8 个 sound-sel（新增免打扰/音量/超时/压力四行）——
+		 * 搜索必须限定在音色展开区内，否则抓到的是 DND 行的下拉 */
+		const ppContentT = ppInner(toneHost).children.find((c) => (c.className || '') === 'dsh-whale-pp-content');
+		const toneDetT = ppContentT && ppContentT.children.find((c) => (c.className || '') === 'dsh-whale-pp-tone-detail');
+		if (!toneDetT) return null;
 		const walk = (node) => {
 			if ((node.className || '') === 'dsh-whale-sound-sel') return node;
 			for (const c of node.children || []) { const hit = walk(c); if (hit) return hit; }
 			return null;
 		};
-		return walk(toneHost);
+		return walk(toneDetT);
 	})();
 	assert.ok(toneSel, 'tone select rendered on a fresh env');
 	assert.strictEqual(toneSel.selectedIndex, 0, 'dirty tone value (thud not in done opts) displays option 0, not a blank select');
@@ -3120,13 +3140,18 @@ async function main() {
 	 * whale-anchored floating panel (same class family as the old drawer) */
 	const sPanel = () => envCfg.sandbox.document.body.children.find((c) => (c.className || '').indexOf('dsh-whale-settings') === 0) || null;
 	const stuckRow = findPpRow(ppCfg, '工具超时');
-	assert.ok(stuckRow.textContent.includes('15s'), `stuck row shows default 15s: ${stuckRow.textContent}`);
-	stuckRow._fire('click', { stopPropagation() {} });
-	assert.strictEqual(CG.CONFIG.toolStuckMs, 30000, 'tool threshold cycled to 30s');
-	/* volume cycle (VOL_STEPS 0..1) */
+	const stuckSel = ppSelOf(stuckRow);
+	assert.ok(stuckSel && stuckSel.value === '15000', `stuck select shows default 15s: ${stuckSel ? stuckSel.value : 'null'}`);
+	stuckSel.value = '30000';
+	stuckSel._fire('change', {});
+	assert.strictEqual(CG.CONFIG.toolStuckMs, 30000, 'tool threshold set to 30s via dropdown (⑳A select 化)');
+	/* volume select (VOL_STEPS 0..1) */
 	const volRow = findPpRow(ppCfg, '音量');
-	volRow._fire('click', { stopPropagation() {} });
-	assert.strictEqual(CG.CONFIG.volume, 0, 'volume cycled to 0% (VOL_STEPS wraps 1->0)');
+	const volSel = ppSelOf(volRow);
+	assert.ok(volSel, 'volume select rendered');
+	volSel.value = '0';
+	volSel._fire('change', {});
+	assert.strictEqual(CG.CONFIG.volume, 0, 'volume set to 0% via dropdown');
 	assert.strictEqual(JSON.parse(envCfg.sandbox.localStorage.getItem('dsh-whale:config')).data.volume, 0, 'volume persisted');
 	/* 41b. per-kind sound dropdowns: INLINE detail under the 音色 row (11-09
 	 * the floating picker retired) — an option change applies + persists the

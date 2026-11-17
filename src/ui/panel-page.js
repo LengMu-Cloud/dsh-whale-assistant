@@ -281,24 +281,65 @@
 					if (applyConfig({ notifyOnStart: !CONFIG.notifyOnStart })) saveConfig();
 					render();
 				});
+				/* ⑳A 控件 select 化（11-17 用户拍板，第 48 章八节 A 项）：四个
+				 * 「点击循环」行换原生 select（音色行 dsh-whale-sound-sel 同款
+				 * 模式：脏值回落+click stopPropagation+change 即应用）——循环
+				 * 行「调小先变大」根治，「能选不填」。设置链原样不动：
+				 * applyConfig→saveConfig→pushPetConfig 中继照旧。行不带 click
+				 * 翻转（select 自己管选择）；不 render()（重渲会重建 select，
+				 * 音色行先例=change 后不重渲）。
+				 * 下拉行工厂：opts=[{v,label}]，cur=当前存量值；不在 opts 时
+				 * 动态补一个「当前值」选项（旧版本任意存量值显示不撒谎）。 */
+				function ppSelectRow(host, label, opts, cur, onChange) {
+					var row = document.createElement('div');
+					row.className = 'dsh-whale-pp-row';
+					var l = document.createElement('span');
+					setIconLabel(l, label);
+					var right = document.createElement('span');
+					right.className = 'dsh-whale-tone-right';
+					var sel = document.createElement('select');
+					sel.className = 'dsh-whale-sound-sel';
+					var hasCur = false;
+					opts.forEach(function (o) {
+						var opt2 = document.createElement('option');
+						opt2.value = o.v;
+						opt2.textContent = o.label;
+						if (String(o.v) === String(cur)) hasCur = true;
+						sel.appendChild(opt2);
+					});
+					/* 存量值不在预设里（旧版本/手改账本）：动态补当前值选项——
+					 * 显示不撒谎，CONFIG 不动（选走即覆盖，选回不在列表照旧回落） */
+					if (!hasCur) {
+						var optCur = document.createElement('option');
+						optCur.value = String(cur);
+						optCur.textContent = String(cur) + '（当前）';
+						sel.appendChild(optCur);
+					}
+					sel.value = String(cur);
+					sel.addEventListener('click', function (event) { event.stopPropagation(); });
+					sel.addEventListener('change', function () {
+						onChange(sel.value);
+					});
+					right.appendChild(sel);
+					row.appendChild(l);
+					row.appendChild(right);
+					host.appendChild(row);
+				}
 				var DND_PRESETS = [null, ['23:00', '08:00'], ['22:00', '07:00'], ['00:00', '06:00'], ['12:00', '14:00']];
-				var dndCur = CONFIG.dndEnabled ? (CONFIG.dndFrom + '-' + CONFIG.dndTo) : '关';
-				var dndIdx = -1;
-				DND_PRESETS.forEach(function (pr, i) {
-					if (pr && pr[0] + '-' + pr[1] === dndCur) dndIdx = i;
+				var dndOpts = [{ v: 'off', label: '关' }];
+				DND_PRESETS.forEach(function (pr) {
+					if (pr) dndOpts.push({ v: pr[0] + '-' + pr[1], label: pr[0] + '-' + pr[1] });
 				});
-				/* 免打扰循环修复（11-09 用户实报「只有关没有开」）：关态下
-				 * dndIdx=-1，(−1+1)%5=0 命中 null 档=仍是关——从关永远点不开。
-				 * 关态视为站在 0 档上，下一步跳 1 档（首个时段）；开态未匹配
-				 * （自定义时段）→ 下一档回关，语义不变。 */
-				if (!CONFIG.dndEnabled) dndIdx = 0;
-				ppRow(host, '🌙 免打扰', dndCur, function () {
-					var next = DND_PRESETS[(dndIdx + 1) % DND_PRESETS.length];
-					if (next) applyConfig({ dndEnabled: true, dndFrom: next[0], dndTo: next[1] });
-					else applyConfig({ dndEnabled: false });
-					saveConfig();
-					render();
-				});
+				ppSelectRow(host, '🌙 免打扰', dndOpts,
+					CONFIG.dndEnabled ? (CONFIG.dndFrom + '-' + CONFIG.dndTo) : 'off',
+					function (v) {
+						if (v === 'off') applyConfig({ dndEnabled: false });
+						else {
+							var seg = v.split('-');
+							applyConfig({ dndEnabled: true, dndFrom: seg[0], dndTo: seg[1] });
+						}
+						saveConfig();
+					});
 				ppSection(host, '声音');
 				/* 总静音（主观痛点 4）：菜单 🔇 的页面镜像——菜单里静音着时
 				 * 页内调音量依然无声，此前页面无法解释这个现象 */
@@ -307,10 +348,10 @@
 					render();
 				});
 				var VOL_STEPS = [0, 0.25, 0.5, 0.75, 1];
-				ppRow(host, '🔊 音量', Math.round(CONFIG.volume * 100) + '%', function () {
-					var i = VOL_STEPS.indexOf(CONFIG.volume);
-					if (applyConfig({ volume: VOL_STEPS[(i + 1) % VOL_STEPS.length] })) saveConfig();
-					render();
+				ppSelectRow(host, '🔊 音量', VOL_STEPS.map(function (v) {
+					return { v: String(v), label: Math.round(v * 100) + '%' };
+				}), String(CONFIG.volume), function (v) {
+					if (applyConfig({ volume: parseFloat(v) })) saveConfig();
 				});
 				/* 🎵 音色：四个下拉行内展开（11-09 用户反馈浮层盖 DSH 侧边栏）
 				 * ——语义与旧浮层选择器同源：改选即应用+持久化+现场试听 */
@@ -384,16 +425,16 @@
 				host.appendChild(toneDetail);
 				ppSection(host, '监控');
 				var TOOL_PRESETS = [5000, 8000, 15000, 30000, 60000];
-				ppRow(host, '⏱️ 工具超时', Math.round(CONFIG.toolStuckMs / 1000) + 's', function () {
-					var i = TOOL_PRESETS.indexOf(CONFIG.toolStuckMs);
-					if (applyConfig({ toolStuckMs: TOOL_PRESETS[(i + 1) % TOOL_PRESETS.length] })) saveConfig();
-					render();
+				ppSelectRow(host, '⏱️ 工具超时', TOOL_PRESETS.map(function (ms) {
+					return { v: String(ms), label: Math.round(ms / 1000) + 's' };
+				}), String(CONFIG.toolStuckMs), function (v) {
+					if (applyConfig({ toolStuckMs: parseInt(v, 10) })) saveConfig();
 				});
 				var P_PRESETS = [50, 60, 70, 80, 90];
-				ppRow(host, '🚨 压力提醒', (CONFIG.pressureWarnPct || 70) + '%', function () {
-					var i = P_PRESETS.indexOf(CONFIG.pressureWarnPct || 70);
-					if (applyConfig({ pressureWarnPct: P_PRESETS[(i + 1) % P_PRESETS.length] })) saveConfig();
-					render();
+				ppSelectRow(host, '🚨 压力提醒', P_PRESETS.map(function (pc) {
+					return { v: String(pc), label: pc + '%' };
+				}), String(CONFIG.pressureWarnPct || 70), function (v) {
+					if (applyConfig({ pressureWarnPct: parseInt(v, 10) })) saveConfig();
 				});
 			/* 行内闪现反馈（11-11 用户实报「点了没动静」）：exportHistory 的
 			 * 反馈走 uiSay 鲸鱼气泡——桌宠运行时页鲸休眠=打在隐藏元素里零可

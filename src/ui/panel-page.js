@@ -114,6 +114,12 @@
 					 * 徽章比主标题还抢眼——子层级压过父级的一大来源） */
 					'.dsh-whale-pp-manual .dsh-whale-manual-badge{flex:none;margin-left:auto;font-size:11px;font-weight:500;line-height:20px;padding:0 9px;border-radius:var(--wh-radius-full);background:var(--wh-panel-hover);color:var(--wh-panel-muted);white-space:nowrap}',
 					'.dsh-whale-pp-manual .dsh-whale-manual-hint{margin-left:auto;font-size:11.5px;font-weight:400;color:var(--wh-panel-muted);white-space:nowrap}',
+					/* 2026-11-18（用户实报「默认折叠跑到中间」）：badge 与 hint 都带
+					 * margin-left:auto 时 flex 把剩余空间平摊进两个 auto 之间=徽标
+					 * 被顶到行中央（唯「更多细节」分区两者兼有故暴露）。跟在徽标
+					 * 后面的 hint 改吃 10px gap——auto 只剩 badge 一个，右侧簇
+					 * [badge][hint][▸] 贴齐行尾；单项分区两条路径各不受影响。 */
+					'.dsh-whale-pp-manual .dsh-whale-manual-badge + .dsh-whale-manual-hint{margin-left:0}',
 					/* 头行 chevron：22px 圆片（style.css 的裸字符 ::after 覆写），
 					 * 展开 ▸ 旋转 90° 朝下、折叠复位朝右，0.18s 过渡 */
 					'.dsh-whale-pp-manual .dsh-whale-manual-sec::after{content:"▸";float:none;flex:none;width:22px;height:22px;line-height:22px;border-radius:var(--wh-radius-full);background:var(--wh-panel-hover);color:var(--wh-panel-muted);font-size:10px;text-align:center;transform:rotate(90deg);transition:transform .18s ease;margin-left:2px}',

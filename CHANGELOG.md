@@ -10,6 +10,7 @@
 ### 全面分析轮 · 立即修复批（11-18）
 
 - **修复七件**：ci.yml logo 漂移门禁 pathspec 修正（原指向不存在文件静默失效）；压力提醒重臂线与可配阈值脱钩修复（低阈值一次性警告变唠叨的实弹 bug，改分级回落）；mergeHistory 宿主键保留集从 `{pet}` 扩为 `{pet, petConfig, pendingJump, pendingSettings, _debug}`（此前页鲸任意一次历史推送都会整键抹掉设置 relay 快照/跳转·设置补偿/调试取证）；subagentSessions 补 cap(150)+host-debug.log 1MB 轮转+删除永不可达死分支；mux 僵尸通道 3 败熔停（宿主已无 /api/events.mux 路由后的永动失败重连）；check-pet 新门禁（pet spawn env 出现 remote-debugging-port 即红）；通知气泡左缘裁切修复（气泡宽度被鲸鱼本体含块锁死，`width: max-content` 释放+340 封顶）
+- **分区头徽标居中修复（用户实报）**：帮助页「默认折叠」徽标被 flex 双 auto 边距顶到行中央——跟在徽标后的摘要改吃 gap，右侧簇贴齐行尾，单项分区不受影响
 - **命名与文案**：形态卡片「躲猫猫」统一为菜单定稿「🙈 隐藏小鲸鱼」（说明文字保留昵称）；使用说明对齐实测菜单（页内 6 行/桌宠 8 行双口径+DSH 窗口二级组）
 - 测试：test-whale 952（+8）、host-store 113（+6）、chip 19、check-pet（+1 门禁）、audit-deps 全绿
 

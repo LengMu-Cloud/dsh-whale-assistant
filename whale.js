@@ -5734,8 +5734,30 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		 * emoji 原文保留在 0 尺寸 ghost span 里——textContent 逐字节不变，
 		 * 测试与读屏口径同 P0；未收录字形回落 P0 emoji 槽（新菜单项零成本）。 */
 		var ICON_SVG_NS = 'http://www.w3.org/2000/svg';
+		/* P1-1 图标体系统一（UI 审美 v5 落地 2026-11-19）：品牌鲸鱼 path
+		 * （whale-logo.svg 主 path，50 viewBox）成为 🐳 菜单头 / 🐋 完整形态 /
+		 * 🎭 切换形态 的共用规格——实心 currentColor（mockup-01/02 批准画法），
+		 * scale(0.32) 落进 16 盒。🪟/🙈 几何取自批准 mockup 的 24 viewBox
+		 * （rect 圆角窗 / feather eye-off），scale(2/3) 折进 16 盒、stroke-width
+		 * 2.4 折算后与兄弟 16 盒线稿（1.6）同视觉重量。三个彩色 emoji 位图的
+		 * 语义由 ghost span 保口径（textContent 逐字节不变）。 */
+		var ICON_WHALE_PATH = 'M48.8354 10.0479C48.3232 9.79199 48.1025 10.2798 47.8032 10.5278C47.7007 10.6079 47.6143 10.7119 47.5273 10.8076C46.7793 11.624 45.9048 12.1597 44.7622 12.0957C43.0923 12 41.666 12.5356 40.4058 13.8398C40.1377 12.2319 39.2476 11.272 37.8926 10.6558C37.1836 10.3359 36.4668 10.0156 35.9702 9.31982C35.6235 8.82373 35.5293 8.27197 35.356 7.72754C35.2456 7.3999 35.1353 7.06396 34.7651 7.00781C34.3633 6.94385 34.2056 7.2876 34.0479 7.57568C33.418 8.75195 33.1733 10.0479 33.1973 11.3599C33.2524 14.312 34.4736 16.6641 36.8999 18.3359C37.1758 18.5278 37.2466 18.7197 37.1597 19C36.9946 19.5757 36.7974 20.1357 36.624 20.7119C36.5137 21.0801 36.3486 21.1597 35.9624 21C34.6309 20.4321 33.481 19.5918 32.4644 18.5757C30.7393 16.8721 29.1792 14.9917 27.2334 13.52C26.7764 13.1758 26.3193 12.856 25.8467 12.5518C23.8618 10.584 26.1069 8.96777 26.627 8.77588C27.1704 8.57568 26.8159 7.8877 25.0591 7.896C23.3022 7.90381 21.6953 8.50391 19.647 9.30371C19.3477 9.42383 19.0322 9.51172 18.7095 9.58398C16.8501 9.22363 14.9199 9.14355 12.9033 9.37598C9.10596 9.80762 6.07275 11.6396 3.84326 14.7681C1.16455 18.5278 0.53418 22.7998 1.30664 27.2559C2.11768 31.9521 4.46582 35.8398 8.07373 38.8799C11.8159 42.0322 16.1255 43.5762 21.041 43.2803C24.0269 43.104 27.3516 42.6963 31.1016 39.4561C32.0469 39.936 33.0396 40.1279 34.686 40.272C35.9546 40.3921 37.1758 40.208 38.1211 40.0078C39.6021 39.688 39.4995 38.2881 38.9639 38.0322C34.623 35.9678 35.5762 36.8081 34.71 36.1279C36.9155 33.4639 40.2402 30.6958 41.54 21.728C41.6426 21.0161 41.5557 20.5679 41.54 19.9917C41.5322 19.6396 41.6108 19.5039 42.0049 19.4639C43.0923 19.3359 44.1479 19.0317 45.1167 18.4878C47.9292 16.9199 49.064 14.3438 49.3315 11.2559C49.3711 10.7837 49.3237 10.2959 48.8354 10.0479ZM24.3262 37.8398C20.1196 34.4639 18.0791 33.3521 17.2358 33.3999C16.4482 33.4482 16.5898 34.3682 16.7632 34.9678C16.9443 35.5601 17.1812 35.9683 17.5117 36.4878C17.7402 36.832 17.8979 37.3442 17.2832 37.728C15.9282 38.584 13.5728 37.4399 13.4624 37.3838C10.7207 35.7358 8.42822 33.5601 6.81348 30.584C5.25342 27.7197 4.34766 24.6479 4.19775 21.3677C4.1582 20.5757 4.38672 20.2959 5.15869 20.1519C6.17529 19.96 7.22314 19.9199 8.23926 20.0718C12.5327 20.7119 16.1885 22.6719 19.2529 25.7759C21.002 27.5439 22.3252 29.6558 23.6885 31.7202C25.1377 33.9121 26.6978 36 28.6831 37.7119C29.3843 38.312 29.9434 38.7681 30.479 39.104C28.8643 39.2881 26.1699 39.3281 24.3262 37.8398ZM26.3433 24.6001C26.3433 24.248 26.6191 23.9678 26.9658 23.9678C27.0444 23.9678 27.1152 23.9839 27.1782 24.0078C27.2651 24.04 27.3438 24.0879 27.4067 24.1602C27.5171 24.272 27.5801 24.4321 27.5801 24.6001C27.5801 24.9521 27.3042 25.2319 26.9575 25.2319C26.6108 25.2319 26.3433 24.9521 26.3433 24.6001ZM32.6064 27.8799C32.2046 28.0479 31.8027 28.1919 31.4165 28.208C30.8179 28.2397 30.1641 27.9922 29.8096 27.688C29.2583 27.2158 28.8643 26.9521 28.6987 26.1279C28.6279 25.7759 28.6675 25.2319 28.7305 24.9199C28.8721 24.248 28.7144 23.8159 28.2495 23.4238C27.8716 23.104 27.3911 23.0161 26.8633 23.0161C26.666 23.0161 26.4849 22.9277 26.3511 22.856C26.1304 22.7441 25.9492 22.4639 26.1226 22.1201C26.1777 22.0078 26.4458 21.7358 26.5088 21.688C27.2256 21.272 28.0527 21.4077 28.8169 21.7197C29.5259 22.0161 30.0615 22.5601 30.834 23.3281C31.6216 24.2559 31.7632 24.5117 32.2124 25.208C32.5669 25.752 32.8901 26.312 33.1104 26.9521C33.2446 27.3521 33.0713 27.6802 32.6064 27.8799Z';
+		var ICON_WHALE_SPEC = [['path', { d: ICON_WHALE_PATH, fill: 'currentColor', stroke: 'none', transform: 'scale(0.32)' }]];
 		var ICON_PATHS = {
+			'🐳': ICON_WHALE_SPEC,
+			'🐋': ICON_WHALE_SPEC,
+			'🎭': ICON_WHALE_SPEC,
+			'🪟': [['rect', { x: 4, y: 5, width: 16, height: 14, rx: 2.5, transform: 'scale(0.6667)', 'stroke-width': 2.4 }]],
+			'🙈': [['path', { d: 'M17.94 17.94A10 10 0 0 1 12 20C5 20 1 12 1 12a18.4 18.4 0 0 1 5.06-5.94M9.9 4.24A9.1 9.1 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19', transform: 'scale(0.6667)', 'stroke-width': 2.4 }], ['path', { d: 'M14.12 14.12a3 3 0 1 1-4.24-4.24', transform: 'scale(0.6667)', 'stroke-width': 2.4 }]],
 			'⏰': [['circle', { cx: 8, cy: 8.7, r: 5.1 }], ['path', { d: 'M8 6.3v2.6l1.9 1.1' }], ['path', { d: 'M2.8 3.2l1.8-1.2M13.2 3.2l-1.8-1.2' }]],
+			'ℹ️': [['circle', { cx: 8, cy: 8, r: 5.7 }], ['path', { d: 'M8 7.4v3' }], ['circle', { cx: 8, cy: 5.4, r: 0.9, fill: 'currentColor' }]],
+			/* P1-1 追修五（11-19 使用说明 Tab，设计专项方案 §3.2 五枚新字形——分区头
+			 * 🚀🎮🔧ℹ️ 与组头 🛠🖥 装饰线稿；16vb/stroke 1.6/round 与全站同族） */
+			'🚀': [['path', { d: 'M8 2.4c1.9 1.7 2.9 3.8 2.9 5.9 0 1.8-.8 3.3-2.9 4.7-2.1-1.4-2.9-2.9-2.9-4.7 0-2.1 1-4.2 2.9-5.9z' }], ['circle', { cx: 8, cy: 6.6, r: 1.35 }], ['path', { d: 'M5.2 8.5 3.9 11.2l1.9-.5M10.8 8.5l1.3 2.7-1.9-.5' }], ['path', { d: 'M8 13.2v1.6' }]],
+			'🎮': [['rect', { x: 2, y: 5.2, width: 12, height: 6.6, rx: 3.3 }], ['path', { d: 'M5.5 7.2v2.6M4.2 8.5h2.6' }], ['circle', { cx: 10.9, cy: 7.6, r: 0.8, fill: 'currentColor' }], ['circle', { cx: 12.2, cy: 9.4, r: 0.8, fill: 'currentColor' }]],
+			'🔧': [['path', { d: 'M13.6 3.1a2.8 2.8 0 0 1-3.7 3.5L5.5 11a1.35 1.35 0 0 1-1.9-1.9L8 4.7a2.8 2.8 0 0 1 3.5-3.7l-1.9 1.9.4 1.7 1.7.4 1.9-1.9z' }]],
+			'🛠': [['path', { d: 'M4.9 6.6 9.7 1.8', 'stroke-width': 3 }], ['path', { d: 'M7.3 4.2l5.3 5.3' }]],
+			'🖥': [['rect', { x: 1.8, y: 3, width: 12.4, height: 8.4, rx: 1.2 }], ['path', { d: 'M8 11.4v1.9M5.1 13.3h5.8' }]],
 			'⏱️': [['circle', { cx: 8, cy: 9, r: 5 }], ['path', { d: 'M6.7 2.4h2.6M8 2.4v1.7M8 9l1.8-1.8' }]],
 			'⏳': [['path', { d: 'M4.7 2.5h6.6M4.7 13.5h6.6M5.7 2.5v1.8c0 1.3 2.3 2.2 2.3 3.7s-2.3 2.4-2.3 3.7v1.8M10.3 2.5v1.8c0 1.3-2.3 2.2-2.3 3.7s2.3 2.4 2.3 3.7v1.8' }]],
 			'➕': [['circle', { cx: 8, cy: 8, r: 5.7 }], ['path', { d: 'M8 5.4v5.2M5.4 8h5.2' }]],
@@ -5811,6 +5833,21 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			el.appendChild(document.createTextNode(text.slice(sp)));
 		}
 
+		/** Inline icon for PROSE references to UI glyphs (P1-1 追修三 11-19):
+		 * hint lines quote menu items / chips / console tags — render the same
+		 * SVG the referenced surface now uses, emoji原文进 ghost 保口径.
+		 * Shared scope: panel-page.js 恢复提示行同款复用。 */
+		function whInlineIcon(glyph) {
+			var ic = document.createElement('span');
+			ic.className = 'dsh-whale-ico';
+			ic.appendChild(buildIconSvg(ICON_PATHS[glyph]));
+			var gh = document.createElement('span');
+			gh.className = 'dsh-whale-ico-ghost';
+			gh.textContent = glyph;
+			ic.appendChild(gh);
+			return ic;
+		}
+
 		/** Sub-panel footer. Back follows the navigation hierarchy
 		 * 菜单 → 设置 → 子面板 (user request): panels entered from the
 		 * right-click menu (提醒我) return TO THE MENU; panels entered from
@@ -5858,6 +5895,25 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			if (!layer) return;
 			var x = whale.offsetLeft + whale.offsetWidth / 2;
 			var y = whale.offsetTop + whale.offsetHeight * 0.3;
+			/* P3-11（UI 审美 v5 落地）：粒子起步点避让气泡——评审实拍（ui-10）
+			 * 粒子压在气泡边缘上。气泡在场时起步点外移到气泡边缘外 8px 起步
+			 * （上方态=气泡下缘下 8px；flip 态=气泡上缘上 8px 对称），不再压面板 */
+			try {
+				var bub = document.querySelector('.dsh-whale-bubble');
+				if (bub && bub.classList.contains('show')) {
+					var flip = bub.classList.contains('dsh-whale-bubble-flip');
+					if (flip) {
+						/* flip 态气泡在鲸鱼下方，粒子起步点天然在外且向上远离——
+						 * 只兜底不落进气泡内 */
+						var topEdge = whale.offsetTop + whale.offsetHeight + 12;
+						if (y > topEdge - 8) y = topEdge - 8;
+					} else {
+						/* 常态气泡悬在鲸鱼上方：起步点上移到气泡下缘外 8px */
+						var botEdge = whale.offsetTop - 12;
+						if (y > botEdge - 8) y = botEdge - 8;
+					}
+				}
+			} catch (eHearts) { }
 			var parts = [];
 			var i;
 			var total = count || 7;
@@ -5975,12 +6031,15 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			var menu = ctxMenu || document.createElement('div');
 			menu.className = 'dsh-whale-menu';
 			menu.textContent = '';
-			/* header: mood + live jobs */
+			/* header: mood + live jobs. P1-1（UI 审美 v5 落地）：头部 🐳 彩色
+			 * emoji 位图 → 品牌鲸鱼线标（ICON_PATHS['🐳']，实心 currentColor，
+			 * 槽色 #8fb7ff 由 .dsh-whale-menu-head 品牌规则上色）；ghost 保
+			 * textContent 口径（测试断言 includes('🐳') 不变） */
 			var head = document.createElement('div');
 			head.className = 'dsh-whale-menu-head';
 			var liveN = liveJobs().length;
 			var moodName = MOOD_STAGES[moodStageIndex()].name;
-			head.textContent = '🐳 ' + moodName + (liveN > 0 ? ' · ' + liveN + ' 个任务进行中' : ' · 待命中');
+			setIconLabel(head, '🐳 ' + moodName + (liveN > 0 ? ' · ' + liveN + ' 个任务进行中' : ' · 待命中'));
 			menu.appendChild(head);
 			/* reminder — 快捷操作 group first (#4) */
 			var remindItem = document.createElement('div');
@@ -6314,7 +6373,8 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			panel.textContent = '';
 			var title = document.createElement('div');
 			title.className = 'dsh-whale-wardrobe-title';
-			title.textContent = '🩺 运行状态';
+			/* P1-1 追修三：🩺 彩色 emoji → SVG 心电线稿（ghost 保口径） */
+			setIconLabel(title, '🩺 运行状态');
 			panel.appendChild(title);
 			var rows = [
 				['后台通知通道', rep.server === 'fail' ? '❌ 失效（收不到后台/失败通知）' : '✅ 正常'],
@@ -6341,7 +6401,14 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			}
 			var hint = document.createElement('div');
 			hint.className = 'dsh-whale-settings-section';
-			hint.textContent = '多数失效是页面过期：右键菜单 🔄 刷新页面（或浏览器 Ctrl+F5）即可恢复；仍失效请看控制台 [🐋] 日志';
+			/* P1-1 追修三：行内 UI 引用图形同步 SVG（🔄=菜单刷新行同款、
+			 * [🐋]=品牌鲸标进方括号）；emoji 原文进 ghost，textContent 口径不变 */
+			hint.textContent = '';
+			hint.appendChild(document.createTextNode('多数失效是页面过期：右键菜单 '));
+			hint.appendChild(whInlineIcon('🔄'));
+			hint.appendChild(document.createTextNode(' 刷新页面（或浏览器 Ctrl+F5）即可恢复；仍失效请看控制台 ['));
+			hint.appendChild(whInlineIcon('🐋'));
+			hint.appendChild(document.createTextNode('] 日志'));
 			panel.appendChild(hint);
 			/* footer via shared helper: ← 返回设置 / ✕ 关闭 */
 			mkPanelFoot(panel);
@@ -7138,7 +7205,9 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					'.dsh-whale-pp-tabs{display:flex;gap:8px;margin:6px 0 18px}',
 					'.dsh-whale-pp-tab{padding:7px 20px;border-radius:var(--wh-radius-full);cursor:pointer;border:1px solid var(--wh-panel-border);color:var(--wh-panel-muted);background:transparent;font-size:13px}',
 					'.dsh-whale-pp-tab.on{background:var(--wh-panel-active);color:var(--wh-panel-text)}',
-					'.dsh-whale-pp-sec{margin:20px 0 8px;font-weight:600;color:var(--wh-panel-head);font-size:12px}',
+					/* P3-9（UI 审美 v5 落地）：组签 +1.5px 字距——与抽屉版（3→2px）
+					 * 收敛到同一签名，两语境同形 */
+					'.dsh-whale-pp-sec{margin:20px 0 8px;font-weight:600;letter-spacing:1.5px;color:var(--wh-panel-head);font-size:12px}',
 					'.dsh-whale-pp-row{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-radius:var(--wh-radius-s);cursor:pointer;background:var(--wh-card-bg);border:1px solid var(--wh-card-border);margin:5px 0}',
 					'.dsh-whale-pp-row:hover{background:var(--wh-panel-hover)}',
 					'.dsh-whale-pp-val{color:var(--wh-panel-muted)}',
@@ -7186,7 +7255,8 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					/* 空日：无展开行为——指针与 hover 反馈都收掉（与 .rep-day:hover
 					 * 同特异性、源序在后=胜出） */
 					'.dsh-whale-pp-report .dsh-whale-rep-day-empty{cursor:default}',
-					'.dsh-whale-pp-report .dsh-whale-rep-day-empty:hover{background:var(--wh-panel-hover)}',
+					/* P1-2b：空态 hover 也保持透明（与降级后的底色一致） */
+					'.dsh-whale-pp-report .dsh-whale-rep-day-empty:hover{background:transparent}',
 					'.dsh-whale-rep-day-left{color:var(--wh-panel-text)}',
 					'.dsh-whale-rep-day-right{color:var(--wh-panel-muted);font-size:12px}',
 					/* 展开后的会话明细行：cursor:pointer 只给折叠头与会话行 */
@@ -7287,7 +7357,48 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					'.dsh-whale-pp-manual .dsh-whale-manual-detail .dsh-whale-manual-d{display:inline;margin:0 0 0 8px;font-size:12.5px;line-height:inherit}',
 					/* ⑧ 节奏（4/8 倍数）：首区贴搜索框 4px，状态行收边去大留白 */
 					'.dsh-whale-pp-manual .dsh-whale-history-list>.dsh-whale-manual-sec:first-child{margin-top:4px}',
-					'.dsh-whale-pp-manual .dsh-whale-manual-status{padding:0 2px 2px;font-size:12px}'
+					'.dsh-whale-pp-manual .dsh-whale-manual-status{padding:0 2px 2px;font-size:12px}',
+					/* —— UI 审美 v5 落地（2026-11-19，批准 mockup-04/05 值）—— */
+					/* P2-6a 健康条：✅ emoji → SVG 状态点（ok-dot=mockup-05 批准
+					 * 画法；fail/warn 与周报语义圆片同族），inline-flex 光学居中
+					 * （v4 用户裁决）。追修三：.wh-hdot 规则全局化——恢复提示行
+					 * 在 .pp-health 作用域外也用 warn 圆片，作用域钉死会让行内
+					 * SVG 无尺寸约束渲染成 300×150 默认画布（冒烟实锤） */
+					'.dsh-whale-pp-health>span{display:inline-flex;align-items:center;gap:6px}',
+					'.wh-hdot{display:inline-flex;flex:none;width:14px;height:14px;border-radius:var(--wh-radius-full);align-items:center;justify-content:center;vertical-align:middle}',
+					'.wh-hdot svg{width:12px;height:12px;display:block}',
+					'.wh-hdot-ok{background:rgba(34,197,94,.16)}',
+					'.wh-hdot-fail{background:rgba(236,19,19,.16)}',
+					'.wh-hdot-warn{background:rgba(245,158,11,.18)}',
+					/* P2-6b 开关类值 → 28×16 mini switch（accent 实轨/白钮；
+					 * off=active 底/muted 钮——v4 用户裁决「做得还可以」保留） */
+					'.dsh-whale-pp-switch{position:relative;flex:none;width:28px;height:16px;border-radius:var(--wh-radius-full);background:var(--wh-panel-active);display:inline-block;vertical-align:middle;transition:background .15s ease}',
+					'.dsh-whale-pp-switch::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--wh-panel-muted);transition:left .15s ease,background .15s ease}',
+					'.dsh-whale-pp-switch.on{background:var(--wh-accent)}',
+					'.dsh-whale-pp-switch.on::after{left:14px;background:#ffffff}',
+					/* P2-6c 动作类值 → ghost chip：透明底（v5 二次裁决——与 select
+					 * 灰底一眼可分）+1px 极弱描边+生产 muted 字色（.pp-val 继承） */
+					'.dsh-whale-pp-val.dsh-whale-pp-chip{display:inline-block;padding:3px 10px;border:1px solid var(--wh-panel-border);border-radius:var(--wh-radius-s);background:transparent;font-size:12px;line-height:16px}',
+					/* P1-2 周报数据排版：12px 语义圆片+等宽数字+空态降级（去卡片底
+					 * 改虚线上分隔、12px/75% 透明——数据日自己浮出来） */
+					'.dsh-whale-pp-report .wh-rdot{display:inline-block;width:12px;height:12px;vertical-align:-1.5px;margin:0 2px 0 6px}',
+					'.dsh-whale-pp-report .wh-rnum{font-variant-numeric:tabular-nums;letter-spacing:.2px}',
+					'.dsh-whale-pp-report .dsh-whale-report-summary{font-variant-numeric:tabular-nums}',
+					'.dsh-whale-pp-report .dsh-whale-rep-day-right{font-variant-numeric:tabular-nums}',
+					'.dsh-whale-pp-report .dsh-whale-rep-day-empty{background:transparent;border-top:1px dashed var(--wh-panel-divider);border-radius:0;padding:7px 14px;margin:0;opacity:.75}',
+			/* —— P1-1 追修五（使用说明 Tab，设计专项方案+评审合并清单；每条独立回退=删行）—— */
+			/* P2-1 分区头：15px/600 卡头图标按比例升 16px/-2px */
+			'.dsh-whale-pp-manual .dsh-whale-manual-sec .dsh-whale-ico svg{width:16px;height:16px;transform:translateY(-2px)}',
+			/* P2-2 组头：11px 字号语境 16px 槽/12px svg */
+			'.dsh-whale-pp-manual .dsh-whale-manual-cat .dsh-whale-ico{width:16px}',
+			'.dsh-whale-pp-manual .dsh-whale-manual-cat .dsh-whale-ico svg{width:12px;height:12px;transform:translateY(-1.5px)}',
+			/* P2-3 参考面板圆片：svg 精确居中（text-align 对 svg 无效） */
+			'.dsh-whale-pp-manual .dsh-whale-manual-panel-ico{display:inline-flex;align-items:center;justify-content:center}',
+			'.dsh-whale-pp-manual .dsh-whale-manual-panel-ico svg{width:12px;height:12px;display:block}',
+			/* P1-3+P2-4 矩阵左列语义圆片（repDot 12px 同族；-1.5px=wh-rdot 同值；display/flex-none 与 wh-rdot 同构） */
+			'.dsh-whale-pp-manual .dsh-whale-manual-mx-s .wh-mdot{display:inline-block;flex:none;width:12px;height:12px;vertical-align:-1.5px;margin-right:4px}',
+			/* DSH 官方位图槽（🖥️ 正文引用；值=pet/page.html L20 逐字节） */
+			'.dsh-whale-ico-img{width:16px;height:16px;display:inline-block;vertical-align:middle;border-radius:4px;transform:translateY(-1.8px)}'
 				].join('');
 				(document.head || document.body).appendChild(css); /* vm mock 无 head */
 			}
@@ -7319,7 +7430,10 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			TABS.forEach(function (t) {
 				var b = document.createElement('button');
 				b.className = 'dsh-whale-pp-tab';
-				b.textContent = t[1];
+				/* P1-1 追修四（11-19 用户实机反馈「页签还是 emoji」）：四页签
+				 * 图形 SVG 化（⚙️🐋📊📖 全在 ICON_PATHS）；ghost 保 textContent
+				 * 口径（页签文本断言与 repTabClick 文本定位不变） */
+				setIconLabel(b, t[1]);
 				b.addEventListener('click', function (event) {
 					event.stopPropagation();
 					curTab = t[0];
@@ -7339,12 +7453,14 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			function ppSection(host, label) {
 				var sec = document.createElement('div');
 				sec.className = 'dsh-whale-pp-sec';
-				sec.textContent = label;
+				/* P1-1 追修三：组签经 setIconLabel——🩺 运行状态的彩色 emoji →
+				 * SVG 心电线稿（ghost 保口径）；无字形组签走原 textContent 路径 */
+				setIconLabel(sec, label);
 				host.appendChild(sec);
 			}
 			/* 行语义与 openSettings 逐条同源（同一份 CONFIG/applyConfig）——
 			 * 改动即生效，整页重渲（页面区重渲不波及鲸鱼浮层） */
-			function ppRow(host, label, valueText, onChange) {
+			function ppRow(host, label, valueText, onChange, chip) {
 				var row = document.createElement('div');
 				row.className = 'dsh-whale-pp-row';
 				var l = document.createElement('span');
@@ -7352,6 +7468,9 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				var v = document.createElement('span');
 				v.className = 'dsh-whale-pp-val';
 				v.textContent = valueText;
+				/* P2-6c（UI 审美 v5 落地）：动作类值 → ghost chip（透明底+极弱
+				 * 描边，与 select 灰底一眼可分；字色维持生产 muted） */
+				if (chip) v.classList.add('dsh-whale-pp-chip');
 				row.appendChild(l);
 				row.appendChild(v);
 				row.addEventListener('click', function (event) {
@@ -7372,16 +7491,50 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				if (!rep) rep = { server: 'ok', dom: 'ok', jump: 'warn' };
 				var strip = document.createElement('div');
 				strip.className = 'dsh-whale-pp-health';
+				/* P2-6a（UI 审美 v5 落地）：健康条 ✅ emoji → SVG 状态点（绿 tint
+				 * 圆片+SVG 勾=mockup-05 批准 ok-dot；fail/warn 与周报语义圆片同
+				 * 族）。emoji 原文进 ghost，textContent 口径（'后台通知 ✅'）逐字
+				 * 不变 */
+				function whHealthDot(kind) {
+					var NS = 'http://www.w3.org/2000/svg';
+					var wrap = document.createElement('span');
+					wrap.className = 'wh-hdot wh-hdot-' + kind;
+					var svg = document.createElementNS(NS, 'svg');
+					svg.setAttribute('viewBox', '0 0 12 12');
+					svg.setAttribute('aria-hidden', 'true');
+					var add = function (name, attrs) {
+						var el = document.createElementNS(NS, name);
+						for (var k in attrs) el.setAttribute(k, attrs[k]);
+						svg.appendChild(el);
+					};
+					if (kind === 'ok') {
+						add('path', { d: 'M2.8 6.4 5 8.6l4.2-5', fill: 'none', stroke: '#4ade80', 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+					} else if (kind === 'fail') {
+						add('path', { d: 'M4.2 4.2l3.6 3.6M7.8 4.2 4.2 7.8', stroke: '#f87171', 'stroke-width': 1.6, 'stroke-linecap': 'round' });
+					} else {
+						add('path', { d: 'M6 2.9v3.6', stroke: '#fbbf24', 'stroke-width': 1.5, 'stroke-linecap': 'round' });
+						add('circle', { cx: 6, cy: 9.1, r: 0.8, fill: '#fbbf24' });
+					}
+					wrap.appendChild(svg);
+					return wrap;
+				}
 				var healthItems = [
-					['后台通知', rep.server === 'fail' ? '❌' : '✅'],
-					['用量读取', rep.dom === 'fail' ? '❌' : '✅'],
+					{ label: '后台通知', fail: rep.server === 'fail' },
+					{ label: '用量读取', fail: rep.dom === 'fail' },
 					/* 跳转恒 warn 级（health.js 只产 ok|warn）；详情=鲸鱼头顶 ⚠️
 					 * 的 openHealthPanel 浮层（menu.js 同源三行） */
-					['气泡跳转', rep.jump === 'ok' ? '✅' : '⚠️']
+					{ label: '气泡跳转', warn: rep.jump !== 'ok' }
 				];
 				healthItems.forEach(function (it) {
+					var kind = it.fail ? 'fail' : (it.warn ? 'warn' : 'ok');
+					var glyph = it.fail ? '❌' : (it.warn ? '⚠️' : '✅');
 					var s = document.createElement('span');
-					s.textContent = it[0] + ' ' + it[1];
+					var gh = document.createElement('span');
+					gh.className = 'dsh-whale-ico-ghost';
+					gh.textContent = ' ' + glyph;
+					s.appendChild(document.createTextNode(it.label));
+					s.appendChild(gh);
+					s.appendChild(whHealthDot(kind));
 					strip.appendChild(s);
 				});
 				host.appendChild(strip);
@@ -7390,10 +7543,51 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				 * 旧浮层看详情——鲸鱼锚定场景不违和） */
 				var hint = document.createElement('div');
 				hint.className = 'dsh-whale-pp-status';
-				hint.textContent = '多数失效是页面过期：右键菜单 🔄 刷新页面（或浏览器 Ctrl+F5）即可恢复；「气泡跳转 ⚠️」在浏览器窗口属常态（走侧栏兜底）；仍失效请看控制台 [🐋] 日志';
+				/* P1-1 追修三（11-19 用户实机反馈「提示行还是 emoji」）：行内 UI
+				 * 引用图形同步 SVG——🔄=菜单刷新行同款线稿、⚠️=健康条 warn 圆片
+				 * 同款、[🐋]=品牌鲸标进方括号；emoji 原文进 ghost，textContent
+				 * 口径（'多数失效是页面过期' 前缀断言）逐字节不变 */
+				hint.textContent = '';
+				hint.appendChild(document.createTextNode('多数失效是页面过期：右键菜单 '));
+				hint.appendChild(whInlineIcon('🔄'));
+				hint.appendChild(document.createTextNode(' 刷新页面（或浏览器 Ctrl+F5）即可恢复；「气泡跳转 '));
+				hint.appendChild(whHealthDot('warn'));
+				var hintWarnGh = document.createElement('span');
+				hintWarnGh.className = 'dsh-whale-ico-ghost';
+				hintWarnGh.textContent = '⚠️';
+				hint.appendChild(hintWarnGh);
+				hint.appendChild(document.createTextNode('」在浏览器窗口属常态（走侧栏兜底）；仍失效请看控制台 ['));
+				hint.appendChild(whInlineIcon('🐋'));
+				hint.appendChild(document.createTextNode('] 日志'));
 				host.appendChild(hint);
 				ppSection(host, '通知');
-				ppRow(host, '🔔 开工通知', CONFIG.notifyOnStart ? '开' : '关', function () {
+				/* P2-6b（UI 审美 v5 落地）：开关类值 → 28×16 mini switch（用户
+				 * 裁决保留）。「开/关」字面进 0 尺寸 ghost——textContent 口径
+				 * （测试断言 includes('开')/includes('关') 与读屏）逐字不变，
+				 * 状态视觉由 switch 承担 */
+				function ppSwitchRow(host, label, isOn, offText, onChange, onText) {
+					var row = document.createElement('div');
+					row.className = 'dsh-whale-pp-row';
+					var l = document.createElement('span');
+					setIconLabel(l, label);
+					var v = document.createElement('span');
+					v.className = 'dsh-whale-pp-val';
+					var ghost = document.createElement('span');
+					ghost.className = 'dsh-whale-ico-ghost';
+					ghost.textContent = isOn ? (onText || '开') : (offText || '关');
+					var sw = document.createElement('span');
+					sw.className = 'dsh-whale-pp-switch' + (isOn ? ' on' : '');
+					v.appendChild(ghost);
+					v.appendChild(sw);
+					row.appendChild(l);
+					row.appendChild(v);
+					row.addEventListener('click', function (event) {
+						event.stopPropagation();
+						onChange();
+					});
+					host.appendChild(row);
+				}
+				ppSwitchRow(host, '🔔 开工通知', CONFIG.notifyOnStart, '关', function () {
 					if (applyConfig({ notifyOnStart: !CONFIG.notifyOnStart })) saveConfig();
 					render();
 				});
@@ -7458,8 +7652,9 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					});
 				ppSection(host, '声音');
 				/* 总静音（主观痛点 4）：菜单 🔇 的页面镜像——菜单里静音着时
-				 * 页内调音量依然无声，此前页面无法解释这个现象 */
-				ppRow(host, '🔊 声音总开关', window.__dshWhale.soundMuted && window.__dshWhale.soundMuted() ? '关（静音中）' : '开', function () {
+				 * 页内调音量依然无声，此前页面无法解释这个现象。
+				 * P2-6b：值改 mini switch（off 态=静音中，ghost 保留完整字面） */
+				ppSwitchRow(host, '🔊 声音总开关', !(window.__dshWhale.soundMuted && window.__dshWhale.soundMuted()), '关（静音中）', function () {
 					if (window.__dshWhale.setSoundMuted) window.__dshWhale.setSoundMuted(!window.__dshWhale.soundMuted());
 					render();
 				});
@@ -7486,7 +7681,15 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					var row = document.createElement('div');
 					row.className = 'dsh-whale-pp-row';
 					var l = document.createElement('span');
-					l.textContent = k.label;
+					/* P1-1 追修四：音色四行 ✅❌❓⏰ 图形 SVG 化（ghost 保口径）。
+					 * 标签正文收进独立 span——试听反馈改 textContent 原位改写
+					 * （旧 textContent 整体重赋会抹掉图标 DOM；不抓 setIconLabel
+					 * 的尾文本节点——vm 测试桩无 lastChild，自建元素桩上稳妥） */
+					l.appendChild(whInlineIcon(k.label.slice(0, k.label.indexOf(' '))));
+					var labelRest = k.label.slice(k.label.indexOf(' '));
+					var labelText = document.createElement('span');
+					labelText.textContent = labelRest;
+					l.appendChild(labelText);
 					var sel = document.createElement('select');
 					sel.className = 'dsh-whale-sound-sel';
 					k.opts.forEach(function (opt) {
@@ -7509,8 +7712,8 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 						var mutedNow = false;
 						try { mutedNow = !!(window.__dshWhale.soundMuted && window.__dshWhale.soundMuted()); } catch (e) { }
 						if (!mutedNow) previewDing(k.kind);
-						l.textContent = k.label + (mutedNow ? ' 🔇（总开关静音）' : ' ♪');
-						setTimeout(function () { l.textContent = k.label; }, 1800);
+						labelText.nodeValue = labelRest + (mutedNow ? ' 🔇（总开关静音）' : ' ♪');
+						setTimeout(function () { labelText.nodeValue = labelRest; }, 1800);
 					};
 					sel.addEventListener('change', function () {
 						var pa = {}; pa[k.key] = sel.value;
@@ -7537,7 +7740,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					toneOpen = !toneOpen;
 					__ppToneOpen = toneOpen; /* 模块级记忆：别的行触发重渲也不收走展开态 */
 					toneDetail.style.display = toneOpen ? 'block' : 'none';
-				});
+				}, true); /* P2-6c：动作类值 → ghost chip */
 				host.appendChild(toneDetail);
 				ppSection(host, '监控');
 				var TOOL_PRESETS = [5000, 8000, 15000, 30000, 60000];
@@ -7555,7 +7758,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			/* 行内闪现反馈（11-11 用户实报「点了没动静」）：exportHistory 的
 			 * 反馈走 uiSay 鲸鱼气泡——桌宠运行时页鲸休眠=打在隐藏元素里零可
 			 * 见反馈。页面行自带 ✓ 闪现，不依赖鲸鱼可见性 */
-			function ppFlashRow(host, label, valueText, onDo) {
+			function ppFlashRow(host, label, valueText, onDo, chip) {
 				var row = document.createElement('div');
 				row.className = 'dsh-whale-pp-row';
 				var l = document.createElement('span');
@@ -7563,6 +7766,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				var v = document.createElement('span');
 				v.className = 'dsh-whale-pp-val';
 				v.textContent = valueText;
+				if (chip) v.classList.add('dsh-whale-pp-chip'); /* P2-6c ghost chip */
 				row.appendChild(l);
 				row.appendChild(v);
 				var flashTimer = null;
@@ -7587,18 +7791,20 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				 * ——无条件闪「已复制」会在写失败时假成功，而失败气泡在桌宠
 				 * 在岗时打进隐藏元素零可见） */
 				exportHistory('md', function (ok) { flash(ok ? '✓ Markdown 已复制 📋' : '复制失败 🥲'); });
-			});
+			}, true); /* P2-6c：动作类值 → ghost chip */
 			ppFlashRow(host, '📤 导出历史', 'CSV → 下载文件', function (flash) {
 				if (!history.length) { flash('还没有记录可导出 🐳'); return; }
 				exportHistory('csv', function (ok) { if (ok) flash('✓ CSV 已下载 📤'); });
-			});
+			}, true);
 			ppSection(host, '诊断');
 			var debugNow = false;
 			try { debugNow = localStorage.getItem('dsh-whale:debug') === 'on'; } catch (e) {}
-			ppRow(host, '🩺 调试模式', debugNow ? '开（取证中）' : '关', function () {
+			/* P2-6 追修（11-19 用户实机反馈「调试模式还是旧版」）：开关类值全量
+			 * 统一——调试模式同样改 mini switch；「开（取证中）」字面进 ghost */
+			ppSwitchRow(host, '🩺 调试模式', debugNow, '关', function () {
 				try { localStorage.setItem('dsh-whale:debug', debugNow ? 'off' : 'on'); } catch (e) {}
 				render();
-			});
+			}, '开（取证中）');
 			ppSection(host, '关于');
 			/* 版本行（11-11 基线⑫：官方设置页同款「当前版本」；取共享 IIFE
 			 * 作用域的 PATCH_VERSION（core/constants.js，build 可覆写）） */
@@ -7632,7 +7838,10 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				FORMS.forEach(function (f) {
 					var b = document.createElement('button');
 					b.className = 'dsh-whale-pp-petbtn';
-					b.textContent = f[1];
+					/* P1-1（UI 审美 v5 落地）：三卡 🐋🪟🙈 彩色 emoji → SVG 线稿
+					 * （鲸鱼 logo path / 圆角窗 / 闭眼，与桌宠 flyout 同一套
+					 * ICON_PATHS）；ghost 保 textContent 口径（命名统一断言不变） */
+					setIconLabel(b, f[1]);
 					b.addEventListener('click', function (event) {
 						event.stopPropagation();
 						if (!petEnabled) return; /* 未启用：点击无效（主观痛点 10：注定失败的按钮=困惑发生器） */
@@ -7644,7 +7853,15 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 							}).then(function (r) { return r.json(); }).then(function (j) {
 								if (j && j.ok && j.pet) {
 									markForm(j.pet.form);
-									status.textContent = '已切换 ✓（当前形态：' + f[1] + '）';
+									/* P1-1 追修（11-19 用户实机反馈「当前形态没同步更新」）：
+									 * 提示行里的形态 emoji → 与三卡同款 SVG 线稿；ghost 保
+									 * textContent 口径（'…当前形态：🐋 完整形态）'逐字节不变） */
+									status.textContent = '';
+									status.appendChild(document.createTextNode('已切换 ✓（当前形态：'));
+									var curIco = document.createElement('span');
+									setIconLabel(curIco, f[1]);
+									status.appendChild(curIco);
+									status.appendChild(document.createTextNode('）'));
 								} else {
 									status.textContent = '切换失败：' + (j && j.error || '未知错误');
 								}
@@ -7750,6 +7967,105 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			] }
 		];
 		function mountWhaleManualTab(content) {
+			/* —— P1-1 追修五（11-19 使用说明 Tab emoji 收口，设计专项+评审合并清单）——
+			 * 行内 UI 引用图形构建期组合：ppBuildDesc/ppBuildMxCell 把说明串按 A 类字形簇
+			 * 切装配（文本段+SVG/img 槽+ghost），textContent 逐字节不变（ghost 保原文）。
+			 * 搜索命中/清空恢复与初始渲染共用同一装配函数=图形永不退回裸 emoji（评审
+			 * P1-A：矩阵逐格命中是第四条 DOM 重建路径，同一函数自然覆盖）。
+			 * 偏差声明：设计方案的「后置 walker（ppDecorateText）」在 vm 测试桩上不可行
+			 * （桩无 childNodes/insertBefore/lastChild），改为构建期组合——契约等价
+			 * （textContent/扁平 DOM/类名/_m* 全保），DOM 操作更少且 vm 可测。
+			 * K 类保留（▶/⚠️/🔍 不进 PP_A_RE）：引用面真身即字符本身（whale.js 实测）。 */
+			var PP_DSH_ICON_URI = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAcmSURBVFhHzZd7jFTlGcZNbePfShPByN6cGeZ+2Rlm9mqBBWUXWWAXlI1b1grW1JbWNFWKguwq7ErFKgoJG8UWBWPUYIIJSWtwoVxKy7IglFrZKuCyMzuXMzNn5tzPmXnM952ZYWf2Av7RpG/y5OTMOd/3/M77ve93ztx22/9bDAwM/FCSpGZFUZ6TZXmrKIqTis+Lv7lEUd6qKMpGURQXr1q16vZSz0KkUqn7M5nMF/gfhqpp51iWrSv1Jub1mqbJ5CZN06CqapEUIqVUCuTxkosllUhWVB1C1cQYywYK5pcvX75DUZSv9IvFxjeHKAG5CYQoKxRCEMRLg4ODP6IAHMe1TPXkk2kqkFvNRj4TyWRyEQUQBGHLzZ6+VFNB3Go2SKQ4biMF4Hm+7/sCUGkqMpkMtEymCIJmM5OZFoREmud78gDbpgMgJlMFMUiyLD0Sc03L4Oq1EaTSHF3SUgiVLNWNDGyZFoBMkI+vv7mCE6dOY+DocXxx4V/424m/Y1N3L1rbO7FzV38BNJPJomvdenx08FM6jvxGlotkhAQBlCTabOCmA8ibE8OOzrVweRtgtHphsHhhc9fCZJ+LcoMLFmctvrr83xxmFuk0h4XN7fAEmrB7zzvIZrP0iihJOHvuAjZ1v0yzMy1A3vztvftQfp8N5ffZYXX6YXfXwu6powDk6PQ2wOqqxS9/8yyi0RgdQ4pwZcfjMFj9KDdWY/uOXdi4eRuaWzvgCSzEmrXrC/NPCUDir58dwexKC8w2L+zumoIcnlo4PHVwVNdTubyNqDS50bz0YbpMJHbv2Ysygxtu/3zMcdTBaKuB0zcPFlcDPvz4EL1nSgCSMp4X0LK0DeVVFpjtXlidc+HwEPMSiByIy9cIg6UaTYuX45srV+nkv3p6A2yeBlTXNMFR3QhPYAFe7H2VFiCpgykBSHw+cAwmixutKx5GZ9c6PLhkBRzuAAxmN+zuAAXIg7h9jRSEAJBMEIhL//4PYgwDX80CeGuasOXF7Th+8jR9OFKk+VblOEEHSKeLAV794074Ag0IhcboIIZhcPLUaTy3uQduXz1MVk8BwuoMYFlbB+2EhYtXoMLghL+uCY92PQmX737Uz2vG6GiQzqtltMIGVgTAptMUIN+fm17ogcvjx9hYmJ6Pj7ND57C8vQNVJiecnlqYrF6sfGQNzdrw8NeYv2gp7RSjxQuntxFLlq0GE4/TseO7jEQBIMHqAGKuP7f1/gGz7q3CiZOnigbmqzeRSGLNz36OSqMDNpcfgfoF6Ox6gl47/Y8zMDv8ere4arD+6Q1ANjvhPUMBhBwAk2ApAC9I9MK+9w7gzhmzsLV3exHA+MHxeAItre0wmF0w2320Td/auw9/+ewIfDXzaF1YnAG8/8FHU85B3kE6AKMDpHkRmSxw7vxFGOfYUFP3E4Ryy0D6u3SCoaHzsLnmwuLwweb004xUmVywe2rh8tbjgZYVCIcjtI6mBYgyCQrApgVwgkRflz/tWos7Z8zE85t7dABV38MJyPh4c9celFWaYXf5KQQ5enwNsDjmYv/7H9J7Ss0nAISjOkAyxVMIkoVjx0/BYLSgrMKAP+3bXzAkqX9mw/M48vlRek6e7rHHn0RZlZm2KBEB2dLTm2u7zATzCQChsA4QT3JIsDySKQFkq3j9jd2YdU8ZKipNeGXH64UiXfvEU5hx92z0vNRHJ+N5HsvbV6PKaIPV4YO/bj7ODA7Re0uLb1KAYJihALFEGkySoyApToSsZrH9lddQXmnE3TPvxdLWNry0tQ9tK1ejospMO2XVI53455mzuHjxEpa0tsNocdFNjID89ncbwXH8pFkoArgeYraRJ47E04jG04glOArCciIUDfj44CE0LWqm2bjrxzNRXmmCxeaGxebC7AojyirnYHHLMuw/8AGOHjuO/rfewWs7d+HgJ4cgitKkWSgC+DYY6yM/hWMpRJiUDkFB0oizPNQscD0YwZ/fPYBfPPVrtC5vx4PND+Gh1jaseWwd+l7egcGh83TS0tDUieZ5AFEU9S+ib4OxF0hthyIsxqJsMUhCz0iKlymIIGuIxBK4HgwjHGFo15Agb31SI0T5biGdU2pckoHfU4ArI8FmQQWCkSRVKMpiLDYRhCwLKdIUJ4ETFHCCjDQv0f2DIxIkupkJog6ifwHrn2rjzfM7ajKZXEgBDh8+fMdIKP6lqAKj4cREEGYiyI2O0Vs3xQlIczqIDiFBFGX6+UVAxm9kJCRJutDf36//LyAxPHy9Np4SRQJBjPMQwQibA0nlQPKFmgNhbwGEQEhy4S2oqiqfTCZ9BfN8fDl8tY5JiWd5GVCygEyU0UXOyXCSPNIx+pfe9w9ZVs/EYrEbf8smiduvjcYeCEUTz46EmO4rI+EiXRuNUo0QhaLdoyGmezTMdIdyCkcTVFEihojtTrDpbo4Tnsmt+Q/Gm30HtnYm0fWSPxUAAAAASUVORK5CYII=';
+			var PP_A_RE = /🔄|🖥️|🎭|🐋|🪟|🙈|⚙️|📊|🔊|🎨/g;
+			function ppGlyphSlot(g) {
+				if (g === '🖥️' && PP_DSH_ICON_URI) {
+					var ic = document.createElement('span');
+					ic.className = 'dsh-whale-ico';
+					var img = document.createElement('img');
+					img.className = 'dsh-whale-ico-img';
+					img.src = PP_DSH_ICON_URI;
+					img.alt = '';
+					ic.appendChild(img);
+					var gh = document.createElement('span');
+					gh.className = 'dsh-whale-ico-ghost';
+					gh.textContent = g;
+					ic.appendChild(gh);
+					return ic;
+				}
+				return whInlineIcon(g);
+			}
+			function appendSeg(el, seg, q) {
+				if (!q) { el.appendChild(document.createTextNode(seg)); return; }
+				var lower = seg.toLowerCase(), ql = q.toLowerCase(), i2 = 0;
+				for (;;) {
+					var hitAt = lower.indexOf(ql, i2);
+					if (hitAt < 0) { el.appendChild(document.createTextNode(seg.slice(i2))); break; }
+					if (hitAt > i2) el.appendChild(document.createTextNode(seg.slice(i2, hitAt)));
+					var mk = document.createElement('mark');
+					mk.textContent = seg.substr(hitAt, q.length);
+					el.appendChild(mk);
+					i2 = hitAt + q.length;
+				}
+			}
+			function ppBuildDesc(el, text, q) {
+				el.textContent = '';
+				var i = 0, m;
+				PP_A_RE.lastIndex = 0;
+				while ((m = PP_A_RE.exec(text))) {
+					if (m.index > i) appendSeg(el, text.slice(i, m.index), q);
+					el.appendChild(ppGlyphSlot(m[0]));
+					i = m.index + m[0].length;
+				}
+				if (i < text.length) appendSeg(el, text.slice(i), q);
+			}
+			/* 通知矩阵左列语义圆片（D 类）：done/fail/ask 几何=周报 repDot 逐字节；warn=
+			 * ask tint+健康条叹号 path 组合（生产无 repDot('warn')，评审走查 #14）。ghost
+			 * 收编簇后空格（评审 P2-A）：textContent 逐字节、可见间隙恰 4px。 */
+			var PP_MX_DOTS = [
+				{ pre: '✅', kind: 'done' },
+				{ pre: '❌', kind: 'fail' },
+				{ pre: '❓🛡', kind: 'ask' },
+				{ pre: '🌡', kind: 'warn' }
+			];
+			function ppMdot(kind) {
+				var NS = 'http://www.w3.org/2000/svg';
+				var svg = document.createElementNS(NS, 'svg');
+				svg.setAttribute('viewBox', '0 0 12 12');
+				svg.setAttribute('class', 'wh-mdot');
+				svg.setAttribute('aria-hidden', 'true');
+				var add = function (n, a) { var e = document.createElementNS(NS, n); for (var k in a) e.setAttribute(k, a[k]); svg.appendChild(e); };
+				if (kind === 'done') {
+					add('circle', { cx: 6, cy: 6, r: 6, fill: '#22c55e', 'fill-opacity': '.18' });
+					add('path', { d: 'M3.4 6.2 5.2 8l3.4-3.8', fill: 'none', stroke: '#4ade80', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+				} else if (kind === 'fail') {
+					add('circle', { cx: 6, cy: 6, r: 6, fill: '#ec1313', 'fill-opacity': '.18' });
+					add('path', { d: 'M4.2 4.2l3.6 3.6M7.8 4.2 4.2 7.8', stroke: '#f87171', 'stroke-width': 1.6, 'stroke-linecap': 'round' });
+				} else if (kind === 'ask') {
+					add('circle', { cx: 6, cy: 6, r: 6, fill: '#f59e0b', 'fill-opacity': '.18' });
+					add('path', { d: 'M4.6 4.6a1.5 1.5 0 1 1 2 1.4c-.5.2-.6.5-.6 1v.2', fill: 'none', stroke: '#fbbf24', 'stroke-width': 1.4, 'stroke-linecap': 'round' });
+					add('circle', { cx: 6, cy: 9.1, r: 0.7, fill: '#fbbf24' });
+				} else {
+					add('circle', { cx: 6, cy: 6, r: 6, fill: '#f59e0b', 'fill-opacity': '.18' });
+					add('path', { d: 'M6 2.9v3.6', stroke: '#fbbf24', 'stroke-width': 1.5, 'stroke-linecap': 'round' });
+					add('circle', { cx: 6, cy: 9.1, r: 0.8, fill: '#fbbf24' });
+				}
+				return svg;
+			}
+			function ppBuildMxCell(el, text, q) {
+				var hit = null;
+				for (var i3 = 0; i3 < PP_MX_DOTS.length; i3++) {
+					if (text.indexOf(PP_MX_DOTS[i3].pre) === 0) { hit = PP_MX_DOTS[i3]; break; }
+				}
+				if (!hit) { el.textContent = text; return; }
+				el.textContent = '';
+				el.appendChild(ppMdot(hit.kind));
+				var gh2 = document.createElement('span');
+				gh2.className = 'dsh-whale-ico-ghost';
+				gh2.textContent = hit.pre + ' ';
+				el.appendChild(gh2);
+				appendSeg(el, text.slice(text.indexOf(' ') + 1), q);
+			}
 			/* 固定高度滚动区（用户反馈「点开来突然变大」）：折叠/展开框尺寸
 			 * 恒定，内容超出只在区内滚 */
 			var wrap = document.createElement('div');
@@ -7796,12 +8112,12 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 						el.classList.remove('dsh-whale-hide');
 						el.classList.remove('dsh-whale-help-hit');
 						if (el._mT) el._mT.textContent = el._mTerm;
-						if (el._mD) el._mD.textContent = el._mDesc;
+						if (el._mD) ppBuildDesc(el._mD, el._mDesc);
 						if (el._mG) el._mG.textContent = el._mTerm;
 						/* 通知矩阵逐格恢复（11-13 视觉重构 _mCells 契约：格挂
 						 * {el,text} 数组，与 _mT/_mD 同一恢复语义） */
 						if (el._mCells) {
-							for (var ci = 0; ci < el._mCells.length; ci++) el._mCells[ci].el.textContent = el._mCells[ci].text;
+							for (var ci = 0; ci < el._mCells.length; ci++) ppBuildMxCell(el._mCells[ci].el, el._mCells[ci].text);
 						}
 						continue;
 					}
@@ -7816,14 +8132,14 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 						if (el._mG) {
 							highlightAll(el._mG, el._mTerm, q);
 							/* 11-13 编号行带说明行：说明同样参与命中高亮 */
-							if (el._mD) highlightAll(el._mD, el._mDesc, q);
+							if (el._mD) ppBuildDesc(el._mD, el._mDesc, q);
 						} else {
 							if (el._mT) highlightAll(el._mT, el._mTerm, q);
-							if (el._mD) highlightAll(el._mD, el._mDesc, q);
+							if (el._mD) ppBuildDesc(el._mD, el._mDesc, q);
 						}
 						/* 通知矩阵逐格命中高亮（mark 逻辑同一套 highlightAll） */
 						if (el._mCells) {
-							for (var cj = 0; cj < el._mCells.length; cj++) highlightAll(el._mCells[cj].el, el._mCells[cj].text, q);
+							for (var cj = 0; cj < el._mCells.length; cj++) ppBuildMxCell(el._mCells[cj].el, el._mCells[cj].text, q);
 						}
 						if (!first) first = el;
 					}
@@ -7884,7 +8200,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				 * 由注入 CSS 排到行尾（CSS 旋转指示折叠态） */
 				var ts = document.createElement('span');
 				ts.className = 'dsh-whale-manual-sec-t';
-				ts.textContent = t;
+				setIconLabel(ts, t);
 				el.appendChild(ts);
 				/* 分区头右侧徽标/摘要（11-13 三层重构）：折叠分区在收起态也能
 				 * 一眼看到里面装了什么；flex 布局由注入 CSS 追加规则接管 */
@@ -7922,7 +8238,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				if (desc) {
 					var d = document.createElement('div');
 					d.className = 'dsh-whale-manual-d';
-					d.textContent = desc;
+					ppBuildDesc(d, desc);
 					el.appendChild(d);
 				}
 				/* 原文与节点引用留在行上——搜索高亮/恢复用（mark 拆分文本节点
@@ -7949,7 +8265,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					 * 搜索高亮/恢复契约：_mDesc/_mD 与词条行同构） */
 					var d2 = document.createElement('div');
 					d2.className = 'dsh-whale-manual-d';
-					d2.textContent = desc;
+					ppBuildDesc(d2, desc);
 					row.appendChild(d2);
 					row._mDesc = desc;
 					row._mD = d2;
@@ -7985,7 +8301,12 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				h.className = 'dsh-whale-manual-panel-h';
 				var ico = document.createElement('span');
 				ico.className = 'dsh-whale-manual-panel-ico';
-				ico.textContent = icon;
+				ico.textContent = '';
+							ico.appendChild(buildIconSvg(ICON_PATHS[icon]));
+							var igh = document.createElement('span');
+							igh.className = 'dsh-whale-ico-ghost';
+							igh.textContent = icon;
+							ico.appendChild(igh);
 				var t = document.createElement('div');
 				t.className = 'dsh-whale-manual-t';
 				t.textContent = term;
@@ -8005,7 +8326,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				pairs.forEach(function (p) {
 					var st = document.createElement('span');
 					st.className = 'dsh-whale-manual-mx-s';
-					st.textContent = p[0];
+					ppBuildMxCell(st, p[0]);
 					var act = document.createElement('span');
 					act.className = 'dsh-whale-manual-mx-a';
 					act.textContent = p[1];
@@ -8025,7 +8346,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				if (desc) {
 					var d = document.createElement('div');
 					d.className = 'dsh-whale-manual-d';
-					d.textContent = desc;
+					ppBuildDesc(d, desc);
 					built.panel.appendChild(d);
 					built.el._mDesc = desc;
 					built.el._mD = d;
@@ -8040,7 +8361,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			var catRow = function (label) {
 				var el = document.createElement('div');
 				el.className = 'dsh-whale-manual-cat';
-				el.textContent = label;
+				setIconLabel(el, label);
 				list.appendChild(el);
 				manualCatEls.push(el);
 				el._mCat = manualCatEls.length - 1;
@@ -8113,9 +8434,55 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		function mountWhaleReportTab(content) {
 			var list = document.createElement('div');
 			list.className = 'dsh-whale-history-list';
+			/* P1-2（UI 审美 v5 落地）：周报语义圆片——12×12 tint 底 + 语义色符
+			 * （done 绿勾 / fail 红 X / killed 灰方 / ask 琥珀问号，mockup-04
+			 * 批准画法）。emoji 原文由调用方放进 0 尺寸 ghost——textContent
+			 * 口径（'✅2 ❌1'、断言 includes('❓')）逐字不变 */
+			var REP_NS = 'http://www.w3.org/2000/svg';
+			function repDot(kind) {
+				var svg = document.createElementNS(REP_NS, 'svg');
+				svg.setAttribute('viewBox', '0 0 12 12');
+				svg.setAttribute('class', 'wh-rdot');
+				svg.setAttribute('aria-hidden', 'true');
+				var add = function (name, attrs) {
+					var el = document.createElementNS(REP_NS, name);
+					for (var k in attrs) el.setAttribute(k, attrs[k]);
+					svg.appendChild(el);
+				};
+				if (kind === 'done') {
+					add('circle', { cx: 6, cy: 6, r: 6, fill: '#22c55e', 'fill-opacity': '.18' });
+					add('path', { d: 'M3.4 6.2 5.2 8l3.4-3.8', fill: 'none', stroke: '#4ade80', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+				} else if (kind === 'fail') {
+					add('circle', { cx: 6, cy: 6, r: 6, fill: '#ec1313', 'fill-opacity': '.18' });
+					add('path', { d: 'M4.2 4.2l3.6 3.6M7.8 4.2 4.2 7.8', stroke: '#f87171', 'stroke-width': 1.6, 'stroke-linecap': 'round' });
+				} else if (kind === 'killed') {
+					add('rect', { x: 1, y: 1, width: 10, height: 10, rx: 2.5, fill: '#81858c', 'fill-opacity': '.4' });
+				} else {
+					add('circle', { cx: 6, cy: 6, r: 6, fill: '#f59e0b', 'fill-opacity': '.18' });
+					add('path', { d: 'M4.6 4.6a1.5 1.5 0 1 1 2 1.4c-.5.2-.6.5-.6 1v.2', fill: 'none', stroke: '#fbbf24', 'stroke-width': 1.4, 'stroke-linecap': 'round' });
+					add('circle', { cx: 6, cy: 9.1, r: 0.7, fill: '#fbbf24' });
+				}
+				return svg;
+			}
+			function repCount(host, kind, glyph, n) {
+				host.appendChild(repDot(kind));
+				var gh = document.createElement('span');
+				gh.className = 'dsh-whale-ico-ghost';
+				gh.textContent = glyph;
+				host.appendChild(gh);
+				var num = document.createElement('span');
+				num.className = 'wh-rnum';
+				num.textContent = String(n);
+				host.appendChild(num);
+			}
 			function build() {
 			list.textContent = ''; /* 重渲前清空——pullCloudHistory 回调二次 build 不叠加（11-11 用户实报双份） */
-			var fmtK = function (n) { return n >= 10000 ? (n / 1000).toFixed(1) + 'K' : n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K' : n; };
+			/* P1-2：token 量级统一——≥1M 一位小数 M 制（7536.1K→7.5M、
+			 * 1368.0K→1.4M，mockup-04 批准）；K 段口径不变 */
+			var fmtK = function (n) {
+				if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+				return n >= 10000 ? (n / 1000).toFixed(1) + 'K' : n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K' : n;
+			};
 			var weekAgo = Date.now() - 7 * 864e5;
 			var days = {};
 			var hasAny = false;
@@ -8156,7 +8523,21 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			var sumRow = document.createElement('div');
 			sumRow.className = 'dsh-whale-report-summary';
 			sumRow.title = '任务数与 token 按日聚合；周报窗口 7 天';
-			sumRow.textContent = '今日 ' + todayKey + ' · ✅' + (tb ? tb.done : 0) + ' ❌' + (tb ? tb.fail : 0) + ' ⏹' + (tb ? tb.killed : 0) + ' ❓' + (tb ? tb.ask : 0) + ' · ' + fmtK(tb ? tb.tokens : 0) + ' tok · ' + (tb ? Object.keys(tb.sessions).length : 0) + ' 个对话';
+			/* P1-2：计数 emoji → 语义圆片+等宽数字（ghost 保 textContent 口径） */
+			sumRow.textContent = '';
+			sumRow.appendChild(document.createTextNode('今日 ' + todayKey + ' · '));
+			repCount(sumRow, 'done', '✅', tb ? tb.done : 0);
+			sumRow.appendChild(document.createTextNode(' '));
+			repCount(sumRow, 'fail', '❌', tb ? tb.fail : 0);
+			sumRow.appendChild(document.createTextNode(' '));
+			repCount(sumRow, 'killed', '⏹', tb ? tb.killed : 0);
+			sumRow.appendChild(document.createTextNode(' '));
+			repCount(sumRow, 'ask', '❓', tb ? tb.ask : 0);
+			sumRow.appendChild(document.createTextNode(' · '));
+			var sumTok = document.createElement('span');
+			sumTok.className = 'wh-rnum';
+			sumTok.textContent = fmtK(tb ? tb.tokens : 0) + ' tok · ' + (tb ? Object.keys(tb.sessions).length : 0) + ' 个对话';
+			sumRow.appendChild(sumTok);
 			list.appendChild(sumRow);
 			if (!hasAny) {
 				var empty = document.createElement('div');
@@ -8188,12 +8569,26 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					continue;
 				}
 				var open = ppReportOpenDays.has(dkey);
-				var parts = [];
-				if (db.done) parts.push('✅' + db.done);
-				if (db.fail) parts.push('❌' + db.fail);
-				if (db.killed) parts.push('⏹' + db.killed);
-				if (db.ask) parts.push('❓' + db.ask);
-				right.textContent = parts.join(' ') + (db.tokens ? ' · ' + fmtK(db.tokens) + ' tok' : '');
+				/* P1-2：非零桶逐个渲染语义圆片+等宽数字（ghost 保口径，空格分隔
+				 * 与原 parts.join(' ') 一致） */
+				right.textContent = '';
+				var firstCount = true;
+				var pushCount = function (kind, glyph, n) {
+					if (!firstCount) right.appendChild(document.createTextNode(' '));
+					firstCount = false;
+					repCount(right, kind, glyph, n);
+				};
+				if (db.done) pushCount('done', '✅', db.done);
+				if (db.fail) pushCount('fail', '❌', db.fail);
+				if (db.killed) pushCount('killed', '⏹', db.killed);
+				if (db.ask) pushCount('ask', '❓', db.ask);
+				if (db.tokens) {
+					right.appendChild(document.createTextNode(' · '));
+					var tokEl = document.createElement('span');
+					tokEl.className = 'wh-rnum';
+					tokEl.textContent = fmtK(db.tokens) + ' tok';
+					right.appendChild(tokEl);
+				}
 				left.textContent = (open ? '▾ ' : '▸ ') + dkey + ' · ' + Object.keys(db.sessions).length + ' 个对话';
 				head.appendChild(left);
 				head.appendChild(right);

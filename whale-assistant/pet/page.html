@@ -18,6 +18,9 @@
      会让 inline-block 槽基线掉到底缘=图标/文字分层；必须与 svg 槽完全同款
      （inline-block+vertical-align:middle，水平居中由槽的 text-align:center 承担） */
   .dsh-whale-ico-img { width: 16px; height: 16px; display: inline-block; vertical-align: middle; border-radius: 4px; transform: translateY(-1.8px); }
+  /* P1-1 危险色 SVG 化（UI 审美 v5 落地）：菜单「❌ 关闭」行红 X 线稿上色
+     （mockup-01 批准值 #f87171；几何 24vb X、stroke 2.2 由 JS 侧构建） */
+  .dsh-whale-ico-danger { color: #f87171; }
   /* v12b（11-13）：桌宠文档没有宿主 CSS——--wh-* 全套在此钉死为暗色值
      （桌宠无亮色模式）。必须 !important：client.js 后注入的 style.css
      (:root,body 块，亮色兜底) 同特异性会覆盖这里，暗底深字=用户实锤
@@ -31,7 +34,9 @@
     --wh-card-border: rgba(255, 255, 255, 0.14) !important;
     --wh-panel-border: rgba(255, 255, 255, 0.12) !important;
     --wh-panel-divider: rgba(255, 255, 255, 0.08) !important;
-    --wh-panel-hover: rgba(255, 255, 255, 0.08) !important;
+    /* P2-8（UI 审美 v5 落地）：hover 白 8%→10%——悬停感可辨（mockup-01
+     * 批准值）；active 14% 保持 */
+    --wh-panel-hover: rgba(255, 255, 255, 0.10) !important;
     --wh-panel-active: rgba(255, 255, 255, 0.14) !important;
     --wh-accent: #7aaaff !important;
   }
@@ -64,9 +69,10 @@
     filter: none !important;
     backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
   }
-  /* 红标：原生实色红胶囊，保底色只去投影 */
+  /* 红标：原生实色红胶囊。P1-4（UI 审美 v5 落地）：投影改 2px 深底环——
+     红标压在鲸身上时与身体分离（mockup-03 批准值，桌宠语境同环） */
   .dsh-whale-badge {
-    box-shadow: none !important;
+    box-shadow: 0 0 0 2px #1b1b1c !important;
     filter: none !important;
   }
   /* 气泡形态（第一批三态之一；10-31 用户反馈重做）：不是把鲸鱼缩小——
@@ -96,9 +102,12 @@
        10px（pet.ps1 bp=10），22px 模糊外影溢出裁剪线=灰晕在区域边缘被硬切
        出一个方块边。桌宠语境「一律去阴影」既定原则（见上方版面修正）同样
        适用于气泡卡——玻璃质感由 渐变+高光描边+内投影 三层承担。 */
+    /* P3-10（UI 审美 v5 落地 · v5 收缩为仅边缘光）：内晕第三层灰系
+       rgba(200,200,205,0.10) → accent rgba(122,170,255,0.22)，只作用于
+       卡缘/轮廓（mockup-07 批准值）；鲸鱼线稿一笔不动（v5 撤回 P3-10a） */
     box-shadow: inset 0 1px 0 rgba(255,255,255,0.50),
                 inset 0 -8px 14px rgba(200,200,205,0.14),
-                inset 0 0 18px rgba(200,200,205,0.10);
+                inset 0 0 18px rgba(122,170,255,0.22);
   }
   body.pet-form-bubble #pet-bubble { opacity: 1; transform: scale(1) rotate(0deg); }
   /* 线稿鲸鱼：同一条 logo path，气泡语境下 stroke 化（线条而非实心）。
@@ -744,7 +753,30 @@
       var row = document.createElement('div');
       row.id = 'pet-menu-close';
       row.className = 'dsh-whale-menu-item';
-      row.textContent = '❌ 关闭';
+      /* P1-1 危险色 SVG 化（UI 审美 v5 落地）：❌ 红色 emoji 位图 → 危险色
+         X 线稿（mockup-01 批准画法：24vb X、stroke 2.2、#f87171）；emoji
+         原文进 0 尺寸 ghost，textContent 口径不变 */
+      var closeIc = document.createElement('span');
+      closeIc.className = 'dsh-whale-ico dsh-whale-ico-danger';
+      try {
+        var NS = 'http://www.w3.org/2000/svg';
+        var xSvg = document.createElementNS(NS, 'svg');
+        xSvg.setAttribute('viewBox', '0 0 24 24');
+        xSvg.setAttribute('fill', 'none');
+        xSvg.setAttribute('stroke', 'currentColor');
+        xSvg.setAttribute('stroke-width', '2.2');
+        xSvg.setAttribute('stroke-linecap', 'round');
+        var xPath = document.createElementNS(NS, 'path');
+        xPath.setAttribute('d', 'M18 6 6 18M6 6l12 12');
+        xSvg.appendChild(xPath);
+        closeIc.appendChild(xSvg);
+      } catch (eX) { closeIc.textContent = '❌'; }
+      var closeGhost = document.createElement('span');
+      closeGhost.className = 'dsh-whale-ico-ghost';
+      closeGhost.textContent = '❌';
+      closeIc.appendChild(closeGhost);
+      row.appendChild(closeIc);
+      row.appendChild(document.createTextNode(' 关闭'));
       row.addEventListener('click', function (ev) {
         ev.stopPropagation();
         try {

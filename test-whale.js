@@ -3943,6 +3943,36 @@ async function main() {
 		mIn._fire('input', {});
 		assert.strictEqual(mStatus.textContent, '', 'status cleared on empty query');
 		assert.strictEqual(mList.children.filter((c) => c.classList.contains('dsh-whale-hide')).length, 0, 'all rows restored');
+
+		/* P1-1 追修五回归（评审 P2-D）：搜索往返图形不丢——矩阵格命中态/恢复态都是
+		 * 语义圆片（wh-mdot）+ghost，行内 A 类槽全程存活，textContent 逐字节 */
+		const mxRow = mList.children.find((c) => c._mCells);
+		assert.ok(mxRow && mxRow._mCells.length === 8, 'matrix cells contract intact for decoration roundtrip');
+		const mxCell0 = mxRow._mCells[0].el;
+		const mxDotCount = (el) => el.children.filter((c) => c._attrs && c._attrs.class === 'wh-mdot').length;
+		assert.strictEqual(mxCell0.textContent, '✅ 完成', 'matrix cell textContent byte-identical pre-search');
+		assert.ok(mxDotCount(mxCell0) === 1, 'initial matrix cell carries the semantic dot');
+		mIn.value = '完成';
+		mIn._fire('input', {});
+		assert.ok(mxRow.classList.contains('dsh-whale-help-hit'), 'matrix row hits on 完成');
+		assert.ok(mxDotCount(mxCell0) === 1, 'HIT state keeps the dot (P1-A regression: 4th rebuild path covered)');
+		assert.strictEqual(mxCell0.textContent, '✅ 完成', 'hit state textContent byte-identical');
+		mIn.value = '';
+		mIn._fire('input', {});
+		assert.strictEqual(mxCell0.textContent, '✅ 完成', 'restore keeps cell textContent');
+		assert.ok(mxDotCount(mxCell0) === 1, 'restore keeps the dot');
+		const openRow = mList.children.find((c) => c._mDesc && c._mDesc.indexOf('🔄') >= 0);
+		assert.ok(openRow && openRow._mD, 'A-class desc row found');
+		const slotCount = (el) => el.children.filter((c) => (c.className || '') === 'dsh-whale-ico').length;
+		assert.ok(slotCount(openRow._mD) >= 3, 'initial desc decorated with SVG slots (🔄🖥️🎭…)');
+		assert.ok(openRow._mD.children.some((c) => (c.children || []).some((g) => g.tag === 'img')), 'DSH bitmap img slot present for 🖥️ (img nested in the slot span)');
+		mIn.value = '刷新';
+		mIn._fire('input', {});
+		assert.ok(slotCount(openRow._mD) >= 3, 'hit state keeps desc slots');
+		mIn.value = '';
+		mIn._fire('input', {});
+		assert.ok(slotCount(openRow._mD) >= 3, 'restore keeps desc slots');
+		assert.strictEqual(openRow._mD.textContent.indexOf('🔄') >= 0 && openRow._mD.textContent.indexOf('🖥️') >= 0, true, 'ghost 口径: desc textContent byte-identical');
 		/* #7 history search: highlight + "找到 N 条记录" */
 		BG.pushHistory({ title: '修复登录页 bug', sessionId: 'session-h1', kind: 'done', at: Date.now() });
 		BG.pushHistory({ title: '写周报并同步', sessionId: 'session-h2', kind: 'done', at: Date.now() });

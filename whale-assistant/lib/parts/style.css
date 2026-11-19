@@ -167,15 +167,19 @@ body[data-ds-dark-theme] {
 	width: max-content;
 	max-width: min(340px, 72vw);
 	box-sizing: border-box;
-	padding: 8px 12px;
-	border-radius: var(--wh-radius-m);
+	/* P1-4 气泡排版精修（UI 审美 v5 落地 2026-11-19，mockup-03 批准值）：
+	 * 内距 8×12→9×14 / 圆角 12→10（小面积去面团感）/ 行距 18→19 /
+	 * 发丝描边——无阴影语境（桌宠去阴影）下轮廓分离靠 1px 白 10% 描边 */
+	padding: 9px 14px;
+	border: 1px solid rgba(255, 255, 255, 0.10);
+	border-radius: 10px;
 	background: var(--dsh-whale-bubble-bg, #ffffff);
 	color: var(--dsh-whale-bubble-fg, #1f2a44);
 	box-shadow: 0 1px 2px rgba(20, 40, 90, 0.1), 0 6px 20px rgba(20, 40, 90, 0.16);
 	-webkit-backdrop-filter: blur(10px);
 	backdrop-filter: blur(10px);
 	font-size: 12px;
-	line-height: 18px;
+	line-height: 19px;
 	font-family: var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
 	white-space: pre-wrap;
 	/* CJK 断词（P0）：keep-all 只在空格/标点处断行，"工具"这类词不再被劈开；
@@ -204,9 +208,11 @@ body[data-ds-dark-theme] {
 .dsh-whale-bubble::after {
 	content: "";
 	position: absolute;
+	/* P1-4：尾巴 6→8px、锚点 right 22→18px——与红标（right 2px+18px 宽）
+	 * 纵轴对齐，指向系统成立（mockup-03 批准值） */
 	top: 100%;
-	right: 22px;
-	border: 6px solid transparent;
+	right: 18px;
+	border: 8px solid transparent;
 	border-top-color: var(--dsh-whale-bubble-bg, #ffffff);
 }
 /* 气泡动态边界（2026-11-04 用户实报「动态边界」）：气泡原生只向上弹
@@ -250,7 +256,8 @@ body[data-ds-dark-theme] {
 	font-weight: 600;
 	text-align: center;
 	font-family: var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
-	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+	/* P1-4：红标 2px 深底环——与鲸身分离（mockup-03 批准值，替换旧投影） */
+	box-shadow: 0 0 0 2px #1b1b1c;
 	pointer-events: auto;
 	cursor: pointer;
 	display: none;
@@ -455,16 +462,31 @@ body[data-ds-dark-theme] {
 	transform: translateY(0) scale(1);
 	pointer-events: auto;
 }
+/* P2-5（UI 审美 v5 落地）：壳内距 6→5px 仅右键菜单（mockup-01 批准面；
+ * 抽屉/面板壳保持 6px 不动） */
+.dsh-whale-menu {
+	padding: 5px;
+}
 .dsh-whale-menu-head {
+	/* P2-5：头部 600 字重 + 0.2px 字距——身份行立起来（mockup-01 批准值） */
 	padding: 4px 10px 6px;
 	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.2px;
 	color: var(--wh-panel-head);
 	border-bottom: 1px solid var(--wh-panel-divider);
 	margin-bottom: 4px;
 	white-space: nowrap;
 }
+/* P1-1：菜单头品牌鲸鱼线标（ICON_PATHS['🐳'] 经 setIconLabel 渲染），
+ * 槽内 svg 由 currentColor 上色——桌宠语境 periwinkle，即 mockup-01 批准的
+ * hd-brand #8fb7ff */
+.dsh-whale-menu-head .dsh-whale-ico {
+	color: #8fb7ff;
+}
 .dsh-whale-menu-item {
-	padding: 6px 10px;
+	/* P2-5：行高 32→30px（mockup-01 批准值） */
+	padding: 5px 10px;
 	border-radius: var(--wh-radius-s);
 	cursor: pointer;
 	white-space: nowrap;
@@ -501,6 +523,9 @@ body[data-ds-dark-theme] {
 }
 .dsh-whale-menu-item:hover {
 	background: var(--wh-panel-hover);
+	/* P2-8（UI 审美 v5 落地）：2px accent 左嵌线——hover 感知可辨
+	 * （mockup-01 批准值） */
+	box-shadow: inset 2px 0 0 var(--wh-accent);
 }
 .dsh-whale-menu-item:active {
 	background: var(--wh-panel-active);
@@ -715,7 +740,9 @@ body[data-ds-dark-theme] {
 	30% { transform: translateY(-4px) scale(1.06) rotate(-2deg); }
 	60% { transform: translateY(2px) scale(0.98) rotate(2deg); }
 }
-/* hearts floating up when petted (motion is JS-driven) */
+/* hearts floating up when petted (motion is JS-driven).
+ * P3-11（UI 审美 v5 落地）：光晕色收敛到 #ff6b9d 家族（#ffb3cd）——
+ * 粒子色单一族，不再混入第二色系 */
 .dsh-whale-heart {
 	position: absolute;
 	font-size: 12px;
@@ -723,7 +750,7 @@ body[data-ds-dark-theme] {
 	pointer-events: none;
 	transform: translate(-50%, -50%);
 	color: #ff6b9d;
-	text-shadow: 0 0 6px rgba(255, 107, 157, 0.55);
+	text-shadow: 0 0 6px rgba(255, 179, 205, 0.6);
 }
 
 /* history drawer: search input + clear row + report summary */
@@ -768,11 +795,13 @@ body[data-ds-dark-theme] {
 /* settings section headers (通知/声音/监控/数据/诊断) */
 .dsh-whale-settings-section {
 	/* 层级（用户反馈）：分组标题带上方分隔线 + 宽字距，行再内缩嵌套，
-	 * 组与组、组与行一眼可分 */
+	 * 组与组、组与行一眼可分。
+	 * P3-9（UI 审美 v5 落地）：字距 3→2px——与页面版组签（pp-sec
+	 * +1.5px）收敛到同一签名，两语境同形 */
 	margin: 9px 8px 3px;
 	padding: 3px 6px;
 	font-size: 11px;
-	letter-spacing: 3px;
+	letter-spacing: 2px;
 	color: var(--wh-panel-muted);
 	border-top: 1px solid var(--wh-panel-divider);
 }

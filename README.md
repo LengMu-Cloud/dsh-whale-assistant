@@ -42,7 +42,7 @@
 
 | 组件 | 要求 |
 |---|---|
-| DeepSeek Harness | 实测版本 **0.1.7-rc.2**（npm `latest`，2026-09-28）、**0.2.0-rc.2**（官方桌面端捆绑，2026-09-29 桌面迁移实测）与 **0.2.1-rc.3**（官方桌面端，2026-10-24 三层复查实测）三版本；兼容下限见 `whale-assistant/package.json` 的 `dsh.engines`；插件只走公开插件接口与 HTTP 路由。0.1.5 起「上下文已用 N%」由内联文字改为发送按钮旁的环形件；插件压力数据 0.3.3 起改由 DSH 的 token-meter 服务端投影供给，报告压力行/压力色/提醒不受官方 UI 改版影响 |
+| DeepSeek Harness | 实测版本 **0.1.7-rc.2**（npm `latest`，2026-09-28）、**0.2.0-rc.2**（官方桌面端捆绑，2026-09-29 桌面迁移实测）与 **0.2.1-rc.3**（官方桌面端，2026-10-24 三层复查实测）、**0.2.2-rc.5**（官方桌面端 nightly，2026-11-19 实测）五版本；兼容下限见 `whale-assistant/package.json` 的 `dsh.engines`；插件只走公开插件接口与 HTTP 路由。0.1.5 起「上下文已用 N%」由内联文字改为发送按钮旁的环形件；插件压力数据 0.3.3 起改由 DSH 的 token-meter 服务端投影供给，报告压力行/压力色/提醒不受官方 UI 改版影响 |
 | Git | 路径 A 的 install.ps1 用它克隆仓库（已装可跳过克隆、用 `-Repo` 指向本地副本）；路径 C（插件市场）不需要 |
 | Node.js | 跟随 DSH 自身要求即可（开发机 v24 实测）；仅改源码/构建/跑测试时需要 |
 | 操作系统 | 插件本体为纯 JS，跨平台；自动化脚本为 PowerShell（Windows），macOS/Linux 按下文手动步骤 |
@@ -270,7 +270,7 @@ localStorage 可留可删）：
 ```text
 node build-whale.js      # 重建 whale.js + whale-map.md，并同步发布副本到 whale-assistant/lib/
                          # 构建时强制：顶层声明重复断言 / menu 热点 guard / KNOWN-COUPLING 登记表
-node test-whale.js       # vm 沙箱单元测试，701+ 断言
+node test-whale.js       # vm 沙箱单元测试，963+ 断言
 node test-chip-gate.js   # 芯片闸门纯函数测试，19 断言
 node test-host-store.js  # 宿主半区账本测试（临时目录驱动），20 断言
 node scripts/audit-deps.js        # 静态架构审计（作用域/依赖边/缝清单/时序契约 lint，自检前置）
@@ -293,7 +293,7 @@ node scripts/run-e2e.js  # CDP 端到端四场景（调试口 9222 不可达时�
 | `install.ps1` | 一键安装：克隆（或定位本地仓库）+ 注册 + junction + 体检，支持 `-TargetProfile web\|both`、`-Repo <本地路径>` |
 | `ensure-whale-assistant.ps1` | 插件注册脚本（写 profile 依赖 + 注册行，幂等）；`-Check` 只读体检 / `-Remove` 对称卸载 |
 | `parts/style.css` | 鲸鱼全部样式 |
-| `test-whale.js` / `test-chip-gate.js` / `test-host-store.js` | 单元测试（vm 沙箱 701+ 断言 / 闸门纯函数 19 断言 / 宿主半区账本 20 断言） |
+| `test-whale.js` / `test-chip-gate.js` / `test-host-store.js` | 单元测试（vm 沙箱 963+ 断言 / 闸门纯函数 19 断言 / 宿主半区 113 检查） |
 | `FEATURES.md` / `CHANGELOG.md` / `docs/seams.md` | 用户功能手册 / 版本变更记录 / 调试与测试导出缝清单 |
 | `shell/` + `scripts/fix-shell.ps1` | 旧桌面瘦壳源码与安装脚本（**已退役**，官方桌面端覆盖其全部增量；保留供参考） |
 | `docs/shell-setup.md` | 桌面壳手动安装指南（遗留参考） |

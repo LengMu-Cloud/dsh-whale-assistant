@@ -235,8 +235,8 @@
 
 ```
 node build-whale.js     # 重建 whale.js + whale-map.md，并同步发布副本到 whale-assistant/lib/
-node test-whale.js      # 单元测试（vm 沙箱 701+ 断言）
-node test-host-store.js # 宿主半区测试（账本 20 断言 + 路由栅栏 8 断言）
+node test-whale.js      # 单元测试（vm 沙箱 963+ 断言）
+node test-host-store.js # 宿主半区测试（113 检查）
 node test-chip-gate.js  # 芯片闸门纯函数测试（19 断言）
 node scripts/audit-deps.js       # 静态架构审计（发现问题以非零退出码失败）
 node check-dsh-compat.js --static "<DSH 目录>"  # DSH 升级前耦合点扫描

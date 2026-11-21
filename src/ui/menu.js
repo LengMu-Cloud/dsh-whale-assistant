@@ -304,7 +304,22 @@
 			 * 变、localStorage 不可跨重启）；本地变更后本 boot 权威值在本地，
 			 * /pet/state 轮询回声不再反向覆盖。 */
 			affectionKnown = true;
-			pushPetSync({ aff: affection });
+			/* 陪伴小账入账（11-20 P-09）：摸头=一次 'pet' 互动。PET_MODE 走
+			 * pushPetSync 既有通道（interact 字段透传宿主账本）；页鲸侧
+			 * pushPetSync 不出网——直走 /pet/ctrl ledger 通道入账。
+			 * fire-and-forget：账本是统计不是状态，失败静默不伤功能。 */
+			pushPetSync({ aff: affection, interact: 'pet' });
+			if (!PET_MODE) {
+				try {
+					if (typeof fetch === 'function') {
+						fetch('/api/whale-assistant/pet/ctrl', {
+							method: 'POST',
+							headers: { 'content-type': 'application/json' },
+							body: JSON.stringify({ action: 'ledger', kind: 'pet' })
+						}).catch(function () { });
+					}
+				} catch (eLedger) { }
+			}
 			uiSay(petLine(), 3200);
 			whale.classList.remove('dsh-whale-pet');
 			void whale.offsetWidth;
@@ -479,6 +494,67 @@
 				if (!jumped) uiSay('设置住在 DSH 侧边栏的「小鲸鱼助手」页面里', 2600);
 			});
 			menu.appendChild(settingsItem);
+			/* 📊 周报（0.4.3 阶段 C，mock-c 批准面：位置=设置 之后、DSH 窗口/
+			 * 刷新页面 之前）：点了直跳侧边栏页的周报 Tab（昨夜摘要/今日小结
+			 * 都在那里）。页鲸=selectPanel 桥 + openTab('report') 直切（阶段 B
+			 * 缝，摘要气泡点击同款，ppPendingReportTab 意向位补齐异步 mount
+			 * 时序缝）；桌宠=POST open-report 宿主广播（设置行 open-settings
+			 * 同款 broadcast+revive+delivered 兜底文案），帧消费端=server-events
+			 * pet/open-report → panel-page 胶水监听执行真跳转。 */
+			var reportItem = document.createElement('div');
+			reportItem.className = 'dsh-whale-menu-item';
+			setIconLabel(reportItem, '📊 周报');
+			reportItem.addEventListener('click', function (event) {
+				event.stopPropagation();
+				closeCtxMenu();
+				if (PET_MODE) {
+					/* 桌宠页没有 layout 桥也没有 DSH DOM——走宿主广播（与设置行
+					 * 同通道）：POST open-report → pet/open-report 帧 → 页鲸
+					 * selectPanel+openTab('report')；delivered 后 c:'revive' 拉
+					 * DSH 前台（ps1 该分支只做前台化，同设置行）。页鲸不在场
+					 * （DSH 关着）=delivered:false → 提示，不假装成功。 */
+					try {
+						fetch('/api/whale-assistant/pet/ctrl', {
+							method: 'POST',
+							headers: { 'content-type': 'application/json' },
+							body: JSON.stringify({ action: 'open-report' })
+						}).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (out) {
+							/* 无论 delivered 都唤回窗口——delivered=true 也可能只是
+							 * 退出挂起的僵尸渲染层在场（设置行 v2 同款判断） */
+							try {
+								if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+									window.chrome.webview.postMessage({ c: 'revive' });
+								}
+							} catch (e2) { }
+							if (out && out.ok === true && out.delivered === false) {
+								uiSay('DSH 窗口已关——打开后再点一次周报就好 🐳', 3500);
+							} else if (out && out.ok === true) {
+								uiSay('已打开小鲸鱼助手周报 ✓', 1800);
+							} else {
+								uiSay('跳转指令没有送达，稍后再试 🥲', 2500);
+							}
+						}).catch(function () { uiSay('跳转指令没有送达，稍后再试 🥲', 2500); });
+					} catch (e) { uiSay('周报住在 DSH 侧边栏的「小鲸鱼助手」页面里', 2600); }
+					return;
+				}
+				/* 页鲸：layout 桥直达（client.js inject stash）+ 周报 Tab 直切；
+				 * 桥缺席（0.1.x web 老引擎）→ 气泡指路兜底 */
+				var jumped = false;
+				try {
+					if (typeof window.__dshWhaleSelectPanel === 'function') {
+						window.__dshWhaleSelectPanel('whale-assistant');
+						jumped = true;
+					}
+				} catch (e) { jumped = false; }
+				ppPendingReportTab = true;
+				try {
+					if (window.__dshWhalePanel && typeof window.__dshWhalePanel.openTab === 'function') {
+						window.__dshWhalePanel.openTab('report');
+					}
+				} catch (eTab) { }
+				if (!jumped) uiSay('周报住在 DSH 侧边栏的「小鲸鱼助手」页面里', 2600);
+			});
+			menu.appendChild(reportItem);
 			/* refresh (B-2 desktop): the official desktop binds NO F5/Ctrl+R —
 			 * plugin updates and recovery both need a page reload, and the
 			 * whale menu is the reachable way to get one.
@@ -517,8 +593,11 @@
 						} },
 						{ label: '🖥️ 打开 DSH 窗口', onPick: function () {
 							closeCtxMenu();
+							/* I-②-1 文案诚实化（0.4.3 阶段 C）：reviveDsh 是 fire-
+							 * and-forget 唤回指令，「已唤 DSH 窗口」承诺了结果而
+							 * 实际只发出了指令——改说指令语义（反撒谎同族）。 */
 							try { window.__dshPetHost.reviveDsh(); } catch (eRevive) { }
-							uiSay('已唤 DSH 窗口 🐬', 2000);
+							uiSay('已发送唤回指令 🐬', 2000);
 						} }
 					];
 				}));

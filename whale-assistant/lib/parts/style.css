@@ -25,8 +25,62 @@
 	--wh-radius-s: 8px;
 	--wh-radius-m: 12px;
 	--wh-radius-full: 999px;
-	/* 毛玻璃保留（实底下 blur 无副作用）；阴影去蓝改中性 */
-	--wh-glass: blur(14px) saturate(1.5);
+	/* —— token 第一波（0.4.3 阶段 C，05b §2.2 十二项；分批跟随式机制见
+	 * 05b §2.1）——除注明「已批值变化」（P2-1 玻璃档 / P2-3 阴影清退 /
+	 * P3-3 note 材质）外全部为定义新增或等值替换；半像素档（手册批准的
+	 * 三个 .5 中间档，05b P1-3 挂账清单）不进 --wh-fs-* 表（禁增）。
+	 * 命名沿用 05 P1-1/P1-2 表。
+	 * 毛玻璃保留（实底下 blur 无副作用）；阴影去蓝改中性（panel 阴影历史已
+	 * 改，气泡/note 两处本波随 ⑥ 清退）。 */
+	/* ① 十二阶灰阶（05 P1-1 表，纯挂账建表——新代码颜色从此只能从表选） */
+	--wh-gray-1: #1b1b1c;                    /* App 主背景 */
+	--wh-gray-2: #232324;                    /* 微妙组件背景 */
+	--wh-gray-3: #2c2c2e;                    /* 组件默认背景（=现 card-bg 深色值） */
+	--wh-gray-4: rgba(255, 255, 255, 0.06);  /* 组件 hover 背景 */
+	--wh-gray-5: rgba(255, 255, 255, 0.14);  /* 组件按下/选中背景（=现 active） */
+	--wh-gray-6: rgba(255, 255, 255, 0.08);  /* 非交互边框（divider） */
+	--wh-gray-7: rgba(255, 255, 255, 0.12);  /* 交互组件边框（=现 panel-border） */
+	--wh-gray-8: rgba(255, 255, 255, 0.16);  /* 交互组件 hover 边框（暂无消费者） */
+	--wh-gray-9: #7aaaff;                    /* accent（桌宠侧现值） */
+	--wh-gray-10: #4176e6;                   /* accent hover（页鲸侧现值） */
+	--wh-gray-11: #cfd3d6;                   /* 次要文本/图标（=现 muted 深色值） */
+	--wh-gray-12: #f9fafb;                   /* 主文本 */
+	/* ②③④ JS SVG 工厂亮变体（P1-4 class 路线的 CSS 侧） */
+	--wh-ok-strong: #4ade80;
+	--wh-warn-strong: #fbbf24;
+	--wh-danger-strong: #f87171;
+	/* ⑤ 截断灰（repDot killed） */
+	--wh-neutral: #81858c;
+	/* ⑥ P2-3 补课弹层阴影（本波唯一指定消费替换：气泡/notes 蓝味清退） */
+	--wh-shadow-pop: 0 1px 2px rgba(0, 0, 0, 0.10), 0 6px 20px rgba(0, 0, 0, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+	/* ⑦ P2-1（已批值变化）：14px/1.5→16px/1.6（U10 经典档）；降级底见文件尾
+	 * @supports 块。红线：禁动画 blur 值（现状 grep 证无一处动画 blur）。 */
+	--wh-glass: blur(16px) saturate(1.6);
+	/* ⑧ mockup-03 分离环挂账具名（防被当普通投影误改；本波不消费替换） */
+	--wh-badge-ring: 0 0 0 2px #1b1b1c;
+	/* ⑨ 圆角：气泡 10px 批准值挂账具名（mockup-03「小面积去面团感」，本波
+	 * 不改消费点）；l:16px 新档（P3-5 周报卡收底）；s 档 8px 不改（06 裁决） */
+	--wh-radius-bubble: 10px;
+	--wh-radius-l: 16px;
+	/* ⑩ 五时长（16 档里新动效代码最爱抄的热点；29 处声明替换随 0.5.1 P1-2） */
+	--wh-dur-fast: 150ms;
+	--wh-dur-base: 200ms;
+	--wh-dur-enter: 300ms;
+	--wh-dur-slow: 500ms;
+	--wh-dur-ambient: 5s;
+	/* ⑪ 四曲线（U3；spring=现有进场签名曲线 token 化保留） */
+	--wh-ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+	--wh-ease-decel: cubic-bezier(0.05, 0.7, 0.1, 1);
+	--wh-ease-accel: cubic-bezier(0.3, 0, 0.8, 0.15);
+	--wh-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+	/* ⑫ 六字号 + 菜单密度（半像素档不进表；本波定义挂账，替换随 0.5.1） */
+	--wh-fs-xs: 10px;
+	--wh-fs-s: 11px;
+	--wh-fs-m: 12px;
+	--wh-fs-l: 13px;
+	--wh-fs-xl: 14px;
+	--wh-fs-2xl: 20px;
+	--wh-sp-menu-row: 5px 10px;
 	--wh-shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 /* 搜索命中高亮（宿主无对应 alias）：暗色下调成低饱和暗黄，避免刺眼 */
@@ -175,9 +229,17 @@ body[data-ds-dark-theme] {
 	border-radius: 10px;
 	background: var(--dsh-whale-bubble-bg, #ffffff);
 	color: var(--dsh-whale-bubble-fg, #1f2a44);
-	box-shadow: 0 1px 2px rgba(20, 40, 90, 0.1), 0 6px 20px rgba(20, 40, 90, 0.16);
+	/* P2-3 补课（0.4.3 阶段 C）：蓝味 rgba(20,40,90) → --wh-shadow-pop 中性
+	 * 弹层阴影——「阴影去蓝改中性」同类改全红线的现行违例清退（几何不变、
+	 * 色味去蓝+补 inset 高光，已批值变化）。 */
+	box-shadow: var(--wh-shadow-pop);
 	-webkit-backdrop-filter: blur(10px);
 	backdrop-filter: blur(10px);
+	/* I-①-1（0.4.3 阶段 C）：高度封顶第二保险——常态只限高不滚动（overflow
+	 * 会把 ::after 尾巴裁掉并出幻影滚动条，常规气泡外观必须零变化）；实测
+	 * 超高才由 uiSay 挂 .dsh-whale-bubble-capped 进内部滚动档（入泡 truncate
+	 * 200 字是第一保险，双保险防御纵深）。 */
+	max-height: min(50vh, 280px);
 	font-size: 12px;
 	line-height: 19px;
 	font-family: var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
@@ -192,6 +254,16 @@ body[data-ds-dark-theme] {
 	transform-origin: bottom right;
 	transition: opacity 0.18s ease;
 	z-index: 2;
+}
+/* I-①-1 滚动档（仅实测超高时由 uiSay 挂上；常规气泡永不进本档） */
+.dsh-whale-bubble.dsh-whale-bubble-capped {
+	overflow-y: auto;
+	overflow-x: hidden;
+}
+/* I-①-2（0.4.3 阶段 C）：可跳转气泡（带会话）的指针 affordance——台词
+ * 气泡不可跳不装可点；原生 title 由 bubble.js 随 uiSay 挂。 */
+.dsh-whale-bubble.dsh-whale-bubble-link {
+	cursor: pointer;
 }
 .dsh-whale-bubble.show {
 	opacity: 1;
@@ -762,7 +834,9 @@ body[data-ds-dark-theme] {
 	background: var(--wh-card-bg);
 	color: var(--wh-panel-text);
 	font-size: 12px;
-	outline: none;
+	/* P1-5（0.4.3 阶段 C）：outline:none 已删——它把键盘焦点环整个抹掉
+	 * （05b §五.1 修正后的诊断：键盘焦点环缺失）。:focus 的 border accent
+	 * 变化保留（双保险），焦点环交给文件尾的 :focus-visible 全局规则。 */
 	width: calc(100% - 20px);
 	box-sizing: border-box;
 }
@@ -887,7 +961,10 @@ body[data-ds-dark-theme] {
 	word-break: keep-all;
 }
 
-/* faint transient note above the whale (clear-all feedback #10) */
+/* faint transient note above the whale (clear-all feedback #10).
+ * P3-3（0.4.3 阶段 C，已批值变化）：材质统一——蓝味阴影 → --wh-shadow-pop
+ * （P2-3 清退）、blur(8px) 第四档收编主玻璃档 --wh-glass（P2-1）、
+ * opacity 0.85→0.92（可读性优先，瞬态签也要能读清「已清空 N 条」）。 */
 .dsh-whale-note {
 	position: absolute;
 	bottom: calc(100% + 58px);
@@ -900,10 +977,10 @@ body[data-ds-dark-theme] {
 	font-size: 11px;
 	line-height: 1.4;
 	white-space: nowrap;
-	box-shadow: 0 1px 2px rgba(30, 41, 59, 0.08), 0 4px 12px rgba(30, 41, 59, 0.1);
-	-webkit-backdrop-filter: blur(8px);
-	backdrop-filter: blur(8px);
-	opacity: 0.85;
+	box-shadow: var(--wh-shadow-pop);
+	-webkit-backdrop-filter: var(--wh-glass);
+	backdrop-filter: var(--wh-glass);
+	opacity: 0.92;
 	transition: opacity 0.4s ease;
 	pointer-events: none;
 	z-index: 3;
@@ -1188,5 +1265,34 @@ body[data-ds-dark-theme] {
 .dsh-whale-panel-back {
 	margin-top: 0;
 	color: var(--wh-accent);
+}
+
+/* P1-5（0.4.3 阶段 C）：全局键盘焦点环——:focus-visible 只在键盘导航时
+ * 出现（鼠标/触摸点击不显示，UA 语义即「键盘才显示」），accent 2px 环
+ * （Radix step 7 焦点环语义）。源序在 .dsh-whale-history-search 之后：
+ * 该输入框的 outline:none 已删，环在这里接管（:focus 的 border accent
+ * 变化保留=双保险）。偏离记录：05 原案的 border-radius 行不实现——它会
+ * 在聚焦瞬间改写任意元素的几何（pp-tab 胶囊会临时变方角），违反「外观
+ * 一像素不变」纪律；outline 自动跟随元素自身圆角。 */
+:focus-visible {
+	outline: 2px solid var(--wh-accent);
+	outline-offset: 2px;
+}
+
+/* P2-1（0.4.3 阶段 C）：无 backdrop-filter 环境的降级底——降级路径此前
+ * 缺失，不支持的环境玻璃面直接透明=底层文字透上来（真缺口）。0.92 alpha
+ * 出自 02-U10 原配方；底色 #1b1b1c=深夜色板基色（--wh-gray-1）。宿主
+ * WebView2/Chrome 支持 backdrop-filter，本块是极端残引擎的兜底。 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+	.dsh-whale-status,
+	.dsh-whale-menu,
+	.dsh-whale-wardrobe,
+	.dsh-whale-history,
+	.dsh-whale-settings,
+	.dsh-whale-menu-sub,
+	.dsh-whale-manual-sec,
+	.dsh-whale-note {
+		background: #1b1b1cE0;
+	}
 }
 

@@ -57,6 +57,26 @@
 			tasksDone: gearStats.tasksDone,
 			date: todayKey()
 		});
+		/* BUG-1 后半程（0.4.3 阶段 B）：每日装饰计数困在桌宠页每-boot 失忆的
+		 * localStorage——PET_MODE 下沿 pushPetSync 进 petDoc（{date,count} 成对；
+		 * date 错位=隔日存量，宿主 boot 回放后页侧按 loadGearStats 同款过期
+		 * 规则归零）。容量预算：日期 10 字符 + 计数宿主侧钳顶 9999999。
+		 * fire-and-forget：宿主离线静默，下次计数自然补上。 */
+		if (PET_MODE) pushPetSync({ gearStats: { date: todayKey(), count: gearStats.tasksDone } });
+	}
+
+	/** BUG-1 后半程（0.4.3 阶段 B）：宿主 /pet/state 下行的装饰计数快照采用
+	 * ——本地已有（键存在）不覆盖（幂等，与 petSyncFromHost 同款）；日期
+	 * 错位（隔日存量）按 loadGearStats 同款规则归零；由 ui/drawers.js 的
+	 * petSyncExtrasFromHost 转发。坏形状整字段丢弃。 */
+	function adoptGearStatsFromHost(date, count) {
+		try {
+			if (localStorage.getItem(GEAR_STATS_KEY) !== null) return;
+		} catch (e) { return; /* 存储不可用：放弃采用 */ }
+		if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+		gearStats.tasksDone = (date === todayKey() && typeof count === 'number' && isFinite(count) && count >= 0)
+			? Math.min(9999999, Math.floor(count)) : 0;
+		saveGearStats();
 	}
 
 	/** Day rollover while the page stays open: a once-a-minute check resets

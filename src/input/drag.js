@@ -2,6 +2,11 @@
 		var drag = null;
 		var clickTimer = null;
 		var caughtFlag = false;
+		/* I-①-3（0.4.3 阶段 C）：单击/双击区分阈值收口——硬编码 260 曾与红标
+		 * badgeClickTimer（bootstrap.js BADGE_CLICK_VS_DBL_MS）同值不同源，
+		 * 改一漏一即行为分叉。模块独立不跨文件共享常量（build 全 IIFE 共享
+		 * 作用域的重名禁令），两处各自文件顶部具名。 */
+		var CLICK_VS_DBL_MS = 260;
 
 		/** Quick trembling shake of the whale's body (used when caught). */
 		function caughtShake() {
@@ -115,7 +120,7 @@
 					renderUnread();
 				}
 				uiSay(clickSummary());
-			}, 260);
+			}, CLICK_VS_DBL_MS);
 		});
 
 		whale.addEventListener('pointercancel', function (event) {

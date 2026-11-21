@@ -2,6 +2,11 @@
 		var whaleEl = document.getElementById('dsh-whale');
 		if (!whaleEl) return;
 		whale = whaleEl;
+		/* I-①-3（0.4.3 阶段 C）：红标单击/双击区分阈值收口——与鲸体单击的
+		 * CLICK_VS_DBL_MS（src/input/drag.js）同值不同源曾是分叉隐患；模块
+		 * 独立不跨文件共享常量（build 全 IIFE 共享作用域的重名禁令），各自
+		 * 文件顶部具名。 */
+		var BADGE_CLICK_VS_DBL_MS = 260;
 		/* 开机防双鲸（11-05 第三层，用户实报「一打开 DSH 就两只小金鱼，DSH
 		 * 的闪一下才消失」）：非桌宠页**元素创建即隐藏**——不信任缓存 0
 		 * （每次关 DSH 桌宠跟随死亡都会把缓存写成 0，冷开必踩 spawn 窗口
@@ -314,7 +319,7 @@
 			badgeClickTimer = setTimeout(function () {
 				badgeClickTimer = null;
 				if (!readNext()) uiSay(clickSummary());
-			}, 260);
+			}, BADGE_CLICK_VS_DBL_MS);
 		});
 		badge.addEventListener('dblclick', function (event) {
 			event.stopPropagation();
@@ -344,5 +349,19 @@
 			/* faint count feedback (#10): the number answers "清了多少条" —
 			 * no bubble, no bell, no unread, auto-fades */
 			showWhaleNote('已清空 ' + cleared + ' 条通知', 3000);
+			/* 桌宠中继（C-A7）：双击全清只清了页鲸自己的队列，桌宠窗口的同款
+			 * 红标会滞留假数字——通知宿主把码本里全部任务码逐个广播
+			 * pet/dismiss。fire-and-forget：本地已清是事实，relay 失败/桌宠
+			 * 离线一律静默，绝不回滚本地状态；PET_MODE 页（桌宠自己）清本地
+			 * 即完成，无需回环——门与 session-viewed relay 同款。 */
+			if (!PET_MODE && typeof fetch === 'function') {
+				try {
+					fetch('/api/whale-assistant/pet/ctrl', {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify({ action: 'dismiss-all' })
+					}).catch(function () { /* 桌宠离线：静默 */ });
+				} catch (eRelay) {}
+			}
 		}
 

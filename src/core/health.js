@@ -28,6 +28,31 @@
 	var healthState = { degraded: false, lastReport: null, everDegraded: false };
 	var healthOverrides = null; /* test seam: { server, dom, jump } forced report */
 
+	/** M5 通知链路可信度计数（0.4.3 阶段 B，度量地基）：通知链路的三类降级
+	 * 信号各计一个数，落 localStorage 键 dsh-whale:m5（页鲸侧自度量——宿主
+	 * 账本不收页指标）。形状 {healthFail:N, sseCircuit:N, sseProbeOk:N}，
+	 * 三个计数各自钳顶 9999（4 位定宽，防溢出也封住 JSON 体积）。「计数+1」
+	 * 统一走本助手——三处调用点（本文件 healthFail / server-events.js 的
+	 * sseCircuit+sseProbeOk）不得各写一份 localStorage 逻辑。坏形状（手改/
+	 * 损坏/未知键）一律整键重开为 0，不炸功能。 */
+	var M5_KEY = 'dsh-whale:m5';
+	var M5_KINDS = { healthFail: 1, sseCircuit: 1, sseProbeOk: 1 };
+	function m5Count(kind) {
+		if (!M5_KINDS[kind]) return; /* 白名单闸：未知信号不造键（形状恒三键） */
+		try {
+			/* 既有 localStorage 守卫模式：try/catch 整体包裹，隐私模式静默放弃 */
+			var raw = JSON.parse(localStorage.getItem(M5_KEY) || '{}');
+			var cur = { healthFail: 0, sseCircuit: 0, sseProbeOk: 0 };
+			if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+				for (var k in cur) {
+					if (typeof raw[k] === 'number' && isFinite(raw[k]) && raw[k] > 0) cur[k] = Math.min(9999, Math.floor(raw[k]));
+				}
+			}
+			cur[kind] = Math.min(9999, cur[kind] + 1);
+			localStorage.setItem(M5_KEY, JSON.stringify(cur));
+		} catch (e) { /* 存储不可用：计数静默放弃（度量不炸通知功能） */ }
+	}
+
 	/** Record one poll outcome (called from server-events' poll loop). */
 	function markServerPoll(ok, why) {
 		try {
@@ -108,7 +133,13 @@
 		}
 		healthState.lastReport = rep;
 		healthState.degraded = degraded;
-		if (degraded) healthState.everDegraded = true;
+		if (degraded) {
+			healthState.everDegraded = true;
+			/* M5（0.4.3 阶段 B）：健康检查失败即计一数（server/dom 任一腿 fail
+			 * 都算——两条腿都在通知链路上）。每拍失败检查各计一数：计数近似
+			 * 「降级持续时长」（60s 节拍），9999 钳顶。 */
+			m5Count('healthFail');
+		}
 		try { updateHealthChip(degraded); } catch (e) {}
 		if (firstDegrade) {
 			try { debugInject({ kind: 'health', at: Date.now(), report: rep }); } catch (e) {}

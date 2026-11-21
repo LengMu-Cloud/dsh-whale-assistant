@@ -1,12 +1,18 @@
 /**
  * Task history (inline module): the most recent finished main-task records,
- * newest first, persisted as 'dsh-whale:history' (v1 envelope, cap 50).
+ * newest first, persisted as 'dsh-whale:history' (v1 envelope, cap 500).
  * Consumed by the history drawer (ui/history.js) and the fail-recall hint
  * (M3.2, via recentFailAt).
  */
 
 	var HISTORY_KEY = 'dsh-whale:history';
-	var HISTORY_CAP = 50;
+	/* 三口径对齐（0.4.3 阶段 B）：本 cap 是页鲸内存滑动窗+localStorage 缓存
+	 * 的统一上限，过去 50 会让重度用户的页鲸周报静默缩水——桌宠路由侧
+	 * enumerateHistory cap 200（lib/pet.js:921）、服务端 HISTORY_LIMIT=500
+	 * （lib/store.js:16），页鲸曾是最短的一块板。直接对齐 500：pullCloudHistory
+	 * 的 /state 全量合并不再被本 cap 二次截断，周报聚合（panel-page build）
+	 * 天然吃满 500 口径；历史抽屉最多 500 行，滚动列表照常承接。 */
+	var HISTORY_CAP = 500;
 	var history = []; /* newest first */
 	/* Deletion sync: 清空历史 bumps this generation marker (persisted here
 	 * AND in the server doc) — every record older than it is dropped on

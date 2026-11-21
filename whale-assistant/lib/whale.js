@@ -299,6 +299,28 @@ function adoptCurrentSessionPin() {
 
 	var CONFIG_KEY = 'dsh-whale:config';
 
+	/* I-③-2 治本（0.4.3 阶段 C）：默认值快照——loadConfig 越界回落用（不在
+	 * 钳制处逐字段重抄默认值，单点防漂移；CONFIG 字面量改默认时这里自动跟）。 */
+	var CONFIG_DEFAULTS = JSON.parse(JSON.stringify(CONFIG));
+	/* I-③-2 治本（0.4.3 阶段 C）：DND 时段白名单——旧 /^\d{1,2}:\d{2}$/ 放行
+	 * 99:99（=全天免打扰假象）。小时 0-23 / 分钟 00-59；applyConfig（写入
+	 * 路径）与 loadConfig（旁路路径）共用一判据；dings.js dndToMin 是第二
+	 * 道防线（越界→null）。 */
+	var DND_TIME_RE = /^([01]?\d|2[0-3]):([0-5]\d)$/;
+	/* 音色白名单（0.4.3 阶段 C 从 applyConfig 局部上移）：**只服务 applyConfig
+	 * 写入路径**。loadConfig 有意不钳音色——存量脏音色走 panel-page 音色下拉
+	 * 的「回落显示到第一项且 CONFIG 不改写」契约（11-11 审计 P3-7；test
+	 * 「dirty tone value displays option 0」/「display fallback does not
+	 * rewrite CONFIG」双断言）：load 期改写会让下拉走 sel.value 分支、桩上
+	 * selectedIndex 成空，且违反「显示回落不改写存量」。数值/时段越界才在
+	 * load 钳制（I-③-2 治本范围）。 */
+	var SOUND_SETS = {
+		soundDone: ['ding', 'bell', 'chime', 'none'],
+		soundFail: ['thud', 'ding', 'bell', 'chime', 'none'],
+		soundAttn: ['chime', 'ding', 'bell', 'none'],
+		soundRemind: ['bell', 'ding', 'chime', 'thud', 'none']
+	};
+
 	function loadConfig() {
 		var saved = safeGet(CONFIG_KEY, function (v0) {
 			/* legacy shapes were never persisted before this feature — ignore */
@@ -308,6 +330,20 @@ function adoptCurrentSessionPin() {
 		Object.keys(CONFIG).forEach(function (key) {
 			if (typeof saved[key] === typeof CONFIG[key]) CONFIG[key] = saved[key];
 		});
+		/* I-③-2 治本（0.4.3 阶段 C）：采纳后过 applyConfig 同款范围钳制——
+		 * localStorage 手改的越界值（volume:5 / toolStuckMs:99 / 压力 5% /
+		 * 99:99 时段）不再旁路生效。判据与 applyConfig 写入路径逐条同源；
+		 * 越界回落默认值（脏数据语义未知，回落比贴边诚实）。 */
+		if (!(CONFIG.toolStuckMs >= 3000 && CONFIG.toolStuckMs <= 60000)) CONFIG.toolStuckMs = CONFIG_DEFAULTS.toolStuckMs;
+		if (!(CONFIG.recentFailWindowMs >= 0)) CONFIG.recentFailWindowMs = CONFIG_DEFAULTS.recentFailWindowMs;
+		if (!(CONFIG.volume >= 0 && CONFIG.volume <= 1)) CONFIG.volume = CONFIG_DEFAULTS.volume;
+		if (!(CONFIG.pressureWarnPct >= 20 && CONFIG.pressureWarnPct <= 95)) CONFIG.pressureWarnPct = CONFIG_DEFAULTS.pressureWarnPct;
+		if (!DND_TIME_RE.test(CONFIG.dndFrom)) CONFIG.dndFrom = CONFIG_DEFAULTS.dndFrom;
+		if (!DND_TIME_RE.test(CONFIG.dndTo)) CONFIG.dndTo = CONFIG_DEFAULTS.dndTo;
+		/* 音色四键有意不在 load 期钳制：存量脏值（如 done 塞了 thud）按既定
+		 * 契约走显示回落（panel-page 音色下拉 selectedIndex 0 + CONFIG 存量
+		 * 不改写）——load 改写会让下拉误走 sel.value 分支（vm 桩 selectedIndex
+		 * 成空）并违反「display fallback does not rewrite CONFIG」。 */
 		/* one-time migration: the old single soundScheme rides onto the
 		 * completion sound (fail/attn keep their own defaults) */
 		if (typeof saved.soundScheme === 'string' && saved.soundDone === undefined) {
@@ -365,12 +401,6 @@ function adoptCurrentSessionPin() {
 			CONFIG.volume = patch.volume;
 			changed = true;
 		}
-		var SOUND_SETS = {
-			soundDone: ['ding', 'bell', 'chime', 'none'],
-			soundFail: ['thud', 'ding', 'bell', 'chime', 'none'],
-			soundAttn: ['chime', 'ding', 'bell', 'none'],
-			soundRemind: ['bell', 'ding', 'chime', 'thud', 'none']
-		};
 		Object.keys(SOUND_SETS).forEach(function (key) {
 			if (typeof patch[key] === 'string' && SOUND_SETS[key].indexOf(patch[key]) >= 0 && patch[key] !== CONFIG[key]) {
 				CONFIG[key] = patch[key];
@@ -389,11 +419,11 @@ function adoptCurrentSessionPin() {
 			CONFIG.dndEnabled = patch.dndEnabled;
 			changed = true;
 		}
-		if (typeof patch.dndFrom === 'string' && /^\d{1,2}:\d{2}$/.test(patch.dndFrom) && patch.dndFrom !== CONFIG.dndFrom) {
+		if (typeof patch.dndFrom === 'string' && DND_TIME_RE.test(patch.dndFrom) && patch.dndFrom !== CONFIG.dndFrom) {
 			CONFIG.dndFrom = patch.dndFrom;
 			changed = true;
 		}
-		if (typeof patch.dndTo === 'string' && /^\d{1,2}:\d{2}$/.test(patch.dndTo) && patch.dndTo !== CONFIG.dndTo) {
+		if (typeof patch.dndTo === 'string' && DND_TIME_RE.test(patch.dndTo) && patch.dndTo !== CONFIG.dndTo) {
 			CONFIG.dndTo = patch.dndTo;
 			changed = true;
 		}
@@ -401,13 +431,19 @@ function adoptCurrentSessionPin() {
 	}/* ---- module: src/core/history.js ---- */
 /**
  * Task history (inline module): the most recent finished main-task records,
- * newest first, persisted as 'dsh-whale:history' (v1 envelope, cap 50).
+ * newest first, persisted as 'dsh-whale:history' (v1 envelope, cap 500).
  * Consumed by the history drawer (ui/history.js) and the fail-recall hint
  * (M3.2, via recentFailAt).
  */
 
 	var HISTORY_KEY = 'dsh-whale:history';
-	var HISTORY_CAP = 50;
+	/* 三口径对齐（0.4.3 阶段 B）：本 cap 是页鲸内存滑动窗+localStorage 缓存
+	 * 的统一上限，过去 50 会让重度用户的页鲸周报静默缩水——桌宠路由侧
+	 * enumerateHistory cap 200（lib/pet.js:921）、服务端 HISTORY_LIMIT=500
+	 * （lib/store.js:16），页鲸曾是最短的一块板。直接对齐 500：pullCloudHistory
+	 * 的 /state 全量合并不再被本 cap 二次截断，周报聚合（panel-page build）
+	 * 天然吃满 500 口径；历史抽屉最多 500 行，滚动列表照常承接。 */
+	var HISTORY_CAP = 500;
 	var history = []; /* newest first */
 	/* Deletion sync: 清空历史 bumps this generation marker (persisted here
 	 * AND in the server doc) — every record older than it is dropped on
@@ -2197,6 +2233,22 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				}
 				continue;
 			}
+			/* 桌宠菜单「📊 周报」跳转（0.4.3 阶段 C）：宿主广播 pet/open-report
+			 * → 本页派发自定义事件，panel-page.js 开机胶水监听后执行
+			 * selectPanel('whale-assistant') + openTab('report')（core 不引用
+			 * ui/client 方向闸门，与 pet/open-settings 派发模式同款）。10s 内
+			 * 新帧才执行（重放闸同 settings，petFrameOnce 多槽清单）；PET_MODE
+			 * 短路（桌宠页无 DSH 面板可开）。宿主侧广播（lib/pet.js 的
+			 * open-report action）是并行同事半区——帧未广播时本块自然静默。 */
+			if (f && f.type === 'pet/open-report') {
+				var orTime = f.time || 0;
+				if (!PET_MODE && Date.now() - orTime < 10000 && petFrameOnce('report', orTime) &&
+					typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+					try { window.dispatchEvent(new CustomEvent('dsh-whale:pet-open-report')); } catch (e) {}
+					ackPendingClear('report');
+				}
+				continue;
+			}
 			if (!f || typeof f.seq !== 'number' || f.seq <= lastSeq) continue;
 			rememberSeq(f.seq);
 			/* a fresh page must not replay the buffer's history — same
@@ -2387,7 +2439,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		 * poll 恢复跑 /pet/feed 补漏帧，lastSeq 闸门去重）。 */
 		if (typeof EventSource !== 'function') return; /* vm sandbox / ancient browsers */
 		try { sse = new EventSource('/api/whale-assistant/events/stream'); } catch (e) { return; }
-		sse.onopen = function () { sseUp = true; sseFails = 0; };
+		sse.onopen = function () { sseUp = true; sseFails = 0; clearSseProbe(); };
 		sse.onerror = function () {
 			sseUp = false; /* EventSource auto-reconnects */
 			/* v15（11-13）：离线熔断——壳退出时宿主服务器排空连接，EventSource
@@ -2397,26 +2449,96 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			 * 9s）即关闭事件源停止重连，让壳干净退场；恢复钩子=可见/聚焦/上线
 			 * 三事件重新 connectSSE（关窗唤醒后页鲸照常回线，hello 补投兑现）。 */
 			if (++sseFails >= 3 && sse) {
+				/* 0.4.3 探活自愈（用户实锤根因：常驻可见+聚焦的 DSH 主窗在宿主
+				 * 重启 ~20s 后，下面三个恢复钩子永不触发，通知链路从此永久降级
+				 * 3s 轮询，不刷新页面回不来）：熔断即挂低频探活定时器，每 60s
+				 * 用 fetch 探一次流可达（3s 短超时，探完即撤不留常驻连接），通
+				 * 了走既有重连路径重建 EventSource——宿主重启窗口过后无需用户
+				 * 刷新也能自动回线（onerror 全程零日志是已知盲区，休眠期静默
+				 * 原则允许 debug 级，熔断/探活/恢复各留一条）。 */
+				console.debug('[dsh-whale] sse breaker open after 3 fails: probing every 60s');
+				m5Count('sseCircuit'); /* M5（0.4.3 阶段 B）：熔断开一次计一数（可信度度量，不参与任何闸门） */
 				try { sse.close(); } catch (e2) { }
 				sse = null;
+				startSseProbe();
 			}
 		};
 		sse.onmessage = function (ev) { handleSseData(ev.data); };
+	}
+
+	/* 0.4.3 熔断探活机（v15 的补丁）：熔断后的恢复只押在可见/聚焦/上线三个
+	 * 用户事件上，常驻主窗永远等不到（见 onerror 内注释）。定时器纪律=谁
+	 * 创建谁清理：重连成功（onopen）、既有恢复钩子重建连接、页面卸载
+	 * （pagehide/beforeunload）各有一条清理路径，探活成功也自清。隐藏页
+	 * 不探活（与恢复钩子同语义）——壳退出排空期页面必隐藏，本文件没有独
+	 * 立的排空标志位（v15 防护=熔断+隐藏钩子），以 hidden 闸兜底排空期，
+	 * 探活不会重演 v15 的重连风暴死锁。 */
+	var SSE_PROBE_MS = 60000;
+	var SSE_PROBE_TIMEOUT = 3000;
+	var sseProbeTimer = null;
+	function clearSseProbe() {
+		if (sseProbeTimer === null) return;
+		try { clearInterval(sseProbeTimer); } catch (e) {}
+		sseProbeTimer = null;
+	}
+	function startSseProbe() {
+		clearSseProbe(); /* 重复熔断不叠定时器：先清旧再挂新 */
+		sseProbeTimer = setInterval(probeSseOnce, SSE_PROBE_MS);
+	}
+	function probeSseOnce() {
+		/* 既有钩子已把连接重建：探活使命完成，自己退场 */
+		if (sse) { clearSseProbe(); return; }
+		/* 隐藏闸：休眠页轮询兜底照旧，探活不动（排空期兜底，见上注释） */
+		if (typeof document === 'undefined' || document.hidden) return;
+		var settled = false; /* 3s 判定窗：超时与应答谁先到谁定胜负，后到者静默 */
+		var ctl = null;
+		try { ctl = new AbortController(); } catch (e) { ctl = null; } /* 老引擎无 abort：退化为纯 3s 判定 */
+		var killer = setTimeout(function () {
+			if (settled) return;
+			settled = true; /* 3s 未应答=不可达：保持熔断等下一轮 */
+			if (ctl) { try { ctl.abort(); } catch (e2) {} }
+			console.debug('[dsh-whale] sse probe timeout: breaker stays open');
+		}, SSE_PROBE_TIMEOUT);
+		fetch('/api/whale-assistant/events/stream', { signal: ctl ? ctl.signal : undefined }).then(function (r) {
+			if (settled) return;
+			settled = true;
+			try { clearTimeout(killer); } catch (e3) {}
+			if (ctl) { try { ctl.abort(); } catch (e4) {} } /* 探完即撤：不留半开连接（v15 教训） */
+			if (!r || !r.ok) {
+				console.debug('[dsh-whale] sse probe http ' + (r && r.status) + ': breaker stays open');
+				return;
+			}
+			console.debug('[dsh-whale] sse probe ok: stream reachable, reconnecting');
+			m5Count('sseProbeOk'); /* M5（0.4.3 阶段 B）：探活恢复一次计一数（熔断/恢复对的分子分母） */
+			clearSseProbe(); /* 成功即清自己的定时器（谁创建谁清理） */
+			sseFails = 0;
+			connectSSE(); /* 走既有重连路径；重建再败 3 次会再熔断并重启探活，链路无死端 */
+		}).catch(function () {
+			if (settled) return;
+			settled = true;
+			try { clearTimeout(killer); } catch (e5) {}
+			console.debug('[dsh-whale] sse probe unreachable: breaker stays open');
+		});
 	}
 	/* v15：熔断后的恢复钩子——窗口重新可见/获得焦点/系统网络恢复时重连。
 	 * 退出挂起期的隐藏页不会触发这些事件=保持断开=排空不被打扰。 */
 	if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
 		document.addEventListener('visibilitychange', function () {
-			try { if (!document.hidden && !sse) { sseFails = 0; connectSSE(); } } catch (e) { }
+			try { if (!document.hidden && !sse) { sseFails = 0; clearSseProbe(); connectSSE(); } } catch (e) { }
 		});
 	}
 	if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
 		window.addEventListener('focus', function () {
-			try { if (!sse) { sseFails = 0; connectSSE(); } } catch (e) { }
+			try { if (!sse) { sseFails = 0; clearSseProbe(); connectSSE(); } } catch (e) { }
 		});
 		window.addEventListener('online', function () {
-			try { if (!sse) { sseFails = 0; connectSSE(); } } catch (e) { }
+			try { if (!sse) { sseFails = 0; clearSseProbe(); connectSSE(); } } catch (e) { }
 		});
+		/* 定时器纪律补口子：页面卸载时探活定时器必须跟着走，不给壳退出
+		 * 排空期留下任何会再建连接的活口（v15 死锁教训）。pagehide 比
+		 * unload 在现代 Chromium 上更可靠，两个都挂（幂等清）。 */
+		window.addEventListener('pagehide', function () { try { clearSseProbe(); } catch (e) { } });
+		window.addEventListener('beforeunload', function () { try { clearSseProbe(); } catch (e) { } });
 	}
 	/* test seam: this whole module is a closure, so exports.js can't see it —
 	 * mirror the _pollConsume pattern and hang the handler on the window seam */
@@ -2478,6 +2600,31 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 
 	var healthState = { degraded: false, lastReport: null, everDegraded: false };
 	var healthOverrides = null; /* test seam: { server, dom, jump } forced report */
+
+	/** M5 通知链路可信度计数（0.4.3 阶段 B，度量地基）：通知链路的三类降级
+	 * 信号各计一个数，落 localStorage 键 dsh-whale:m5（页鲸侧自度量——宿主
+	 * 账本不收页指标）。形状 {healthFail:N, sseCircuit:N, sseProbeOk:N}，
+	 * 三个计数各自钳顶 9999（4 位定宽，防溢出也封住 JSON 体积）。「计数+1」
+	 * 统一走本助手——三处调用点（本文件 healthFail / server-events.js 的
+	 * sseCircuit+sseProbeOk）不得各写一份 localStorage 逻辑。坏形状（手改/
+	 * 损坏/未知键）一律整键重开为 0，不炸功能。 */
+	var M5_KEY = 'dsh-whale:m5';
+	var M5_KINDS = { healthFail: 1, sseCircuit: 1, sseProbeOk: 1 };
+	function m5Count(kind) {
+		if (!M5_KINDS[kind]) return; /* 白名单闸：未知信号不造键（形状恒三键） */
+		try {
+			/* 既有 localStorage 守卫模式：try/catch 整体包裹，隐私模式静默放弃 */
+			var raw = JSON.parse(localStorage.getItem(M5_KEY) || '{}');
+			var cur = { healthFail: 0, sseCircuit: 0, sseProbeOk: 0 };
+			if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+				for (var k in cur) {
+					if (typeof raw[k] === 'number' && isFinite(raw[k]) && raw[k] > 0) cur[k] = Math.min(9999, Math.floor(raw[k]));
+				}
+			}
+			cur[kind] = Math.min(9999, cur[kind] + 1);
+			localStorage.setItem(M5_KEY, JSON.stringify(cur));
+		} catch (e) { /* 存储不可用：计数静默放弃（度量不炸通知功能） */ }
+	}
 
 	/** Record one poll outcome (called from server-events' poll loop). */
 	function markServerPoll(ok, why) {
@@ -2559,7 +2706,13 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		}
 		healthState.lastReport = rep;
 		healthState.degraded = degraded;
-		if (degraded) healthState.everDegraded = true;
+		if (degraded) {
+			healthState.everDegraded = true;
+			/* M5（0.4.3 阶段 B）：健康检查失败即计一数（server/dom 任一腿 fail
+			 * 都算——两条腿都在通知链路上）。每拍失败检查各计一数：计数近似
+			 * 「降级持续时长」（60s 节拍），9999 钳顶。 */
+			m5Count('healthFail');
+		}
 		try { updateHealthChip(degraded); } catch (e) {}
 		if (firstDegrade) {
 			try { debugInject({ kind: 'health', at: Date.now(), report: rep }); } catch (e) {}
@@ -3150,15 +3303,23 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		});
 	}
 
+	/** I-③-2 治本（0.4.3 阶段 C）：HH:MM → 分钟数（0..1439）；形状/范围
+	 * 非法一律 null。旧内联 toMin 的 \d{1,2}:\d{2} 放行 99:99 → 6039「分钟」
+	 * 被当合法端点 → 全天免打扰假象（I-③-3「指示挂失真状态=另一种撒谎」
+	 * 的根）。这里钳回 0-1439，越界即 null → dndActive false；config.js 的
+	 * DND_TIME_RE 是第一道闸，本函数是第二道（防御纵深）。 */
+	function dndToMin(v) {
+		var p = /^(\d{1,2}):(\d{2})$/.exec(v || '');
+		if (!p) return null;
+		var mins = (+p[1]) * 60 + (+p[2]);
+		return (mins >= 0 && mins <= 1439) ? mins : null;
+	}
+
 	/** 免打扰窗口：开着且当前本地时间落在 [from, to) 内（支持跨零点）。 */
 	function dndActive() {
 		if (!CONFIG.dndEnabled) return false;
-		var toMin = function (v) {
-			var p = /^(\d{1,2}):(\d{2})$/.exec(v || '');
-			return p ? (+p[1]) * 60 + (+p[2]) : null;
-		};
-		var from = toMin(CONFIG.dndFrom);
-		var to = toMin(CONFIG.dndTo);
+		var from = dndToMin(CONFIG.dndFrom);
+		var to = dndToMin(CONFIG.dndTo);
 		if (from === null || to === null || from === to) return false;
 		var d = new Date();
 		var cur = d.getHours() * 60 + d.getMinutes();
@@ -3193,11 +3354,19 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			return typeof v0 === 'string' ? v0 : null;
 		}) === 'off';
 	}
-	function setSoundMuted(muted) {
+	/** setSoundMuted(muted, fromRelay)（0.4.3 阶段 B 起）：fromRelay=服务器→
+	 * 页面采用（page.html 的 petConfig relay 差分应用、petSyncExtrasFromHost
+	 * 快照采用）——采用不回推 petDoc（同值回写空转，relay 驱动的应用更不该
+	 * 覆盖桌宠页用户自设的静音权威值）。 */
+	function setSoundMuted(muted, fromRelay) {
 		soundMuted = !!muted;
 		safeSet(SOUND_KEY, soundMuted ? 'off' : 'on');
-		/* 11-11 真机修复轮：总静音也要过 relay 到桌宠（桌面响的是桌宠） */
+		/* 11-11 真机修复轮：总静音也要过 relay 到桌宠（桌面响的是桌宠）；
+		 * BUG-1 后半程（0.4.3 阶段 B）：PET_MODE 反向——桌宠页自设静音沿
+		 * pushPetSync 进 petDoc（此前桌宠页静音跨 DSH 重启静默蒸发）。
+		 * fire-and-forget：宿主离线静默，下次切换自然补上。 */
 		if (!PET_MODE) pushPetConfig();
+		else if (!fromRelay) pushPetSync({ soundMuted: soundMuted });
 	}
 
 	/* ------------------------------------------------------------------ */
@@ -3821,6 +3990,26 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			tasksDone: gearStats.tasksDone,
 			date: todayKey()
 		});
+		/* BUG-1 后半程（0.4.3 阶段 B）：每日装饰计数困在桌宠页每-boot 失忆的
+		 * localStorage——PET_MODE 下沿 pushPetSync 进 petDoc（{date,count} 成对；
+		 * date 错位=隔日存量，宿主 boot 回放后页侧按 loadGearStats 同款过期
+		 * 规则归零）。容量预算：日期 10 字符 + 计数宿主侧钳顶 9999999。
+		 * fire-and-forget：宿主离线静默，下次计数自然补上。 */
+		if (PET_MODE) pushPetSync({ gearStats: { date: todayKey(), count: gearStats.tasksDone } });
+	}
+
+	/** BUG-1 后半程（0.4.3 阶段 B）：宿主 /pet/state 下行的装饰计数快照采用
+	 * ——本地已有（键存在）不覆盖（幂等，与 petSyncFromHost 同款）；日期
+	 * 错位（隔日存量）按 loadGearStats 同款规则归零；由 ui/drawers.js 的
+	 * petSyncExtrasFromHost 转发。坏形状整字段丢弃。 */
+	function adoptGearStatsFromHost(date, count) {
+		try {
+			if (localStorage.getItem(GEAR_STATS_KEY) !== null) return;
+		} catch (e) { return; /* 存储不可用：放弃采用 */ }
+		if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+		gearStats.tasksDone = (date === todayKey() && typeof count === 'number' && isFinite(count) && count >= 0)
+			? Math.min(9999999, Math.floor(count)) : 0;
+		saveGearStats();
 	}
 
 	/** Day rollover while the page stays open: a once-a-minute check resets
@@ -5154,6 +5343,29 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		try {
 			localStorage.setItem('dsh-whale:petHint', JSON.stringify({ day: todayKey(), n: petHintCount }));
 		} catch (e) {}
+		/* BUG-1 后半程（0.4.3 阶段 B）：引导台词日限困在桌宠页每-boot 失忆的
+		 * localStorage——PET_MODE 下沿 pushPetSync 进 petDoc。日期+计数**成对**
+		 * 上报（只存日期会丢计数=日限重启归零，限流失效）。容量预算：日期 10
+		 * 字符 + 计数宿主侧钳顶 999。fire-and-forget：宿主离线静默，下次台词
+		 * 自然补上。 */
+		if (PET_MODE && petHintDay) pushPetSync({ petHintDate: petHintDay, petHintCount: petHintCount });
+	}
+
+	/** BUG-1 后半程（0.4.3 阶段 B）：宿主 /pet/state 下行的日限快照采用——
+	 * 本地已有记录（今天或历史）不覆盖（幂等，与 petSyncFromHost 的
+	 * affMsHave「本地权威值在先」同款）；只认**今天**的快照（隔日计数对
+	 * 本地日限毫无意义，跳过=本地按新的一天从 0 起步，与 loadPetHint 的
+	 * raw.day===todayKey() 闸同款）；由 ui/drawers.js 的
+	 * petSyncExtrasFromHost 转发。坏日期整字段丢弃；坏计数按 0 处理
+	 * （「今天还没说过话」）。 */
+	function adoptPetHintFromHost(day, n) {
+		try {
+			if (localStorage.getItem('dsh-whale:petHint') !== null) return;
+		} catch (e) { return; /* 存储不可用：放弃采用 */ }
+		if (typeof day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(day) || day !== todayKey()) return;
+		petHintDay = day;
+		petHintCount = typeof n === 'number' && isFinite(n) && n >= 0 ? Math.min(999, Math.floor(n)) : 0;
+		savePetHint();
 	}
 
 	function hasRunningJobs() {
@@ -5205,6 +5417,15 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	var TAIL_Y = 31;
 
 /* ---- module: src/ui/bubble.js ---- */
+	/* I-①-1 防御纵深·入泡截断（0.4.3 阶段 C）：>200 字符截到 200+「…」再
+	 * 入泡。正常路径（通知/台词 ≤40 字）逐字节不变；防的是手改 localStorage
+	 * 提醒 text 等残入口把超长串直灌 DOM（style.css 的气泡 max-height 是
+	 * 第一保险，bubbleTruncate 是第二保险——双保险，05b I-①-1 裁决原文）。 */
+	function bubbleTruncate(text) {
+		var s = String(text == null ? '' : text);
+		return s.length > 200 ? s.slice(0, 200) + '…' : s;
+	}
+
 	function uiSay(text, duration, sessionId) {
 		/* 休眠期静默（桌宠在岗，页面鲸鱼只剩数据管线）——状态机在 core/state.js */
 		if (petDormant) return;
@@ -5212,8 +5433,28 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		currentSaySession = sessionId || null;
 		var bubble = document.querySelector('.dsh-whale-bubble');
 		if (!bubble) return;
-		bubble.textContent = text;
+		bubble.textContent = bubbleTruncate(text);
 		bindBubbleHover(bubble);
+		/* I-①-1 CSS 档的启用判定（0.4.3 阶段 C）：实测内容顶到封顶（盒高被
+		 * max-height 钳住）才挂 .dsh-whale-bubble-capped 进内部滚动档——常规
+		 * 气泡永不进档（overflow 会裁 ::after 尾巴并出幻影滚动条，外观必须
+		 * 一像素不变）。offsetHeight=max-height 生效值：>=capPx-1 即判定顶格
+		 * （scrollHeight 对 overflow:visible 的跨引擎语义不一，不用）。
+		 * 桩环境 offsetHeight 恒 88 < cap → 永不进档，class 不挂。 */
+		try {
+			var capPx = Math.min((window.innerHeight || 800) * 0.5, 280);
+			if (typeof bubble.offsetHeight === 'number' && bubble.offsetHeight > 0 &&
+				bubble.offsetHeight >= capPx - 1) {
+				bubble.classList.add('dsh-whale-bubble-capped');
+			} else {
+				bubble.classList.remove('dsh-whale-bubble-capped');
+			}
+		} catch (eCap) { /* 桩环境兜底 */ }
+		/* I-①-2（0.4.3 阶段 C）：可跳转气泡的指针 affordance——cursor:pointer
+		 * 只给带会话的通知气泡（台词气泡不可跳，不装可点）；原生 title 达意
+		 * （R-4 裁决：hover 弹字是打扰性微交互，native title 零维护）。 */
+		bubble.classList.toggle('dsh-whale-bubble-link', !!sessionId);
+		bubble.title = sessionId ? '双击直达对话' : '';
 		/* 1:1 lifecycle (user request): whenever the bubble switches or
 		 * hides, the token/pressure panel below switches or hides WITH it —
 		 * a stale usage panel must never outlive its notification and be
@@ -5321,6 +5562,11 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		var whaleEl = document.getElementById('dsh-whale');
 		if (!whaleEl) return;
 		whale = whaleEl;
+		/* I-①-3（0.4.3 阶段 C）：红标单击/双击区分阈值收口——与鲸体单击的
+		 * CLICK_VS_DBL_MS（src/input/drag.js）同值不同源曾是分叉隐患；模块
+		 * 独立不跨文件共享常量（build 全 IIFE 共享作用域的重名禁令），各自
+		 * 文件顶部具名。 */
+		var BADGE_CLICK_VS_DBL_MS = 260;
 		/* 开机防双鲸（11-05 第三层，用户实报「一打开 DSH 就两只小金鱼，DSH
 		 * 的闪一下才消失」）：非桌宠页**元素创建即隐藏**——不信任缓存 0
 		 * （每次关 DSH 桌宠跟随死亡都会把缓存写成 0，冷开必踩 spawn 窗口
@@ -5633,7 +5879,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			badgeClickTimer = setTimeout(function () {
 				badgeClickTimer = null;
 				if (!readNext()) uiSay(clickSummary());
-			}, 260);
+			}, BADGE_CLICK_VS_DBL_MS);
 		});
 		badge.addEventListener('dblclick', function (event) {
 			event.stopPropagation();
@@ -5663,6 +5909,20 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			/* faint count feedback (#10): the number answers "清了多少条" —
 			 * no bubble, no bell, no unread, auto-fades */
 			showWhaleNote('已清空 ' + cleared + ' 条通知', 3000);
+			/* 桌宠中继（C-A7）：双击全清只清了页鲸自己的队列，桌宠窗口的同款
+			 * 红标会滞留假数字——通知宿主把码本里全部任务码逐个广播
+			 * pet/dismiss。fire-and-forget：本地已清是事实，relay 失败/桌宠
+			 * 离线一律静默，绝不回滚本地状态；PET_MODE 页（桌宠自己）清本地
+			 * 即完成，无需回环——门与 session-viewed relay 同款。 */
+			if (!PET_MODE && typeof fetch === 'function') {
+				try {
+					fetch('/api/whale-assistant/pet/ctrl', {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify({ action: 'dismiss-all' })
+					}).catch(function () { /* 桌宠离线：静默 */ });
+				} catch (eRelay) {}
+			}
 		}
 
 /* ---- module: src/ui/menu.js ---- */
@@ -5972,7 +6232,22 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			 * 变、localStorage 不可跨重启）；本地变更后本 boot 权威值在本地，
 			 * /pet/state 轮询回声不再反向覆盖。 */
 			affectionKnown = true;
-			pushPetSync({ aff: affection });
+			/* 陪伴小账入账（11-20 P-09）：摸头=一次 'pet' 互动。PET_MODE 走
+			 * pushPetSync 既有通道（interact 字段透传宿主账本）；页鲸侧
+			 * pushPetSync 不出网——直走 /pet/ctrl ledger 通道入账。
+			 * fire-and-forget：账本是统计不是状态，失败静默不伤功能。 */
+			pushPetSync({ aff: affection, interact: 'pet' });
+			if (!PET_MODE) {
+				try {
+					if (typeof fetch === 'function') {
+						fetch('/api/whale-assistant/pet/ctrl', {
+							method: 'POST',
+							headers: { 'content-type': 'application/json' },
+							body: JSON.stringify({ action: 'ledger', kind: 'pet' })
+						}).catch(function () { });
+					}
+				} catch (eLedger) { }
+			}
 			uiSay(petLine(), 3200);
 			whale.classList.remove('dsh-whale-pet');
 			void whale.offsetWidth;
@@ -6147,6 +6422,67 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				if (!jumped) uiSay('设置住在 DSH 侧边栏的「小鲸鱼助手」页面里', 2600);
 			});
 			menu.appendChild(settingsItem);
+			/* 📊 周报（0.4.3 阶段 C，mock-c 批准面：位置=设置 之后、DSH 窗口/
+			 * 刷新页面 之前）：点了直跳侧边栏页的周报 Tab（昨夜摘要/今日小结
+			 * 都在那里）。页鲸=selectPanel 桥 + openTab('report') 直切（阶段 B
+			 * 缝，摘要气泡点击同款，ppPendingReportTab 意向位补齐异步 mount
+			 * 时序缝）；桌宠=POST open-report 宿主广播（设置行 open-settings
+			 * 同款 broadcast+revive+delivered 兜底文案），帧消费端=server-events
+			 * pet/open-report → panel-page 胶水监听执行真跳转。 */
+			var reportItem = document.createElement('div');
+			reportItem.className = 'dsh-whale-menu-item';
+			setIconLabel(reportItem, '📊 周报');
+			reportItem.addEventListener('click', function (event) {
+				event.stopPropagation();
+				closeCtxMenu();
+				if (PET_MODE) {
+					/* 桌宠页没有 layout 桥也没有 DSH DOM——走宿主广播（与设置行
+					 * 同通道）：POST open-report → pet/open-report 帧 → 页鲸
+					 * selectPanel+openTab('report')；delivered 后 c:'revive' 拉
+					 * DSH 前台（ps1 该分支只做前台化，同设置行）。页鲸不在场
+					 * （DSH 关着）=delivered:false → 提示，不假装成功。 */
+					try {
+						fetch('/api/whale-assistant/pet/ctrl', {
+							method: 'POST',
+							headers: { 'content-type': 'application/json' },
+							body: JSON.stringify({ action: 'open-report' })
+						}).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (out) {
+							/* 无论 delivered 都唤回窗口——delivered=true 也可能只是
+							 * 退出挂起的僵尸渲染层在场（设置行 v2 同款判断） */
+							try {
+								if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+									window.chrome.webview.postMessage({ c: 'revive' });
+								}
+							} catch (e2) { }
+							if (out && out.ok === true && out.delivered === false) {
+								uiSay('DSH 窗口已关——打开后再点一次周报就好 🐳', 3500);
+							} else if (out && out.ok === true) {
+								uiSay('已打开小鲸鱼助手周报 ✓', 1800);
+							} else {
+								uiSay('跳转指令没有送达，稍后再试 🥲', 2500);
+							}
+						}).catch(function () { uiSay('跳转指令没有送达，稍后再试 🥲', 2500); });
+					} catch (e) { uiSay('周报住在 DSH 侧边栏的「小鲸鱼助手」页面里', 2600); }
+					return;
+				}
+				/* 页鲸：layout 桥直达（client.js inject stash）+ 周报 Tab 直切；
+				 * 桥缺席（0.1.x web 老引擎）→ 气泡指路兜底 */
+				var jumped = false;
+				try {
+					if (typeof window.__dshWhaleSelectPanel === 'function') {
+						window.__dshWhaleSelectPanel('whale-assistant');
+						jumped = true;
+					}
+				} catch (e) { jumped = false; }
+				ppPendingReportTab = true;
+				try {
+					if (window.__dshWhalePanel && typeof window.__dshWhalePanel.openTab === 'function') {
+						window.__dshWhalePanel.openTab('report');
+					}
+				} catch (eTab) { }
+				if (!jumped) uiSay('周报住在 DSH 侧边栏的「小鲸鱼助手」页面里', 2600);
+			});
+			menu.appendChild(reportItem);
 			/* refresh (B-2 desktop): the official desktop binds NO F5/Ctrl+R —
 			 * plugin updates and recovery both need a page reload, and the
 			 * whale menu is the reachable way to get one.
@@ -6185,8 +6521,11 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 						} },
 						{ label: '🖥️ 打开 DSH 窗口', onPick: function () {
 							closeCtxMenu();
+							/* I-②-1 文案诚实化（0.4.3 阶段 C）：reviveDsh 是 fire-
+							 * and-forget 唤回指令，「已唤 DSH 窗口」承诺了结果而
+							 * 实际只发出了指令——改说指令语义（反撒谎同族）。 */
 							try { window.__dshPetHost.reviveDsh(); } catch (eRevive) { }
-							uiSay('已唤 DSH 窗口 🐬', 2000);
+							uiSay('已发送唤回指令 🐬', 2000);
 						} }
 					];
 				}));
@@ -6777,6 +7116,12 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		}
 		function saveReminders(list) {
 			try { localStorage.setItem('dsh-whale:reminders', JSON.stringify(list)); } catch (e) {}
+			/* BUG-1 后半程（0.4.3 阶段 B）：桌宠页 origin 每-boot 随机，提醒
+			 * 列表困在失忆的 localStorage——PET_MODE 下沿 pushPetSync 进 petDoc
+			 * （与 aff/pos 同一条跨重启通道），下次 boot 快照回放。slice(0,20)
+			 * 与宿主 saneReminders 的 cap 同预算（sync 载荷上限 4096 字节内）。
+			 * fire-and-forget：宿主离线静默，下次增删自然补上。 */
+			if (PET_MODE) pushPetSync({ reminders: list.slice(0, 20) });
 			armReminderTimer(); /* 增删后重臂：新增的更早提醒立刻接管定时（函数声明提升） */
 		}
 		function openReminders() {
@@ -6975,6 +7320,38 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		} catch (eS) { /* 桩环境 */ }
 		setInterval(fireDueReminders, 5000); /* 兜底环：只防病态，正常路径不靠它 */
 		armReminderTimer();
+
+		/** BUG-1 后半程（0.4.3 阶段 B）：宿主 /pet/state 随 2s 轮询下行的四类
+		 * 状态快照采用——aff/pos 的 petSyncFromHost 同款幂等语义：本地已有
+		 * 权威值（键存在）时纯 no-op。boot 头部种入（petBootStateScript）通常
+		 * 已先落好，本函数只兜「本地空白」的直开/清存场景。放在 ui 半区
+		 * （drawers.js）：要同时够到 reminders（本文件）与 sound/petHint/
+		 * gearStats（core 域）——ui→core 是允许方向，core→ui 不是（方向闸门，
+		 * 同 petSyncFromHost 住 exports.js 的理由）。坏值一律丢弃不炸（与宿主
+		 * sane* 守卫同款校验的页侧镜像）。由 pet/page.html 的 fetchState 转发。 */
+		function petSyncExtrasFromHost(extras) {
+			if (!PET_MODE || !extras || typeof extras !== 'object') return;
+			/* reminders：本地无键才采用——用户清空过列表≠空白，不复活 */
+			if (Array.isArray(extras.reminders)) {
+				try {
+					if (localStorage.getItem('dsh-whale:reminders') === null) saveReminders(extras.reminders);
+				} catch (e0) { /* 存储不可用：放弃采用 */ }
+			}
+			/* soundMuted：宿主下行与 relay 同级（服务器→页面采用）——fromRelay
+			 * 旗标防回声（采用不回推 petDoc，同值回写只会空转）。 */
+			if (typeof extras.soundMuted === 'boolean') {
+				try {
+					if (localStorage.getItem(SOUND_KEY) === null) setSoundMuted(extras.soundMuted, true);
+				} catch (e1) { /* 存储不可用：放弃采用 */ }
+			}
+			/* petHint/gearStats 的「键存在即不覆盖」闸门在各自的 adopt 函数里
+			 * （mood.js/gear.js）——离自己的形状知识最近。 */
+			try { adoptPetHintFromHost(extras.petHintDate, extras.petHintCount); } catch (e2) { }
+			try { adoptGearStatsFromHost(extras.gearStats && extras.gearStats.date, extras.gearStats && extras.gearStats.count); } catch (e3) { }
+		}
+		/* 采用缝挂 window.__dshWhale（drag.js _petSyncPos 同款先例）：page.html
+		 * 的 state 轮询是唯一调用方。__dshWhale 在 IIFE 首模块（index.js）已建。 */
+		try { window.__dshWhale.petSyncExtrasFromHost = petSyncExtrasFromHost; } catch (eSeam) { }
 
 		/** 📊 任务周报: last-7-day buckets from the history records, drawn in
 		 * the same drawer style as the history list (fixed height, list
@@ -7222,8 +7599,10 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					/* 使用说明 Tab：高度实测自适应窗口（用户反馈固定 calc 边界
 					 * 悬空/局促——「直接适应窗口范围」）：底边=视口底-24px */
 					'.dsh-whale-pp-manual{overflow-y:auto;padding-right:4px;overscroll-behavior:contain}',
-					/* 周报 Tab：报告列表卡片化（旧抽屉壳的观感由这里补齐） */
-					'.dsh-whale-pp-report{background:var(--wh-card-bg);border:1px solid var(--wh-card-border);border-radius:var(--wh-radius-m);padding:14px 16px;margin:14px 0 6px}',
+					/* 周报 Tab：报告列表卡片化（旧抽屉壳的观感由这里补齐）。
+					 * P3-5（0.4.3 阶段 C，已批值变化）：收底圆角 12→16px（新
+					 * l 档，Geist「大面卡配大圆角」层级语义，06 裁决采纳） */
+					'.dsh-whale-pp-report{background:var(--wh-card-bg);border:1px solid var(--wh-card-border);border-radius:var(--wh-radius-l);padding:14px 16px;margin:14px 0 6px}',
 					'.dsh-whale-pp-report .dsh-whale-history-list{max-height:none}',
 					'.dsh-whale-pp-report .dsh-whale-report-summary{font-weight:600;color:var(--wh-panel-head);padding:8px 14px;background:var(--wh-panel-hover);border-radius:var(--wh-radius-s);margin-bottom:8px}',
 					'.dsh-whale-pp-report .dsh-whale-history-row{display:flex;justify-content:space-between;padding:10px 14px;background:var(--wh-panel-hover);border-radius:var(--wh-radius-s);margin:5px 0}',
@@ -7370,6 +7749,26 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					'.wh-hdot-ok{background:rgba(34,197,94,.16)}',
 					'.wh-hdot-fail{background:rgba(236,19,19,.16)}',
 					'.wh-hdot-warn{background:rgba(245,158,11,.18)}',
+					/* P1-4 语义色 class 路线（0.4.3 阶段 C）：SVG 工厂 hex 收口——
+					 * 颜色挪 CSS（语义 token），几何/透明度留 attribute（vm 桩
+					 * setAttribute 只存字符串，var() 进不了 attribute，05b §2.4
+					 * 第 2 条）。子件类钩子：wh-dot-tint=低透明底片 / wh-dot-mark=
+					 * stroke 线稿 / wh-dot-pt=实心点；色值与原 hex 逐一相等（等值
+					 * 迁移，见交付对照表）。 */
+					'.wh-rdot-done .wh-dot-tint,.wh-mdot-done .wh-dot-tint{fill:var(--wh-ok)}',
+					'.wh-rdot-fail .wh-dot-tint,.wh-mdot-fail .wh-dot-tint{fill:var(--wh-danger)}',
+					'.wh-rdot-ask .wh-dot-tint,.wh-mdot-ask .wh-dot-tint,.wh-rdot-warn .wh-dot-tint,.wh-mdot-warn .wh-dot-tint{fill:var(--wh-warn)}',
+					'.wh-rdot-killed .wh-dot-tint{fill:var(--wh-neutral)}',
+					'.wh-rdot-done .wh-dot-mark,.wh-mdot-done .wh-dot-mark,.wh-hdot-ok .wh-dot-mark{stroke:var(--wh-ok-strong);fill:none}',
+					'.wh-rdot-fail .wh-dot-mark,.wh-mdot-fail .wh-dot-mark,.wh-hdot-fail .wh-dot-mark{stroke:var(--wh-danger-strong);fill:none}',
+					'.wh-rdot-ask .wh-dot-mark,.wh-mdot-ask .wh-dot-mark,.wh-rdot-warn .wh-dot-mark,.wh-mdot-warn .wh-dot-mark,.wh-hdot-warn .wh-dot-mark{stroke:var(--wh-warn-strong);fill:none}',
+					'.wh-rdot-ask .wh-dot-pt,.wh-mdot-ask .wh-dot-pt,.wh-rdot-warn .wh-dot-pt,.wh-mdot-warn .wh-dot-pt,.wh-hdot-warn .wh-dot-pt{fill:var(--wh-warn-strong)}',
+					/* I-③-3 后半（0.4.3 阶段 C）：免打扰中指示 chip——通知区标题
+					 * 行尾 ghost-chip（v5 语言最小实现，新增设计无批准 mockup、
+					 * 待用户验）。sec 平时非 flex，chip 在场才 inline flex 化，
+					 * margin-left:auto 推到行尾；letter-spacing 归零抗衡组签的
+					 * 1.5px 宽距。 */
+					'.dsh-whale-pp-sec .dsh-whale-pp-chip{margin-left:auto;flex:none;letter-spacing:0;font-weight:400}',
 					/* P2-6b 开关类值 → 28×16 mini switch（accent 实轨/白钮；
 					 * off=active 底/muted 钮——v4 用户裁决「做得还可以」保留） */
 					'.dsh-whale-pp-switch{position:relative;flex:none;width:28px;height:16px;border-radius:var(--wh-radius-full);background:var(--wh-panel-active);display:inline-block;vertical-align:middle;transition:background .15s ease}',
@@ -7398,7 +7797,24 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			/* P1-3+P2-4 矩阵左列语义圆片（repDot 12px 同族；-1.5px=wh-rdot 同值；display/flex-none 与 wh-rdot 同构） */
 			'.dsh-whale-pp-manual .dsh-whale-manual-mx-s .wh-mdot{display:inline-block;flex:none;width:12px;height:12px;vertical-align:-1.5px;margin-right:4px}',
 			/* DSH 官方位图槽（🖥️ 正文引用；值=pet/page.html L20 逐字节） */
-			'.dsh-whale-ico-img{width:16px;height:16px;display:inline-block;vertical-align:middle;border-radius:4px;transform:translateY(-1.8px)}'
+			'.dsh-whale-ico-img{width:16px;height:16px;display:inline-block;vertical-align:middle;border-radius:4px;transform:translateY(-1.8px)}',
+			/* —— 0.4.3 阶段 B（mock-b 批准面，2026-11-20）：昨夜摘要卡 / 周报改版 /
+			 * 陪伴小账。类名逐字沿用 mockup（mock-* 前缀即批准规格，防转写漂移）；
+			 * 唯一追加=.mock-sum-link 的 cursor:pointer（生产可点，mockup 是静态稿） */
+			'.mock-sum-title{font-size:13.5px;font-weight:600;letter-spacing:.2px;display:flex;justify-content:space-between;align-items:baseline}',
+			'.mock-sum-sub{font-size:11.5px;font-weight:400;color:#8b9096}',
+			'.mock-sum-line{margin-top:10px;font-size:13px}',
+			'.mock-sum-note{margin-top:8px;font-size:12px;color:#8b9096}',
+			'.mock-sum-link{margin-top:10px;font-size:12px;color:var(--wh-accent);cursor:pointer}',
+			'.mock-bignum{font-size:20px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.2px}',
+			'.mock-taskrow{display:flex;align-items:center;gap:8px;font-size:12.5px;padding:6px 10px;margin:6px 0 0;border-radius:6px}',
+			'.mock-taskrow-fail{border-left:2px solid #f87171;background:rgba(248,113,113,.07)}',
+			'.mock-taskrow .mut{color:#8b9096;font-size:11.5px;margin-left:auto;font-variant-numeric:tabular-nums}',
+			'.mock-bars{display:flex;align-items:flex-end;gap:4px;height:34px;margin-top:8px}',
+			'.mock-bars i{display:block;width:14px;border-radius:3px 3px 1px 1px;background:#2a2b30}',
+			'.mock-bars i.on{background:linear-gradient(180deg,var(--wh-accent),rgba(122,143,255,.45))}',
+			'.mock-days{display:flex;gap:4px;margin-top:4px}',
+			'.mock-days span{width:14px;text-align:center;font-size:9.5px;color:#6b7077}'
 				].join('');
 				(document.head || document.body).appendChild(css); /* vm mock 无 head */
 			}
@@ -7457,6 +7873,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				 * SVG 心电线稿（ghost 保口径）；无字形组签走原 textContent 路径 */
 				setIconLabel(sec, label);
 				host.appendChild(sec);
+				return sec; /* 0.4.3 阶段 C：DND 指示 chip 需要锚回标题行 */
 			}
 			/* 行语义与 openSettings 逐条同源（同一份 CONFIG/applyConfig）——
 			 * 改动即生效，整页重渲（页面区重渲不波及鲸鱼浮层） */
@@ -7507,13 +7924,18 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 						for (var k in attrs) el.setAttribute(k, attrs[k]);
 						svg.appendChild(el);
 					};
+					/* P1-4 class 路线（0.4.3 阶段 C）：颜色挪注入 CSS
+					 * （.wh-hdot-ok/-fail/-warn 的 .wh-dot-mark/.wh-dot-pt 规则，
+					 * token=--wh-ok-strong/--wh-danger-strong/--wh-warn-strong），
+					 * 几何留 attribute——vm 桩 setAttribute 只存字符串，var()
+					 * 进不了 attribute（05b §2.4 第 2 条）。 */
 					if (kind === 'ok') {
-						add('path', { d: 'M2.8 6.4 5 8.6l4.2-5', fill: 'none', stroke: '#4ade80', 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+						add('path', { d: 'M2.8 6.4 5 8.6l4.2-5', 'class': 'wh-dot-mark', 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
 					} else if (kind === 'fail') {
-						add('path', { d: 'M4.2 4.2l3.6 3.6M7.8 4.2 4.2 7.8', stroke: '#f87171', 'stroke-width': 1.6, 'stroke-linecap': 'round' });
+						add('path', { d: 'M4.2 4.2l3.6 3.6M7.8 4.2 4.2 7.8', 'class': 'wh-dot-mark', 'stroke-width': 1.6, 'stroke-linecap': 'round' });
 					} else {
-						add('path', { d: 'M6 2.9v3.6', stroke: '#fbbf24', 'stroke-width': 1.5, 'stroke-linecap': 'round' });
-						add('circle', { cx: 6, cy: 9.1, r: 0.8, fill: '#fbbf24' });
+						add('path', { d: 'M6 2.9v3.6', 'class': 'wh-dot-mark', 'stroke-width': 1.5, 'stroke-linecap': 'round' });
+						add('circle', { cx: 6, cy: 9.1, r: 0.8, 'class': 'wh-dot-pt' });
 					}
 					wrap.appendChild(svg);
 					return wrap;
@@ -7560,7 +7982,35 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				hint.appendChild(whInlineIcon('🐋'));
 				hint.appendChild(document.createTextNode('] 日志'));
 				host.appendChild(hint);
-				ppSection(host, '通知');
+				/* 挂机心跳行（0.4.3 阶段 B，mock-a 批准面）：状态区末尾一行安静的
+				 * 状态。显示条件=距 lastActivityAt ≥15 分钟 且 存在运行中任务
+				 * （runSlots，status-panel 的运行态投影；无运行中任务=不显示）；
+				 * 面板打开期间每 30s 自刷新；异常才换简述（stuck/fail 现有信号），
+				 * 圆片 ok→warn。文本含批准的固定后缀（每 15 分钟自动更新…）。 */
+				var hbRow = document.createElement('div');
+				hbRow.className = 'dsh-whale-pp-status';
+				host.appendChild(hbRow);
+				ppRenderHeartbeat(hbRow);
+				if (ppHbTimer) clearInterval(ppHbTimer);
+				ppHbTimer = setInterval(function () {
+					if (curTab !== 'settings') return; /* 别的 Tab 不刷（重进即重渲重挂） */
+					ppRenderHeartbeat(hbRow);
+				}, PP_HB_TICK_MS);
+				var notifSec = ppSection(host, '通知');
+				/* I-③-3 后半（0.4.3 阶段 C）：免打扰激活中的状态指示——通知区
+				 * 标题行尾 ghost-chip「免打扰中 HH:MM–HH:MM」（dndActive 为真才
+				 * 渲染）。ding 在 DND 期间本就不响（playDing 闸），指示只是让
+				 * 状态可见。新增设计（无批准 mockup）：v5 ghost-chip 语言最小
+				 * 实现，交付注明待用户验。dndActive 缺席（桩环境）静默跳过。 */
+				try {
+					if (dndActive()) {
+						notifSec.style.display = 'flex';
+						var dndChip = document.createElement('span');
+						dndChip.className = 'dsh-whale-pp-val dsh-whale-pp-chip';
+						dndChip.textContent = '免打扰中 ' + CONFIG.dndFrom + '–' + CONFIG.dndTo;
+						notifSec.appendChild(dndChip);
+					}
+				} catch (eDndChip) { /* 桩环境兜底 */ }
 				/* P2-6b（UI 审美 v5 落地）：开关类值 → 28×16 mini switch（用户
 				 * 裁决保留）。「开/关」字面进 0 尺寸 ghost——textContent 口径
 				 * （测试断言 includes('开')/includes('关') 与读屏）逐字不变，
@@ -7901,6 +8351,27 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				}
 			}
 			render();
+			/* 0.4.3 阶段 B：摘要气泡/外部入口的 Tab 直切缝。openTab 由最新挂载
+			 * 实例注册生效；页面尚未挂载时点击方只置 ppPendingReportTab 意向位，
+			 * 由这里消费（selectPanel → React mount 是异步的，意向位补齐时序缝） */
+			try {
+				window.__dshWhalePanel.openTab = function (t) {
+					for (var i = 0; i < TABS.length; i++) {
+						if (TABS[i][0] === t) {
+							curTab = t;
+							render();
+							ppPendingReportTab = false;
+							return true;
+						}
+					}
+					return false;
+				};
+			} catch (eOpenTab) {}
+			if (ppPendingReportTab) {
+				ppPendingReportTab = false;
+				curTab = 'report';
+				render();
+			}
 		}
 		/* 📖 使用说明 Tab（11-08 自 openHelp 抽屉迁入；11-13 三层重构——设计者
 		 * 视角 9 区 49 条全量平铺 → 纯用户视角「🚀 三步上手 / 🎮 日常操作 /
@@ -7957,7 +8428,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				{ t: '压力阈值', d: '上下文占用达到设定百分比提醒 /compact，一次性不重复；明显缓解后重新武装（默认回落线 50%，阈值调低时按比例跟降，永不与阈值重叠）。' },
 				{ t: '运行状态', d: '鲸鱼自查后台通知 / 用量读取 / 跳转三条链路；出问题头顶亮 ⚠️，点它看是哪条失效。' },
 				{ t: '调试模式', d: '排障用：控制台输出调试信息 + 写 ~/.dsh/whale-assistant.json 的 _debug 键，平时保持关闭。' },
-				{ cat: '📜 历史与数据', t: '历史双存储', d: '历史保留最近 50 条，本地 + 服务器双存储；支持搜索、清空、导出。' },
+				{ cat: '📜 历史与数据', t: '历史双存储', d: '历史保留最近 500 条，本地 + 服务器双存储；支持搜索、清空、导出。' },
 				{ t: '换浏览器历史还在吗', d: '在——历史跟服务端走，同一台机器的桌面壳和各浏览器窗口看到同一份，跨机器不同步。' },
 				{ t: '想彻底遗忘某个对话', d: '两步：先清历史、再「清空通讯录」，两步都做才真正遗忘。' },
 				{ t: '账本损坏', d: '极少数情况会自动隔离重建，~/.dsh/ 留有 .corrupt-时间戳 备份；想救回：先关 DSH、删掉后缀恢复原名再启动。' },
@@ -8032,23 +8503,27 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				var NS = 'http://www.w3.org/2000/svg';
 				var svg = document.createElementNS(NS, 'svg');
 				svg.setAttribute('viewBox', '0 0 12 12');
-				svg.setAttribute('class', 'wh-mdot');
+				svg.setAttribute('class', 'wh-mdot wh-mdot-' + kind);
 				svg.setAttribute('aria-hidden', 'true');
 				var add = function (n, a) { var e = document.createElementNS(NS, n); for (var k in a) e.setAttribute(k, a[k]); svg.appendChild(e); };
+				/* P1-4 class 路线（0.4.3 阶段 C）：颜色挪注入 CSS（.wh-mdot-*
+				 * 的 .wh-dot-tint/.wh-dot-mark/.wh-dot-pt 规则，与周报 repDot
+				 * 同族同色），几何/透明度留 attribute（vm 桩 setAttribute 只存
+				 * 字符串，var() 进不了 attribute，05b §2.4 第 2 条）。 */
 				if (kind === 'done') {
-					add('circle', { cx: 6, cy: 6, r: 6, fill: '#22c55e', 'fill-opacity': '.18' });
-					add('path', { d: 'M3.4 6.2 5.2 8l3.4-3.8', fill: 'none', stroke: '#4ade80', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+					add('circle', { cx: 6, cy: 6, r: 6, 'class': 'wh-dot-tint', 'fill-opacity': '.18' });
+					add('path', { d: 'M3.4 6.2 5.2 8l3.4-3.8', 'class': 'wh-dot-mark', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
 				} else if (kind === 'fail') {
-					add('circle', { cx: 6, cy: 6, r: 6, fill: '#ec1313', 'fill-opacity': '.18' });
-					add('path', { d: 'M4.2 4.2l3.6 3.6M7.8 4.2 4.2 7.8', stroke: '#f87171', 'stroke-width': 1.6, 'stroke-linecap': 'round' });
+					add('circle', { cx: 6, cy: 6, r: 6, 'class': 'wh-dot-tint', 'fill-opacity': '.18' });
+					add('path', { d: 'M4.2 4.2l3.6 3.6M7.8 4.2 4.2 7.8', 'class': 'wh-dot-mark', 'stroke-width': 1.6, 'stroke-linecap': 'round' });
 				} else if (kind === 'ask') {
-					add('circle', { cx: 6, cy: 6, r: 6, fill: '#f59e0b', 'fill-opacity': '.18' });
-					add('path', { d: 'M4.6 4.6a1.5 1.5 0 1 1 2 1.4c-.5.2-.6.5-.6 1v.2', fill: 'none', stroke: '#fbbf24', 'stroke-width': 1.4, 'stroke-linecap': 'round' });
-					add('circle', { cx: 6, cy: 9.1, r: 0.7, fill: '#fbbf24' });
+					add('circle', { cx: 6, cy: 6, r: 6, 'class': 'wh-dot-tint', 'fill-opacity': '.18' });
+					add('path', { d: 'M4.6 4.6a1.5 1.5 0 1 1 2 1.4c-.5.2-.6.5-.6 1v.2', 'class': 'wh-dot-mark', 'stroke-width': 1.4, 'stroke-linecap': 'round' });
+					add('circle', { cx: 6, cy: 9.1, r: 0.7, 'class': 'wh-dot-pt' });
 				} else {
-					add('circle', { cx: 6, cy: 6, r: 6, fill: '#f59e0b', 'fill-opacity': '.18' });
-					add('path', { d: 'M6 2.9v3.6', stroke: '#fbbf24', 'stroke-width': 1.5, 'stroke-linecap': 'round' });
-					add('circle', { cx: 6, cy: 9.1, r: 0.8, fill: '#fbbf24' });
+					add('circle', { cx: 6, cy: 6, r: 6, 'class': 'wh-dot-tint', 'fill-opacity': '.18' });
+					add('path', { d: 'M6 2.9v3.6', 'class': 'wh-dot-mark', 'stroke-width': 1.5, 'stroke-linecap': 'round' });
+					add('circle', { cx: 6, cy: 9.1, r: 0.8, 'class': 'wh-dot-pt' });
 				}
 				return svg;
 			}
@@ -8442,25 +8917,30 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			function repDot(kind) {
 				var svg = document.createElementNS(REP_NS, 'svg');
 				svg.setAttribute('viewBox', '0 0 12 12');
-				svg.setAttribute('class', 'wh-rdot');
+				svg.setAttribute('class', 'wh-rdot wh-rdot-' + kind);
 				svg.setAttribute('aria-hidden', 'true');
 				var add = function (name, attrs) {
 					var el = document.createElementNS(REP_NS, name);
 					for (var k in attrs) el.setAttribute(k, attrs[k]);
 					svg.appendChild(el);
 				};
+				/* P1-4 class 路线（0.4.3 阶段 C）：颜色挪注入 CSS（.wh-rdot-* 的
+				 * .wh-dot-tint/.wh-dot-mark/.wh-dot-pt 规则，token=--wh-ok/
+				 * --wh-danger/--wh-warn/--wh-neutral/三个 strong 变体），几何/
+				 * 透明度留 attribute（vm 桩 setAttribute 只存字符串，var() 进
+				 * 不了 attribute，05b §2.4 第 2 条）。 */
 				if (kind === 'done') {
-					add('circle', { cx: 6, cy: 6, r: 6, fill: '#22c55e', 'fill-opacity': '.18' });
-					add('path', { d: 'M3.4 6.2 5.2 8l3.4-3.8', fill: 'none', stroke: '#4ade80', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+					add('circle', { cx: 6, cy: 6, r: 6, 'class': 'wh-dot-tint', 'fill-opacity': '.18' });
+					add('path', { d: 'M3.4 6.2 5.2 8l3.4-3.8', 'class': 'wh-dot-mark', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
 				} else if (kind === 'fail') {
-					add('circle', { cx: 6, cy: 6, r: 6, fill: '#ec1313', 'fill-opacity': '.18' });
-					add('path', { d: 'M4.2 4.2l3.6 3.6M7.8 4.2 4.2 7.8', stroke: '#f87171', 'stroke-width': 1.6, 'stroke-linecap': 'round' });
+					add('circle', { cx: 6, cy: 6, r: 6, 'class': 'wh-dot-tint', 'fill-opacity': '.18' });
+					add('path', { d: 'M4.2 4.2l3.6 3.6M7.8 4.2 4.2 7.8', 'class': 'wh-dot-mark', 'stroke-width': 1.6, 'stroke-linecap': 'round' });
 				} else if (kind === 'killed') {
-					add('rect', { x: 1, y: 1, width: 10, height: 10, rx: 2.5, fill: '#81858c', 'fill-opacity': '.4' });
+					add('rect', { x: 1, y: 1, width: 10, height: 10, rx: 2.5, 'class': 'wh-dot-tint', 'fill-opacity': '.4' });
 				} else {
-					add('circle', { cx: 6, cy: 6, r: 6, fill: '#f59e0b', 'fill-opacity': '.18' });
-					add('path', { d: 'M4.6 4.6a1.5 1.5 0 1 1 2 1.4c-.5.2-.6.5-.6 1v.2', fill: 'none', stroke: '#fbbf24', 'stroke-width': 1.4, 'stroke-linecap': 'round' });
-					add('circle', { cx: 6, cy: 9.1, r: 0.7, fill: '#fbbf24' });
+					add('circle', { cx: 6, cy: 6, r: 6, 'class': 'wh-dot-tint', 'fill-opacity': '.18' });
+					add('path', { d: 'M4.6 4.6a1.5 1.5 0 1 1 2 1.4c-.5.2-.6.5-.6 1v.2', 'class': 'wh-dot-mark', 'stroke-width': 1.4, 'stroke-linecap': 'round' });
+					add('circle', { cx: 6, cy: 9.1, r: 0.7, 'class': 'wh-dot-pt' });
 				}
 				return svg;
 			}
@@ -8475,22 +8955,29 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				num.textContent = String(n);
 				host.appendChild(num);
 			}
-			function build() {
-			list.textContent = ''; /* 重渲前清空——pullCloudHistory 回调二次 build 不叠加（11-11 用户实报双份） */
 			/* P1-2：token 量级统一——≥1M 一位小数 M 制（7536.1K→7.5M、
-			 * 1368.0K→1.4M，mockup-04 批准）；K 段口径不变 */
+			 * 1368.0K→1.4M，mockup-04 批准）；K 段口径不变。
+			 * 0.4.3 阶段 B：从 build() 局部上移到 Tab 装配层——昨夜摘要卡
+			 * （ppBuildNightSummaryCard）也要用它，原 build 局部定义会让摘要
+			 * 卡首次装配 ReferenceError（冒烟台架实锤）。 */
 			var fmtK = function (n) {
 				if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
 				return n >= 10000 ? (n / 1000).toFixed(1) + 'K' : n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'K' : n;
 			};
+			function build() {
+			list.textContent = ''; /* 重渲前清空——pullCloudHistory 回调二次 build 不叠加（11-11 用户实报双份） */
+			headWrap.textContent = ''; /* Tab 头行（📊 周报 + 只看失败 chip）随 build 重建，不叠加 */
+			ledgerWrap.textContent = ''; /* 陪伴小账区随 build 重建（数据到位后由回调重渲点亮） */
 			var weekAgo = Date.now() - 7 * 864e5;
 			var days = {};
 			var hasAny = false;
+			var weekFails = 0; /* 0.4.3 阶段 B：窗口内失败数——筛选 chip 文案与显隐 */
 			for (var i = 0; i < history.length; i++) {
 				var rec = history[i];
 				var at = rec.at || 0;
 				if (at < weekAgo) continue;
 				hasAny = true;
+				if (rec.kind === 'fail') weekFails++;
 				var d = new Date(at);
 				var key = (d.getMonth() + 1) + '月' + d.getDate() + '日';
 				if (!days[key]) days[key] = { done: 0, fail: 0, killed: 0, ask: 0, tokens: 0, sessions: {} };
@@ -8523,13 +9010,24 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			var sumRow = document.createElement('div');
 			sumRow.className = 'dsh-whale-report-summary';
 			sumRow.title = '任务数与 token 按日聚合；周报窗口 7 天';
-			/* P1-2：计数 emoji → 语义圆片+等宽数字（ghost 保 textContent 口径） */
+			/* P1-2：计数 emoji → 语义圆片+等宽数字（ghost 保 textContent 口径）。
+			 * 0.4.3 阶段 B（mock-b 批准面）：完成/失败升级为 mock-bignum 大数字
+			 * （20px/semibold/tabular-nums，失败 #f87171）；⏹/❓ 次级桶保留
+			 * repCount 紧跟失败大数字之后（ghost 保 textContent 口径——既有
+			 * 断言/读屏契约逐字不变，主视觉照 mockup） */
 			sumRow.textContent = '';
 			sumRow.appendChild(document.createTextNode('今日 ' + todayKey + ' · '));
-			repCount(sumRow, 'done', '✅', tb ? tb.done : 0);
-			sumRow.appendChild(document.createTextNode(' '));
-			repCount(sumRow, 'fail', '❌', tb ? tb.fail : 0);
-			sumRow.appendChild(document.createTextNode(' '));
+			var bnDone = document.createElement('span');
+			bnDone.className = 'mock-bignum';
+			bnDone.textContent = String(tb ? tb.done : 0);
+			sumRow.appendChild(bnDone);
+			sumRow.appendChild(document.createTextNode(' 完成 '));
+			var bnFail = document.createElement('span');
+			bnFail.className = 'mock-bignum';
+			bnFail.style.color = '#f87171';
+			bnFail.textContent = String(tb ? tb.fail : 0);
+			sumRow.appendChild(bnFail);
+			sumRow.appendChild(document.createTextNode(' 失败 '));
 			repCount(sumRow, 'killed', '⏹', tb ? tb.killed : 0);
 			sumRow.appendChild(document.createTextNode(' '));
 			repCount(sumRow, 'ask', '❓', tb ? tb.ask : 0);
@@ -8539,6 +9037,11 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			sumTok.textContent = fmtK(tb ? tb.tokens : 0) + ' tok · ' + (tb ? Object.keys(tb.sessions).length : 0) + ' 个对话';
 			sumRow.appendChild(sumTok);
 			list.appendChild(sumRow);
+			/* 0.4.3 阶段 B：Tab 头行（📊 周报 sec + 只看失败 chip，mock-b 批准面）
+			 * 与陪伴小账区——都挂在卡片外、随 build 重建；空周也要出（chip 由
+			 * weekFails 0 隐藏，小账由数据防御式渲染）。 */
+			ppBuildHeadRow(headWrap, weekFails);
+			ppRenderLedgerBlock(ledgerWrap);
 			if (!hasAny) {
 				var empty = document.createElement('div');
 				empty.className = 'dsh-whale-history-empty';
@@ -8553,6 +9056,8 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				var dt = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dd);
 				var dkey = (dt.getMonth() + 1) + '月' + dt.getDate() + '日';
 				var db = days[dkey];
+				/* 只看失败（0.4.3 阶段 B 筛选 chip）：筛选态下无失败记录的日子整行跳过 */
+				if (ppRepFailOnly && (!db || !(db.fail > 0))) continue;
 				var head = document.createElement('div');
 				head.className = 'dsh-whale-rep-day' + (db ? '' : ' dsh-whale-rep-day-empty');
 				head.title = '会话 token=当日该会话各轮消耗之和（turnTokens 口径）';
@@ -8570,8 +9075,10 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				}
 				var open = ppReportOpenDays.has(dkey);
 				/* P1-2：非零桶逐个渲染语义圆片+等宽数字（ghost 保口径，空格分隔
-				 * 与原 parts.join(' ') 一致） */
+				 * 与原 parts.join(' ') 一致）。0.4.3 阶段 B（mock-b 批准面）：
+				 * 展开日不渲染右侧计数——明细行就在下面，收起日才靠头行计数 */
 				right.textContent = '';
+				if (!open) {
 				var firstCount = true;
 				var pushCount = function (kind, glyph, n) {
 					if (!firstCount) right.appendChild(document.createTextNode(' '));
@@ -8589,6 +9096,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					tokEl.textContent = fmtK(db.tokens) + ' tok';
 					right.appendChild(tokEl);
 				}
+				} /* !open：展开日右侧留白（明细就在下方） */
 				left.textContent = (open ? '▾ ' : '▸ ') + dkey + ' · ' + Object.keys(db.sessions).length + ' 个对话';
 				head.appendChild(left);
 				head.appendChild(right);
@@ -8609,6 +9117,40 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				sids.sort(function (x, y) { return (db.sessions[y].anchor || 0) - (db.sessions[x].anchor || 0); });
 				sids.forEach(function (sid) {
 					var g2 = db.sessions[sid];
+					/* 只看失败（0.4.3 阶段 B 筛选 chip）：筛选态只保留失败/截断会话行 */
+					if (ppRepFailOnly && !g2.hasBad) return;
+					/* 失败任务行（mock-b 批准 mock-taskrow）：左红条+tint 底+fail
+					 * 圆片+标题+右侧灰字「失败 · HH:MM」。数据契约无重试字段，
+					 * 「已重试 N 次」段缺数据省略（诚实降级）；跳转链与下方 srow
+					 * 完全同链（跳回对话是既有能力，不因改版丢失）。 */
+					if (g2.hasBad) {
+						var trow = document.createElement('div');
+						trow.className = 'mock-taskrow mock-taskrow-fail';
+						trow.appendChild(repDot('fail'));
+						var tgh = document.createElement('span');
+						tgh.className = 'dsh-whale-ico-ghost';
+						tgh.textContent = '❌ ';
+						trow.appendChild(tgh);
+						var ttitle = g2.title || g2.rawTitle || '（未命名）';
+						trow.appendChild(document.createTextNode(ttitle));
+						var tad2 = new Date(g2.anchor || 0);
+						var tmeta = document.createElement('span');
+						tmeta.className = 'mut';
+						tmeta.textContent = '失败 · ' + (tad2.getHours() < 10 ? '0' : '') + tad2.getHours() + ':' + (tad2.getMinutes() < 10 ? '0' : '') + tad2.getMinutes();
+						trow.appendChild(tmeta);
+						trow.addEventListener('click', (function (sid3, anchor3, t3) {
+							return function (event) {
+								event.stopPropagation();
+								if (openSessionAt(sid3, anchor3) || openViaSidebarById(sid3) || openViaSidebarByTitle(t3)) {
+									uiSay('正在跳转到该对话… 🐳', 1500, sid3);
+									return;
+								}
+								uiSay('跳转失败：右键菜单 🔄 刷新页面后重试（浏览器可按 Ctrl+F5）🥲', 3000, sid3);
+							};
+						})(sid, g2.anchor, ttitle));
+						list.appendChild(trow);
+						return;
+					}
 					var title2 = g2.title || g2.rawTitle || '（未命名）';
 					var ad = new Date(g2.anchor || 0);
 					var label = g2.hasBad ? '❌ 失败' : (g2.allDone ? '✅ 完成' : '混合');
@@ -8663,17 +9205,468 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				});
 			}
 			}
-			/* 报告卡片化（用户反馈「这是搞的啥」：旧列表裸奔在页面背景上） */
+			/* 报告卡片化（用户反馈「这是搞的啥」：旧列表裸奔在页面背景上）。
+			 * 0.4.3 阶段 B（mock-b 批准面）Tab 结构：
+			 *   [昨夜摘要卡?] → [📊 周报 头行+只看失败 chip] → [报告卡] → [陪伴小账?]
+			 * 摘要卡闸内一次性装配（重进 Tab 由 lastSummary.card 位兜住，不重出）；
+			 * 头行/小账挂独立 wrap 随 build() 重建。 */
 			var card = document.createElement('div');
 			card.className = 'dsh-whale-pp-report';
 			card.appendChild(list);
+			var headWrap = document.createElement('div');
+			var ledgerWrap = document.createElement('div');
+			var summaryCard = ppBuildNightSummaryCard(card);
+			if (summaryCard) content.appendChild(summaryCard);
+			content.appendChild(headWrap);
 			content.appendChild(card);
+			content.appendChild(ledgerWrap);
 			build();
 			/* warm: merge records saved by other windows（vm/离线静默降级）——
 			 * 合并完成后重渲一次，首开即见其他窗口保存的记录 */
 			try { pullCloudHistory(function () { build(); }); } catch (e) { /* offline */ }
+			/* 陪伴小账数据：/state 顶层 petLedger（宿主侧实现的只读载者）。缺键/
+			 * days 空 → ppRenderLedgerBlock 整块不渲染（防御式：不报错不占位）；
+			 * 数据到位后 build 重渲点亮（build 开头清空，不叠加）。 */
+			try {
+				fetch('/api/whale-assistant/state').then(function (r) {
+					return r.ok ? r.json() : null;
+				}).then(function (j) {
+					if (j && j.petLedger && Array.isArray(j.petLedger.days) && j.petLedger.days.length) {
+						ppPetLedger = j.petLedger;
+					}
+					build();
+				}).catch(function () { /* 离线：静默 */ });
+			} catch (eLedger) { /* 桩环境无 fetch：静默 */ }
+			/* Tab 头行（mock-b 批准面）：📊 周报 sec（margin 归零进 flex 行）+
+			 * 右侧「只看失败 N」ghost chip（同音色行 chip 族）。失败数 0 → chip
+			 * 不渲染；点击切换全部/只看失败（激活态=panel-active 底），重建整列表 */
+			function ppBuildHeadRow(host, fails) {
+				host.textContent = '';
+				var head = document.createElement('div');
+				head.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin:14px 0 8px';
+				var h1 = document.createElement('div');
+				h1.className = 'dsh-whale-pp-sec';
+				h1.style.margin = '0';
+				setIconLabel(h1, '📊 周报');
+				head.appendChild(h1);
+				if (fails > 0) {
+					var chip = document.createElement('span');
+					chip.className = 'dsh-whale-pp-val dsh-whale-pp-chip';
+					chip.textContent = '只看失败 ' + fails;
+					if (ppRepFailOnly) chip.style.background = 'var(--wh-panel-active)';
+					chip.addEventListener('click', function (event) {
+						event.stopPropagation();
+						ppRepFailOnly = !ppRepFailOnly;
+						build();
+					});
+					head.appendChild(chip);
+				}
+				host.appendChild(head);
+			}
+			/* 昨夜摘要卡（mock-b 批准面）：闸（离席 ≥1h + 窗口事件 ≥3 条）满足且
+			 * 当日 card 位空闲才渲染并记账（ppWriteSummaryRec card:true）；
+			 * 「查看今日小结 ›」锚到下方报告卡（scrollIntoView，vm 桩无此方法兜空）。 */
+			function ppBuildNightSummaryCard(reportCardEl) {
+				var rec0 = ppReadSummaryRec();
+				if (!ppSummarySlotFree(rec0, 'card', todayKey())) return null;
+				var win = ppNightSummaryWindow(Date.now());
+				if (!win) return null;
+				ppWriteSummaryRec({ card: true, from: win.from, to: win.to, events: win.events.length });
+				var agg = ppAggregateWindow(win.events);
+				var cardEl = document.createElement('div');
+				cardEl.className = 'dsh-whale-pp-report';
+				var t = document.createElement('div');
+				t.className = 'mock-sum-title';
+				var tl = document.createElement('span');
+				setIconLabel(tl, '🐋 昨夜摘要');
+				var tr = document.createElement('span');
+				tr.className = 'mock-sum-sub';
+				tr.textContent = ppFmtClock(win.from) + ' – ' + ppFmtClock(win.to) + ' · 离席 ' + ppFmtAway(win.away);
+				t.appendChild(tl);
+				t.appendChild(tr);
+				cardEl.appendChild(t);
+				var line = document.createElement('div');
+				line.className = 'mock-sum-line';
+				repCount(line, 'done', '✅', agg.done);
+				line.appendChild(document.createTextNode(' 完成 · '));
+				repCount(line, 'fail', '❌', agg.fail);
+				line.appendChild(document.createTextNode(' 失败 · '));
+				repCount(line, 'ask', '❓', agg.ask);
+				line.appendChild(document.createTextNode(' 待审核 · '));
+				var tk = document.createElement('span');
+				tk.className = 'wh-rnum';
+				tk.textContent = fmtK(agg.tok) + ' tok';
+				line.appendChild(tk);
+				cardEl.appendChild(line);
+				var note = document.createElement('div');
+				note.className = 'mock-sum-note';
+				note.textContent = agg.sessions + ' 个对话有新产出' + (agg.longestMs > 0 ? ' · 最长任务 ' + ppFmtAway(agg.longestMs) + '（' + agg.longestTitle + '）' : '');
+				cardEl.appendChild(note);
+				var link = document.createElement('div');
+				link.className = 'mock-sum-link';
+				link.textContent = '查看今日小结 ›';
+				link.addEventListener('click', function (event) {
+					event.stopPropagation();
+					try { reportCardEl.scrollIntoView({ block: 'start' }); } catch (eScroll) { /* vm 桩无此方法 */ }
+				});
+				cardEl.appendChild(link);
+				return cardEl;
+			}
 		}
+		/* ———— 0.4.3 阶段 B UI 半区（mock-a/mock-b 批准面）————
+		 * 挂载面 + 纯逻辑核心区 + 开机胶水。渲染契约：DOM 装配全部构建期
+		 * 组合（ppBuildDesc/ppBuildMxCell 同款），emoji→图标走 setIconLabel/
+		 * whInlineIcon ghost 口径（textContent 逐字节），不做后置 walker。 */
 		window.__dshWhalePanel = { mount: mountWhalePanelPage };
+		/* —— PP-SUMMARY-CORE-START（纯逻辑测试缝：本区只依赖区内常量/函数与
+		 * 既有关闭缝 history/petDormant/dndActive/uiSay/safeGet/safeSet/
+		 * todayKey/PET_MODE——test-whale 追加块整段摘出注入桩做行为断言；
+		 * DOM 装配一律在 mountWhaleReportTab/renderSettings 局部完成）—— */
+		var PP_ACT_KEY = 'dsh-whale:lastActivityAt';
+		var PP_SUMMARY_KEY = 'dsh-whale:lastSummary';
+		var PP_SUMMARY_AWAY_MS = 60 * 60 * 1000; /* 闸①：离席 ≥1h */
+		var PP_SUMMARY_MIN_EVENTS = 3; /* 闸②：离席期间任务事件 ≥3 条 */
+		var PP_HB_AWAY_MS = 15 * 60 * 1000; /* 心跳行：挂机 ≥15 分钟才出现 */
+		var PP_HB_TICK_MS = 30 * 1000; /* 心跳行：面板打开期间 30s 自刷新 */
+		/* 事件活动刷新：收到会话/任务事件打点。panel-page 自己不消费事件——
+		 * 全部事件都汇经 sleep.js touchActivity（turn/start、turn/end、attention、
+		 * projection…），开机胶水处对它做运行时包装落盘（见文件尾）。 */
+		function ppTouchActivityAt(now) {
+			if (PET_MODE) return false; /* 桌宠页不落页鲸键 */
+			try { safeSet(PP_ACT_KEY, typeof now === 'number' ? now : Date.now()); } catch (e) { return false; }
+			return true;
+		}
+		function ppReadLastActivity() {
+			var v = null;
+			try { v = safeGet(PP_ACT_KEY); } catch (e) { v = null; }
+			return typeof v === 'number' && v > 0 ? v : 0;
+		}
+		function ppReadSummaryRec() {
+			var v = null;
+			try { v = safeGet(PP_SUMMARY_KEY); } catch (e) { v = null; }
+			return (v && typeof v === 'object' && !Array.isArray(v)) ? v : null;
+		}
+		/* 闸③④（每日 ≤1 / 当日已出不再出、重进 Tab 不重出）：双表面各占一位
+		 * （card=Tab 卡 / bubble=开机气泡，帽互不挤占——气泡点了「点开看周报」
+		 * 落地就要看到卡）。记录=一行 JSON：{date,card,bubble,from,to,events} */
+		function ppSummarySlotFree(rec, which, today) {
+			return !(rec && rec.date === today && rec[which] === true);
+		}
+		function ppWriteSummaryRec(patch) {
+			var rec = ppReadSummaryRec() || {};
+			if (patch) for (var k in patch) rec[k] = patch[k];
+			rec.date = todayKey();
+			try { safeSet(PP_SUMMARY_KEY, rec); } catch (e) {}
+			return rec;
+		}
+		/* 离席窗口判定（闸①②）：lastActivityAt 距今 ≥1h 且窗口 [last, now] 内
+		 * 任务事件 ≥3 条。数据源=history——cap 已对齐服务端 500 口径，离席期间
+		 * 的记录由 pullCloudHistory 合并补齐（开机胶水在 pull 回调里判闸）。 */
+		function ppNightSummaryWindow(now) {
+			var last = ppReadLastActivity();
+			if (!last) return null;
+			var away = now - last;
+			if (away < PP_SUMMARY_AWAY_MS) return null;
+			var evs = [];
+			for (var i = 0; i < history.length; i++) {
+				var at = (history[i] && history[i].at) || 0;
+				if (at >= last && at <= now) evs.push(history[i]);
+			}
+			if (evs.length < PP_SUMMARY_MIN_EVENTS) return null;
+			return { from: last, to: now, away: away, events: evs };
+		}
+		/* 窗口聚合：N 完成 · M 失败 · K 待审核 · tok · 对话数 · 最长任务
+		 * （最长任务=窗口内单会话首末记录跨度，取最长者；标题取最新非「未命名」） */
+		function ppAggregateWindow(events) {
+			var agg = { done: 0, fail: 0, ask: 0, tok: 0, sessions: 0, longestMs: 0, longestTitle: '' };
+			var seen = {};
+			var minAt = {};
+			var maxAt = {};
+			var title = {};
+			for (var i = 0; i < events.length; i++) {
+				var rec = events[i] || {};
+				var sid = rec.sessionId || '';
+				var at = rec.at || 0;
+				if (rec.kind === 'done') agg.done++;
+				else if (rec.kind === 'fail') agg.fail++;
+				else if (rec.kind === 'question' || rec.kind === 'approval') agg.ask++;
+				if (rec.turnTokens) agg.tok += rec.turnTokens;
+				if (!seen[sid]) { seen[sid] = 1; agg.sessions++; }
+				if (minAt[sid] === undefined || at < minAt[sid]) minAt[sid] = at;
+				var end = rec.endTime || at;
+				if (maxAt[sid] === undefined || end > maxAt[sid]) maxAt[sid] = end;
+				if (!title[sid] && rec.title && rec.title !== '未命名任务') title[sid] = rec.title;
+			}
+			for (var sid2 in seen) {
+				var span = (maxAt[sid2] || 0) - (minAt[sid2] || 0);
+				if (span > agg.longestMs) {
+					agg.longestMs = span;
+					agg.longestTitle = title[sid2] || '未命名任务';
+				}
+			}
+			return agg;
+		}
+		function ppFmtClock(ms) {
+			var d = new Date(ms);
+			return (d.getHours() < 10 ? '0' : '') + d.getHours() + ':' + (d.getMinutes() < 10 ? '0' : '') + d.getMinutes();
+		}
+		function ppFmtAway(ms) {
+			if (ms >= 3600000) return (ms / 3600000).toFixed(1).replace(/\.0$/, '') + ' 小时';
+			return Math.floor(ms / 60000) + ' 分钟';
+		}
+		/* 开机摘要气泡（闸③：bubble 位每日 ≤1）：文案照 mockup 逐字。petDormant
+		 * （桌面鲸在岗）/免打扰时静默让路且不消费当日帽——卡位独立留给周报 Tab。 */
+		function ppBootNightSummary(now) {
+			if (PET_MODE) return false;
+			if (petDormant) return false;
+			try { if (dndActive()) return false; } catch (eDnd) { /* 桩环境无此缝 */ }
+			var n = typeof now === 'number' ? now : Date.now();
+			if (!ppSummarySlotFree(ppReadSummaryRec(), 'bubble', todayKey())) return false;
+			var win = ppNightSummaryWindow(n);
+			if (!win) return false;
+			var agg = ppAggregateWindow(win.events);
+			uiSay('🐋 昨晚 ' + agg.done + ' 完成 · ' + agg.fail + ' 失败 · ' + agg.ask + ' 条待你审核 — 点开看周报', 8000);
+			ppWriteSummaryRec({ bubble: true, from: win.from, to: win.to, events: win.events.length });
+			return true;
+		}
+		/* 陪伴小账纯计算（mock-b 批准面）：/state.petLedger={days:[{date,pets,wakes}]}
+		 * 90 天滚动。本周=最近 7 个本地日历日，上周=其前 7 天；上周合计 0 →
+		 * 百分比不出（pct=null）。bars 值缩放 6-16px、最高日 .on（渲染局部做）。 */
+		function ppLedgerCalc(days, now) {
+			if (!Array.isArray(days) || !days.length) return null;
+			var map = {};
+			for (var i = 0; i < days.length; i++) {
+				var d = days[i];
+				if (d && typeof d.date === 'string') map[d.date] = { pets: d.pets || 0, wakes: d.wakes || 0 };
+			}
+			var base = new Date(now);
+			var day0 = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+			var vals = [];
+			var labels = [];
+			var week = 0;
+			var prev = 0;
+			var pets = 0;
+			var wakes = 0;
+			function dayKey(dt) {
+				var m = dt.getMonth() + 1;
+				var dd = dt.getDate();
+				return dt.getFullYear() + '-' + (m < 10 ? '0' : '') + m + '-' + (dd < 10 ? '0' : '') + dd;
+			}
+			for (var k = 6; k >= 0; k--) {
+				var dt = new Date(day0.getFullYear(), day0.getMonth(), day0.getDate() - k);
+				var v = map[dayKey(dt)] || { pets: 0, wakes: 0 };
+				vals.push((v.pets || 0) + (v.wakes || 0));
+				labels.push('日一二三四五六'.charAt(dt.getDay()));
+				week += vals[vals.length - 1];
+				pets += v.pets || 0;
+				wakes += v.wakes || 0;
+			}
+			for (var k2 = 13; k2 >= 7; k2--) {
+				var dt2 = new Date(day0.getFullYear(), day0.getMonth(), day0.getDate() - k2);
+				var v2 = map[dayKey(dt2)] || { pets: 0, wakes: 0 };
+				prev += (v2.pets || 0) + (v2.wakes || 0);
+			}
+			var max = 0;
+			var maxIdx = -1;
+			for (var m = 0; m < vals.length; m++) {
+				if (vals[m] > max) { max = vals[m]; maxIdx = m; }
+			}
+			return {
+				vals: vals,
+				labels: labels,
+				maxIdx: max > 0 ? maxIdx : -1,
+				week: week,
+				prev: prev,
+				pets: pets,
+				wakes: wakes,
+				pct: prev > 0 ? Math.round((week - prev) / prev * 100) : null
+			};
+		}
+		/* —— PP-SUMMARY-CORE-END —— */
+		/* 挂机心跳行渲染（mock-a 批准面，renderSettings 局部调用 + 30s 自刷新）：
+		 * 显示条件=距 lastActivityAt ≥15 分钟 且 runSlots.size>0（status-panel
+		 * 运行态投影，同 IIFE 直读）；异常才换简述——stuckActive（工具卡住）//
+		 * recentFailAt ≥ 挂机起点（挂机期间有失败），圆片 ok→warn；文案含批准
+		 * 的固定后缀。 */
+		function ppHeartDot(kind) {
+			var NS = 'http://www.w3.org/2000/svg';
+			var wrap = document.createElement('span');
+			wrap.className = 'wh-hdot wh-hdot-' + kind;
+			var svg = document.createElementNS(NS, 'svg');
+			svg.setAttribute('viewBox', '0 0 12 12');
+			svg.setAttribute('aria-hidden', 'true');
+			var add = function (name, attrs) {
+				var el = document.createElementNS(NS, name);
+				for (var k in attrs) el.setAttribute(k, attrs[k]);
+				svg.appendChild(el);
+			};
+			/* P1-4 class 路线（0.4.3 阶段 C）：同 whHealthDot——颜色挪注入 CSS，
+			 * 几何留 attribute（vm 桩 setAttribute 只存字符串）。 */
+			if (kind === 'ok') {
+				add('path', { d: 'M2.8 6.4 5 8.6l4.2-5', 'class': 'wh-dot-mark', 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+			} else if (kind === 'fail') {
+				add('path', { d: 'M4.2 4.2l3.6 3.6M7.8 4.2 4.2 7.8', 'class': 'wh-dot-mark', 'stroke-width': 1.6, 'stroke-linecap': 'round' });
+			} else {
+				add('path', { d: 'M6 2.9v3.6', 'class': 'wh-dot-mark', 'stroke-width': 1.5, 'stroke-linecap': 'round' });
+				add('circle', { cx: 6, cy: 9.1, r: 0.8, 'class': 'wh-dot-pt' });
+			}
+			wrap.appendChild(svg);
+			return wrap;
+		}
+		function ppRenderHeartbeat(row) {
+			var last = ppReadLastActivity();
+			var running = 0;
+			try { running = (typeof runSlots !== 'undefined' && runSlots && runSlots.size) || 0; } catch (eRun) { running = 0; }
+			var away = last ? Date.now() - last : 0;
+			if (!last || away < PP_HB_AWAY_MS || !(running > 0)) {
+				row.textContent = '';
+				try { row.style.display = 'none'; } catch (eH0) {}
+				return;
+			}
+			try { row.style.display = ''; } catch (eH1) {}
+			var stuck = false;
+			try { stuck = (typeof stuckActive !== 'undefined') && stuckActive === true; } catch (eH2) {}
+			var failAt = recentFailAt();
+			var abnormal = stuck || (typeof failAt === 'number' && failAt >= last);
+			var awayTxt = ppFmtAway(away);
+			var stateTxt = abnormal ? (stuck ? '有工具卡住' : '有任务失败') : '无异常';
+			row.textContent = '';
+			row.appendChild(ppHeartDot(abnormal ? 'warn' : 'ok'));
+			row.appendChild(document.createTextNode(' 已挂机 ' + awayTxt + ' · ' + running + ' 个任务仍在运行 · ' + stateTxt + '（每 15 分钟自动更新；异常才升级为气泡）'));
+		}
+		/* 陪伴小账区块渲染（mock-b 批准面，mountWhaleReportTab 的 build 局部调用）：
+		 * 数据缺失（键缺/days 空）→ 整块不渲染，不报错不占位。sec 图标 🤝 无
+		 * 字形 → setIconLabel emoji 回落（与全站一致）。 */
+		function ppRenderLedgerBlock(host) {
+			host.textContent = '';
+			var calc = ppLedgerCalc(ppPetLedger ? ppPetLedger.days : null, Date.now());
+			if (!calc) return;
+			var sec = document.createElement('div');
+			sec.className = 'dsh-whale-pp-sec';
+			setIconLabel(sec, '🤝 陪伴小账');
+			host.appendChild(sec);
+			var acc = document.createElement('div');
+			acc.style.cssText = 'font-size:12.5px';
+			acc.appendChild(document.createTextNode('本周互动 '));
+			var an = document.createElement('span');
+			an.className = 'mock-bignum';
+			an.style.fontSize = '16px';
+			an.textContent = String(calc.week);
+			acc.appendChild(an);
+			acc.appendChild(document.createTextNode(' 次（摸头 ' + calc.pets + ' · 唤起 ' + calc.wakes + '）'));
+			if (calc.pct !== null) {
+				acc.appendChild(document.createTextNode(' · 较上周 '));
+				var up = document.createElement('span');
+				up.style.color = calc.pct >= 0 ? '#4ade80' : '#f87171';
+				up.textContent = (calc.pct >= 0 ? '+' : '') + calc.pct + '%';
+				acc.appendChild(up);
+			}
+			host.appendChild(acc);
+			var bars = document.createElement('div');
+			bars.className = 'mock-bars';
+			var maxVal = calc.maxIdx >= 0 ? calc.vals[calc.maxIdx] : 1;
+			for (var bi = 0; bi < calc.vals.length; bi++) {
+				var b = document.createElement('i');
+				var h = 6 + Math.round((calc.vals[bi] / maxVal) * 10);
+				if (h < 6) h = 6;
+				if (h > 16) h = 16;
+				b.style.height = h + 'px';
+				if (bi === calc.maxIdx) b.className = 'on';
+				bars.appendChild(b);
+			}
+			host.appendChild(bars);
+			var daysRow = document.createElement('div');
+			daysRow.className = 'mock-days';
+			calc.labels.forEach(function (c) {
+				var s = document.createElement('span');
+				s.textContent = c;
+				daysRow.appendChild(s);
+			});
+			host.appendChild(daysRow);
+			var note3 = document.createElement('div');
+			note3.className = 'mock-sum-note';
+			note3.textContent = '数据只在报里看，不弹气泡不打扰（触发记录静默落账）';
+			host.appendChild(note3);
+		}
+		/* —— 开机胶水（uiInit 内执行：bubble/touchActivity 同闭包）—— */
+		/* 事件活动落盘：frames/server-events 的所有会话/任务事件都汇经
+		 * sleep.js touchActivity——运行时包一层把时间戳写进 localStorage
+		 * （页鲸 origin 稳定，跨开关机可靠）。不改任何其他文件；幂等
+		 * （重复 uiInit 不双层包）；回放批 60s 外的帧本来就丢弃，离席
+		 * 窗口不会被开机回放清零。 */
+		try {
+			if (!PET_MODE && typeof touchActivity === 'function' && !(window.__dshWhale && window.__dshWhale._ppTouchWrapped)) {
+				var __ppOrigTouch = touchActivity;
+				if (window.__dshWhale) window.__dshWhale._ppTouchWrapped = true;
+				touchActivity = function (silentWake) {
+					ppTouchActivityAt(Date.now());
+					return __ppOrigTouch(silentWake);
+				};
+			}
+		} catch (eWrap) { /* 桩环境兜底 */ }
+		/* 摘要气泡点击 → 打开侧栏页 + 直切周报 Tab（menu.js 设置行同款
+		 * __dshWhaleSelectPanel 桥；桥缺席回落 uiSay 指路）。只接管当前显示中
+		 * 的摘要气泡（文本前缀守卫），普通通知气泡零波及。 */
+		try {
+			bubble.addEventListener('click', function (event) {
+				if (!uiSay.visible) return;
+				var txt = String((event && event.currentTarget && event.currentTarget.textContent) || bubble.textContent || '');
+				if (txt.indexOf('🐋 昨晚 ') !== 0) return;
+				try { event.stopPropagation(); } catch (eS0) {}
+				if (typeof window.__dshWhaleSelectPanel === 'function') {
+					try { window.__dshWhaleSelectPanel('whale-assistant'); } catch (eSel) {}
+				} else {
+					uiSay('周报在 DSH 左侧栏「小鲸鱼助手」页 🐳', 3000);
+					return;
+				}
+				ppPendingReportTab = true;
+				try {
+					if (window.__dshWhalePanel && typeof window.__dshWhalePanel.openTab === 'function') {
+						window.__dshWhalePanel.openTab('report');
+					}
+				} catch (eTab) {}
+			});
+		} catch (eBub) { /* 桩环境兜底 */ }
+		/* P1-5 三件套·Esc 关浮层（0.4.3 阶段 C）：Escape 单点接 closeCtxFloats
+		 * （menu.js 已是收口单点）——06 裁决的 S 级三件套之三（搜索框焦点恢复
+		 * 与 :focus-visible 环在 style.css）。keydown 包 try/catch 适配 vm 桩
+		 * （bootstrap.js:94 先例）。 */
+		try {
+			window.addEventListener('keydown', function (ev) {
+				if (!ev || ev.key !== 'Escape') return;
+				closeCtxFloats();
+			});
+		} catch (eEsc) { /* 桩环境无 window 注册表 */ }
+		/* 桌宠菜单「📊 周报」帧消费端（0.4.3 阶段 C，与 client.js 的
+		 * pet-open-settings 监听同款分工——core 派发事件，页侧执行）：
+		 * selectPanel + openTab('report')，ppPendingReportTab 意向位补齐
+		 * 异步 mount 时序缝（摘要气泡点击同款）。监听包 try/catch 适配 vm 桩。 */
+		try {
+			window.addEventListener('dsh-whale:pet-open-report', function () {
+				try {
+					if (typeof window.__dshWhaleSelectPanel === 'function') {
+						window.__dshWhaleSelectPanel('whale-assistant');
+					}
+				} catch (eSel2) { }
+				ppPendingReportTab = true;
+				try {
+					if (window.__dshWhalePanel && typeof window.__dshWhalePanel.openTab === 'function') {
+						window.__dshWhalePanel.openTab('report');
+					}
+				} catch (eTab2) { }
+			});
+		} catch (eRepL) { /* 桩环境兜底 */ }
+		/* 开机检测（闸判定放在 pullCloudHistory 回调里——离席期间的事件在服务端
+		 * 账本，本地缓存没有；pull 失败也回调，拿本地缓存如实判闸）。 */
+		try {
+			pullCloudHistory(function () { ppBootNightSummary(Date.now()); });
+		} catch (eBoot) { /* 桩环境兜底 */ }
+		/* 阶段 B 状态位（uiInit 闭包级）：摘要气泡的 Tab 切换意向 / 心跳行定时器 /
+		 * 小账缓存 / 筛选 chip 态 */
+		var ppPendingReportTab = false;
+		var ppHbTimer = null;
+		var ppPetLedger = null;
+		var ppRepFailOnly = false;
 /* ---- module: src/input/swim.js ---- */
 		/* --- swim-back animation (directional, with ripple trail) --- */
 		var swim = null;
@@ -8868,6 +9861,11 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		var drag = null;
 		var clickTimer = null;
 		var caughtFlag = false;
+		/* I-①-3（0.4.3 阶段 C）：单击/双击区分阈值收口——硬编码 260 曾与红标
+		 * badgeClickTimer（bootstrap.js BADGE_CLICK_VS_DBL_MS）同值不同源，
+		 * 改一漏一即行为分叉。模块独立不跨文件共享常量（build 全 IIFE 共享
+		 * 作用域的重名禁令），两处各自文件顶部具名。 */
+		var CLICK_VS_DBL_MS = 260;
 
 		/** Quick trembling shake of the whale's body (used when caught). */
 		function caughtShake() {
@@ -8981,7 +9979,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					renderUnread();
 				}
 				uiSay(clickSummary());
-			}, 260);
+			}, CLICK_VS_DBL_MS);
 		});
 
 		whale.addEventListener('pointercancel', function (event) {
@@ -9606,10 +10604,18 @@ if (typeof window !== 'undefined' && (window.__dshWhaleSessions || window.__dshW
 	function pushPetSync(fields) {
 		if (!PET_MODE || typeof fetch !== 'function') return;
 		try {
+			/* 0.4.3 阶段 C（P-09 数据地基）：互动入账字段 interact（'pet'=摸头 |
+			 * 'wake'=唤起）随既有通道透传——宿主 /pet/ctrl sync 处理处白名单
+			 * 校验后 ledgerAppend 进 petLedger（90 天滚动+单日钳顶在宿主闸门
+			 * 内）。这里只做透传+白名单防御：调用方（摸头/唤起处，UI 半区）
+			 * 携带的合法值原样上行；脏值当场剥掉——不剥会整包吃宿主 400，
+			 * 连累同载荷的 petDoc 字段（aff/pos 等）一起丢。 */
+			const payload = Object.assign({ action: 'sync' }, fields);
+			if (payload.interact !== 'pet' && payload.interact !== 'wake') delete payload.interact;
 			fetch('/api/whale-assistant/pet/ctrl', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify(Object.assign({ action: 'sync' }, fields))
+				body: JSON.stringify(payload)
 			}).catch(function () { /* 宿主离线/桌宠页直开：静默 */ });
 		} catch (e) { /* 防御 */ }
 	}

@@ -1,3 +1,12 @@
+	/* I-①-1 防御纵深·入泡截断（0.4.3 阶段 C）：>200 字符截到 200+「…」再
+	 * 入泡。正常路径（通知/台词 ≤40 字）逐字节不变；防的是手改 localStorage
+	 * 提醒 text 等残入口把超长串直灌 DOM（style.css 的气泡 max-height 是
+	 * 第一保险，bubbleTruncate 是第二保险——双保险，05b I-①-1 裁决原文）。 */
+	function bubbleTruncate(text) {
+		var s = String(text == null ? '' : text);
+		return s.length > 200 ? s.slice(0, 200) + '…' : s;
+	}
+
 	function uiSay(text, duration, sessionId) {
 		/* 休眠期静默（桌宠在岗，页面鲸鱼只剩数据管线）——状态机在 core/state.js */
 		if (petDormant) return;
@@ -5,8 +14,28 @@
 		currentSaySession = sessionId || null;
 		var bubble = document.querySelector('.dsh-whale-bubble');
 		if (!bubble) return;
-		bubble.textContent = text;
+		bubble.textContent = bubbleTruncate(text);
 		bindBubbleHover(bubble);
+		/* I-①-1 CSS 档的启用判定（0.4.3 阶段 C）：实测内容顶到封顶（盒高被
+		 * max-height 钳住）才挂 .dsh-whale-bubble-capped 进内部滚动档——常规
+		 * 气泡永不进档（overflow 会裁 ::after 尾巴并出幻影滚动条，外观必须
+		 * 一像素不变）。offsetHeight=max-height 生效值：>=capPx-1 即判定顶格
+		 * （scrollHeight 对 overflow:visible 的跨引擎语义不一，不用）。
+		 * 桩环境 offsetHeight 恒 88 < cap → 永不进档，class 不挂。 */
+		try {
+			var capPx = Math.min((window.innerHeight || 800) * 0.5, 280);
+			if (typeof bubble.offsetHeight === 'number' && bubble.offsetHeight > 0 &&
+				bubble.offsetHeight >= capPx - 1) {
+				bubble.classList.add('dsh-whale-bubble-capped');
+			} else {
+				bubble.classList.remove('dsh-whale-bubble-capped');
+			}
+		} catch (eCap) { /* 桩环境兜底 */ }
+		/* I-①-2（0.4.3 阶段 C）：可跳转气泡的指针 affordance——cursor:pointer
+		 * 只给带会话的通知气泡（台词气泡不可跳，不装可点）；原生 title 达意
+		 * （R-4 裁决：hover 弹字是打扰性微交互，native title 零维护）。 */
+		bubble.classList.toggle('dsh-whale-bubble-link', !!sessionId);
+		bubble.title = sessionId ? '双击直达对话' : '';
 		/* 1:1 lifecycle (user request): whenever the bubble switches or
 		 * hides, the token/pressure panel below switches or hides WITH it —
 		 * a stale usage panel must never outlive its notification and be

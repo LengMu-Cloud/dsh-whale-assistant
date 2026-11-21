@@ -174,6 +174,12 @@
 		}
 		function saveReminders(list) {
 			try { localStorage.setItem('dsh-whale:reminders', JSON.stringify(list)); } catch (e) {}
+			/* BUG-1 后半程（0.4.3 阶段 B）：桌宠页 origin 每-boot 随机，提醒
+			 * 列表困在失忆的 localStorage——PET_MODE 下沿 pushPetSync 进 petDoc
+			 * （与 aff/pos 同一条跨重启通道），下次 boot 快照回放。slice(0,20)
+			 * 与宿主 saneReminders 的 cap 同预算（sync 载荷上限 4096 字节内）。
+			 * fire-and-forget：宿主离线静默，下次增删自然补上。 */
+			if (PET_MODE) pushPetSync({ reminders: list.slice(0, 20) });
 			armReminderTimer(); /* 增删后重臂：新增的更早提醒立刻接管定时（函数声明提升） */
 		}
 		function openReminders() {
@@ -372,6 +378,38 @@
 		} catch (eS) { /* 桩环境 */ }
 		setInterval(fireDueReminders, 5000); /* 兜底环：只防病态，正常路径不靠它 */
 		armReminderTimer();
+
+		/** BUG-1 后半程（0.4.3 阶段 B）：宿主 /pet/state 随 2s 轮询下行的四类
+		 * 状态快照采用——aff/pos 的 petSyncFromHost 同款幂等语义：本地已有
+		 * 权威值（键存在）时纯 no-op。boot 头部种入（petBootStateScript）通常
+		 * 已先落好，本函数只兜「本地空白」的直开/清存场景。放在 ui 半区
+		 * （drawers.js）：要同时够到 reminders（本文件）与 sound/petHint/
+		 * gearStats（core 域）——ui→core 是允许方向，core→ui 不是（方向闸门，
+		 * 同 petSyncFromHost 住 exports.js 的理由）。坏值一律丢弃不炸（与宿主
+		 * sane* 守卫同款校验的页侧镜像）。由 pet/page.html 的 fetchState 转发。 */
+		function petSyncExtrasFromHost(extras) {
+			if (!PET_MODE || !extras || typeof extras !== 'object') return;
+			/* reminders：本地无键才采用——用户清空过列表≠空白，不复活 */
+			if (Array.isArray(extras.reminders)) {
+				try {
+					if (localStorage.getItem('dsh-whale:reminders') === null) saveReminders(extras.reminders);
+				} catch (e0) { /* 存储不可用：放弃采用 */ }
+			}
+			/* soundMuted：宿主下行与 relay 同级（服务器→页面采用）——fromRelay
+			 * 旗标防回声（采用不回推 petDoc，同值回写只会空转）。 */
+			if (typeof extras.soundMuted === 'boolean') {
+				try {
+					if (localStorage.getItem(SOUND_KEY) === null) setSoundMuted(extras.soundMuted, true);
+				} catch (e1) { /* 存储不可用：放弃采用 */ }
+			}
+			/* petHint/gearStats 的「键存在即不覆盖」闸门在各自的 adopt 函数里
+			 * （mood.js/gear.js）——离自己的形状知识最近。 */
+			try { adoptPetHintFromHost(extras.petHintDate, extras.petHintCount); } catch (e2) { }
+			try { adoptGearStatsFromHost(extras.gearStats && extras.gearStats.date, extras.gearStats && extras.gearStats.count); } catch (e3) { }
+		}
+		/* 采用缝挂 window.__dshWhale（drag.js _petSyncPos 同款先例）：page.html
+		 * 的 state 轮询是唯一调用方。__dshWhale 在 IIFE 首模块（index.js）已建。 */
+		try { window.__dshWhale.petSyncExtrasFromHost = petSyncExtrasFromHost; } catch (eSeam) { }
 
 		/** 📊 任务周报: last-7-day buckets from the history records, drawn in
 		 * the same drawer style as the history list (fixed height, list

@@ -39,10 +39,18 @@
 	function pushPetSync(fields) {
 		if (!PET_MODE || typeof fetch !== 'function') return;
 		try {
+			/* 0.4.3 阶段 C（P-09 数据地基）：互动入账字段 interact（'pet'=摸头 |
+			 * 'wake'=唤起）随既有通道透传——宿主 /pet/ctrl sync 处理处白名单
+			 * 校验后 ledgerAppend 进 petLedger（90 天滚动+单日钳顶在宿主闸门
+			 * 内）。这里只做透传+白名单防御：调用方（摸头/唤起处，UI 半区）
+			 * 携带的合法值原样上行；脏值当场剥掉——不剥会整包吃宿主 400，
+			 * 连累同载荷的 petDoc 字段（aff/pos 等）一起丢。 */
+			const payload = Object.assign({ action: 'sync' }, fields);
+			if (payload.interact !== 'pet' && payload.interact !== 'wake') delete payload.interact;
 			fetch('/api/whale-assistant/pet/ctrl', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify(Object.assign({ action: 'sync' }, fields))
+				body: JSON.stringify(payload)
 			}).catch(function () { /* 宿主离线/桌宠页直开：静默 */ });
 		} catch (e) { /* 防御 */ }
 	}

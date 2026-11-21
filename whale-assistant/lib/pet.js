@@ -28,17 +28,72 @@
  *   the POC — never the token.
  */
 import { spawn } from 'node:child_process';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadStore, saveStoreAtomic, queueStoreWrite } from './store.js';
+import { ledgerAppend, loadStore, saveStoreAtomic, queueStoreWrite } from './store.js';
 
 export const inject = [];
 
 const PET_TOKEN_HEADER = 'x-dsh-pet-token';
 export const PET_FORMS = ['full', 'bubble', 'hidden'];
+
+/* --- 0.4.3 阶段 B（BUG-1 后半程）：桌宠页四类状态的结构/容量守卫 ---------
+ * 提醒/总静音/引导台词日限/每日装饰计数此前困在桌宠页每-boot 失忆的
+ * localStorage（桌宠中继端口每-boot 随机 → origin 变 → localStorage 按
+ * origin 隔离）。现沿 aff/affMs/pos 同一条 petDoc 通道跨重启：读写两侧
+ * 共用下面这组纯守卫（normalizePetDoc=读侧出口、normalizePetSyncPatch=
+ * 写侧出口），坏形状整字段/整条丢弃、不抛错——手改账本必须无害。
+ * 显式容量预算（历史前科：affMs 64 字符静默截断）：
+ * - reminders    cap 20 条；单条 text ≤50 字符、id ≤64 字符、at 必须有限
+ *                正数。整字段 JSON 最坏 ≈20×(64+50+17+引号键名)≈2.8KB，
+ *                落在 /pet/ctrl sync 载荷上限 4096 字节内；
+ * - soundMuted   布尔（dings.js SOUND_KEY 现值语义，'off'/'on'）；
+ * - petHintDate  'YYYY-MM-DD' 字面正则（mood.js todayKey 同款形状），10 字符；
+ * - petHintCount 0..999 钳顶（页侧日限实际 ≤3 语音 +3 心形，999 余量足）；
+ * - gearStats    {date 正则, count 0..9999999 钳顶（与 aff 同款钳顶值）}，
+ *                整字段 ≈30 字符。 */
+const PET_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const REMINDER_CAP = 20;
+const REMINDER_TEXT_MAX = 50;
+const REMINDER_ID_MAX = 64;
+const HINT_COUNT_CAP = 999;
+const GEAR_COUNT_CAP = 9999999;
+
+/** reminders 数组守卫：非数组 → null（整字段丢弃）；逐条校验（at 有限正数
+ * + text 非空字符串），坏条目单丢，超过 REMINDER_CAP 的尾部条目丢弃
+ * （「第 21 条丢弃」）。返回数组（可能是空数组=合法的「已清空」）。 */
+function saneReminders(list) {
+	if (!Array.isArray(list)) return null;
+	const out = [];
+	for (let i = 0; i < list.length && out.length < REMINDER_CAP; i++) {
+		const it = list[i];
+		if (!it || typeof it !== 'object' || Array.isArray(it)) continue;
+		if (typeof it.at !== 'number' || !isFinite(it.at) || it.at <= 0) continue;
+		if (typeof it.text !== 'string' || !it.text) continue;
+		const entry = { at: it.at, text: it.text.slice(0, REMINDER_TEXT_MAX) };
+		if (typeof it.id === 'string' && it.id) entry.id = it.id.slice(0, REMINDER_ID_MAX);
+		out.push(entry);
+	}
+	return out;
+}
+
+/** 日限计数守卫：非有限负数 → 0（页侧把「缺计数」当「今天还没说过话」），
+ * 有限非负 → 地板化 + HINT_COUNT_CAP 钳顶。 */
+function saneHintCount(n) {
+	return typeof n === 'number' && isFinite(n) && n >= 0 ? Math.min(HINT_COUNT_CAP, Math.floor(n)) : 0;
+}
+
+/** gearStats 守卫：形状/日期不对 → null（整字段丢弃）；count 地板化 +
+ * GEAR_COUNT_CAP 钳顶。 */
+function saneGearStats(gs) {
+	if (!gs || typeof gs !== 'object' || Array.isArray(gs)) return null;
+	if (typeof gs.date !== 'string' || !PET_DATE_RE.test(gs.date)) return null;
+	if (typeof gs.count !== 'number' || !isFinite(gs.count) || gs.count < 0) return null;
+	return { date: gs.date, count: Math.min(GEAR_COUNT_CAP, Math.floor(gs.count)) };
+}
 
 function petAssetsDir() {
 	return join(dirname(fileURLToPath(import.meta.url)), '..', 'pet');
@@ -71,7 +126,20 @@ export function normalizePetDoc(doc) {
 			y: typeof p.y === 'number' && isFinite(p.y) ? p.y : 0
 		}
 		: null;
-	return { enabled, form, aff, affMs, pos };
+	/* 0.4.3 阶段 B：四类状态容错读。字段只在「账本携带且形状合法」时出现在
+	 * 返回值里（不造键：账本没有新字段时返回形状与阶段 A 完全一致，既有
+	 * 断言/老账本零感知），坏形状整字段丢弃。 */
+	const next = { enabled, form, aff, affMs, pos };
+	const rem = saneReminders(pet ? pet.reminders : null);
+	if (rem) next.reminders = rem;
+	if (pet && typeof pet.soundMuted === 'boolean') next.soundMuted = pet.soundMuted;
+	if (pet && typeof pet.petHintDate === 'string' && PET_DATE_RE.test(pet.petHintDate)) next.petHintDate = pet.petHintDate;
+	if (pet && typeof pet.petHintCount === 'number' && isFinite(pet.petHintCount) && pet.petHintCount >= 0) {
+		next.petHintCount = saneHintCount(pet.petHintCount);
+	}
+	const gs = saneGearStats(pet ? pet.gearStats : null);
+	if (gs) next.gearStats = gs;
+	return next;
 }
 
 /** Pure token check (exported for test-host-store.js): constant-time
@@ -86,6 +154,34 @@ export function checkPetToken(req, tokenHex) {
 	} catch (e) {
 		return false;
 	}
+}
+
+/** 0.4.3 阶段 C（P-09 数据地基）：互动入账白名单（纯函数，测试可及）。
+ * sync 载荷的 `interact` 与 /pet/ctrl ledger 动作的 `kind` 共用同一道闸：
+ * 只有 'pet'（摸头）/ 'wake'（唤起）合法，其余（含 undefined/垃圾值）一律
+ * null=不入账——互动账是计数不是内容，白名单外没有可宽容的形状。 */
+export function normalizePetInteract(v) {
+	return v === 'pet' || v === 'wake' ? v : null;
+}
+
+/* --- 0.4.3 阶段 C（D-A1）：whale.js 条件 GET 的 ETag 纯函数对 -----------
+ * 两条 whale.js 路由（index.js 页鲸 / pet.js 桌宠 /pet/whale.js）共用同一
+ * 指纹与匹配判定——弱校验器语义一处实现，两侧不会漂移。处理器本体落在
+ * 闭包里（pet 路由还有 token 闸，测试驱动不可达），纯函数导出给
+ * test-host-store.js 做行为断言；路由接线由源码断言钉住。 */
+
+/** 内容指纹弱校验器：SHA-1 前 16 hex + 字节长度双指纹。构建产物任何变化
+ * 都会换值；每次请求现算（文件可能已被构建刷新，不能按进程缓存）。 */
+export function petScriptEtag(code) {
+	return 'W/"' + createHash('sha1').update(code).digest('hex').slice(0, 16) + '-' + Buffer.byteLength(code) + '"';
+}
+
+/** If-None-Match 匹配判定（RFC 7232 弱比较的实用子集）：'*' 通配 + 精确
+ * 串/多值列表子串命中；头缺席/空串=不匹配（必须 200 全量）。 */
+export function etagMatches(ifNoneMatch, etag) {
+	const inm = String(ifNoneMatch == null ? '' : ifNoneMatch).trim();
+	if (!inm) return false;
+	return inm === '*' || inm.indexOf(etag) !== -1;
 }
 
 /** BUG-1（11-16）：/pet/ctrl action:sync 载荷校验（纯函数，测试可及——
@@ -113,6 +209,31 @@ export function normalizePetSyncPatch(body) {
 				x: typeof body.pos.x === 'number' && isFinite(body.pos.x) ? body.pos.x : 0,
 				y: typeof body.pos.y === 'number' && isFinite(body.pos.y) ? body.pos.y : 0
 			};
+			touched = true;
+		}
+		/* 0.4.3 阶段 B：四类状态随 sync 上报——与读侧同一组 sane* 守卫
+		 * （cap 20/text≤50/日期正则/计数钳顶），坏形状不带键；字段级合并
+		 * 语义不变（只携带出现的字段，writePetDoc 未携带即保留账本现值）。 */
+		const rem = saneReminders(body.reminders);
+		if (rem) {
+			patch.reminders = rem;
+			touched = true;
+		}
+		if (typeof body.soundMuted === 'boolean') {
+			patch.soundMuted = body.soundMuted;
+			touched = true;
+		}
+		if (typeof body.petHintDate === 'string' && PET_DATE_RE.test(body.petHintDate)) {
+			patch.petHintDate = body.petHintDate;
+			touched = true;
+		}
+		if (typeof body.petHintCount === 'number' && isFinite(body.petHintCount) && body.petHintCount >= 0) {
+			patch.petHintCount = saneHintCount(body.petHintCount);
+			touched = true;
+		}
+		const gs = saneGearStats(body.gearStats);
+		if (gs) {
+			patch.gearStats = gs;
 			touched = true;
 		}
 	}
@@ -150,6 +271,38 @@ export function petBootStateScript(aff, affMs, pos) {
 		+ 'localStorage.setItem("dsh-whale:affection",JSON.stringify({v:1,data:{value:b.aff}}));}'
 		+ 'if(b.affMs&&!localStorage.getItem("dsh-whale:affMs")){localStorage.setItem("dsh-whale:affMs",b.affMs);}'
 		+ '}catch(e){}})();';
+}
+
+/** 0.4.3 阶段 B（BUG-1 后半程）boot 种入·四类状态半区：提醒/总静音/引导
+ * 台词日限/每日装饰计数随 petDoc 快照种进 /pet/page 的 <head>（与
+ * petBootStateScript 同一 `__DSH_PET_BOOT__` 标记拼接注入——既有断言钉死
+ * 老函数的三参调用文本形状，test-host-store.js append-only 不得改，故新增
+ * 本函数而非扩参）。信封形状=各键页侧写出的形状：reminders/petHint 裸
+ * JSON（drawers.js saveReminders/mood.js savePetHint 直读直写），sound/
+ * stats 走 safeSet 的 {v:1,data} 信封（dings.js/gear.js 读侧经 safeGet 解
+ * 信封）。种入闸门=键缺失才种（origin 幸存时本地最新，幂等，与老三键的
+ * !getItem 模板同语义；文本形状不同是刻意的——老三键的模板计数断言）。
+ * 空数组 `[]` 也是合法快照（「已清空」），照种。全空返回注释占位。纯函数
+ * （测试可及）。 */
+export function petExtrasBootScript(extras) {
+	const seeds = [];
+	if (extras && typeof extras === 'object' && !Array.isArray(extras)) {
+		const rem = saneReminders(extras.reminders);
+		if (rem) seeds.push(['dsh-whale:reminders', JSON.stringify(rem)]);
+		if (typeof extras.soundMuted === 'boolean') {
+			seeds.push(['dsh-whale:sound', JSON.stringify({ v: 1, data: extras.soundMuted ? 'off' : 'on' })]);
+		}
+		if (typeof extras.petHintDate === 'string' && PET_DATE_RE.test(extras.petHintDate)) {
+			seeds.push(['dsh-whale:petHint', JSON.stringify({ day: extras.petHintDate, n: saneHintCount(extras.petHintCount) })]);
+		}
+		const gs = saneGearStats(extras.gearStats);
+		if (gs) seeds.push(['dsh-whale:stats', JSON.stringify({ v: 1, data: { tasksDone: gs.count, date: gs.date } })]);
+	}
+	if (seeds.length === 0) return '/* pet boot extras: none */';
+	const seedsJson = JSON.stringify(seeds).replace(/</g, '\\u003c');
+	return '(function(){try{var e=' + seedsJson + ';'
+		+ 'for(var i=0;i<e.length;i++){if(localStorage.getItem(e[i][0])===null){localStorage.setItem(e[i][0],e[i][1]);}}'
+		+ '}catch(eX){}})();';
 }
 
 /* --- enumerated feed ----------------------------------------------------- */
@@ -488,6 +641,10 @@ function killTree(pid) {
 		let petAff = null;
 		let petAffMs = null;
 		let petPos = null;
+		/* 0.4.3 阶段 B（BUG-1 后半程）镜像：四类状态（提醒/总静音/引导台词
+		 * 日限/每日装饰计数）同款镜像——一个对象装五个归一化字段（值或
+		 * null），boot 从 petDoc 恢复、sync 动作实时跟更、state 轮询下发。 */
+		let petExtras = null;
 
 		/** Broadcast a pet/state frame through the host's event pipeline:
 		 * lands in recentFrames (pollers) AND fans out to every live SSE
@@ -584,6 +741,21 @@ function killTree(pid) {
 					y: typeof patch.pos.y === 'number' && isFinite(patch.pos.y) ? patch.pos.y : 0
 				};
 			}
+			/* 0.4.3 阶段 B：四类状态字段级合并——携带即覆盖。守卫重跑一遍
+			 * （sane*）作纵深防御：调用方理论上传未经 normalizePetSyncPatch
+			 * 的原始形状也进不了账本；读侧 normalizePetDoc 下次写时仍会复检。
+			 * 空数组也是合法值（「已清空提醒」要能持久化）。 */
+			const remPatch = saneReminders(patch.reminders);
+			if (remPatch) next.reminders = remPatch;
+			if (typeof patch.soundMuted === 'boolean') next.soundMuted = patch.soundMuted;
+			if (typeof patch.petHintDate === 'string' && PET_DATE_RE.test(patch.petHintDate)) {
+				next.petHintDate = patch.petHintDate;
+			}
+			if (typeof patch.petHintCount === 'number' && isFinite(patch.petHintCount) && patch.petHintCount >= 0) {
+				next.petHintCount = saneHintCount(patch.petHintCount);
+			}
+			const gsPatch = saneGearStats(patch.gearStats);
+			if (gsPatch) next.gearStats = gsPatch;
 			doc.pet = next;
 			saveStoreAtomic(join(homedir(), '.dsh'), doc);
 			return next;
@@ -797,6 +969,28 @@ function killTree(pid) {
 		}
 	}
 
+	/** 会话级全清广播（C-A6/C-A7 共用同一段逻辑，两个入口不写两份）：
+	 * dismiss 反查从单码升级为会话级——turnCodeOf 每个新任务都给同一会话
+	 * 铸新码（codes 正查只留最新码），旧实现 book.codes.get 只清得到最新
+	 * 码=同会话旧任务的红标在桌宠永久滞留。改为沿 rev 反查索引把该会话
+	 * **所有**历史码逐个广播 pet/dismiss（事件名/载荷形状不变：type+code，
+	 * 枚举白名单只放行这两字段）；pushFrame 异常吞掉照抄 jump——管线异常
+	 * 不得挂死 HTTP 响应。返回实际广播条数（0=该会话无码，等价旧
+	 * delivered:false）。 */
+	function broadcastSessionDismiss(realSid) {
+		let sent = 0;
+		if (typeof realSid !== 'string' || !realSid) return sent;
+		if (!(book.rev instanceof Map)) return sent;
+		book.rev.forEach((sid, code) => {
+			if (sid !== realSid) return;
+			try {
+				if (typeof deps.pushFrame === 'function') deps.pushFrame({ type: 'pet/dismiss', code: code });
+				sent++;
+			} catch (ePush) { /* 广播失败按未送达回报 */ }
+		});
+		return sent;
+	}
+
 	const routes = [
 		{
 			kind: 'exact',
@@ -813,7 +1007,7 @@ function killTree(pid) {
 				 * origin 的 localStorage 在 whale.js 求值前落好，鲸鱼淡入即在上次
 				 * 落点（消除「默认角→2s 后闪到老位置」）。镜像=boot 账本快照 +
 				 * sync 动作实时跟更。函数替换防 $ 字符替换语义（同 SVG）。 */
-				const bootScript = petBootStateScript(petAff, petAffMs, petPos);
+				const bootScript = petBootStateScript(petAff, petAffMs, petPos) + petExtrasBootScript(petExtras);
 				plain(res, 200, html
 					.replace(/__WHALE_SVG__/, () => svg)
 					.replace('__DSH_PET_BOOT__', () => bootScript), 'text/html; charset=utf-8');
@@ -827,7 +1021,24 @@ function killTree(pid) {
 				if (!deps.isAllowed(req) || !checkPetToken(req, tokenHex)) return plain(res, 403, fatalHtml(), 'text/html; charset=utf-8');
 				const code = readAsset(join(dirname(fileURLToPath(import.meta.url)), 'whale.js'));
 				if (code === null) return plain(res, 404, 'console.error("[dsh-whale] whale.js not found on the host");', 'application/javascript; charset=utf-8');
-				plain(res, 200, code, 'application/javascript; charset=utf-8');
+				/* 0.4.3 阶段 C（D-A1）：no-store 全量重传 → no-cache+ETag 条件
+				 * GET——语义不变（文件有更新必拉新），没更新时 304 空响应，
+				 * 桌宠每次重启/页面重载省掉 ~470KB 重传。指纹与 If-None-Match
+				 * 判定走 petScriptEtag/etagMatches 纯函数对（与本文件头部定义，
+				 * 测试可及）。304/200 都带 ETag+no-cache：下一拍条件请求照常
+				 * 成立。 */
+				const etag = petScriptEtag(code);
+				if (etagMatches(req.headers['if-none-match'], etag)) {
+					res.writeHead(304, { etag: etag, 'cache-control': 'no-cache' });
+					res.end();
+					return;
+				}
+				res.writeHead(200, {
+					'content-type': 'application/javascript; charset=utf-8',
+					'cache-control': 'no-cache',
+					etag: etag
+				});
+				res.end(code);
 			}
 		},
 		{
@@ -881,7 +1092,7 @@ function killTree(pid) {
 				}, () => {
 					/* unreachable (cached fn never rejects) — keep the response contract */
 					plain(res, 200, JSON.stringify({ events, titles: {}, bootId: deps.bootId, now: Date.now() }));
-				});
+				}).catch(() => { /* 外层兜底防 unhandled rejection 击穿宿主：双参 fail 只接源拒绝，ok/fail 回调内同步抛出仍会变成无人接的拒绝（Node ≥15 默认崩进程） */ });
 			}
 		},
 		{
@@ -945,7 +1156,16 @@ function killTree(pid) {
 					 * 全 null=账本缺货，桌宠页保持现值等首次上报。 */
 					aff: petAff,
 					affMs: petAffMs,
-					pos: petPos
+					pos: petPos,
+					/* 0.4.3 阶段 B（BUG-1 后半程）：四类状态随轮询下发——页侧
+					 * petSyncExtrasFromHost 采用（本地空白才吃，与上面幂等语义
+					 * 同款；boot 头部种入通常已先落好，本下行只兜直开/清存）。
+					 * 全 null=账本缺货。 */
+					reminders: petExtras ? petExtras.reminders : null,
+					soundMuted: petExtras ? petExtras.soundMuted : null,
+					petHintDate: petExtras ? petExtras.petHintDate : null,
+					petHintCount: petExtras ? petExtras.petHintCount : null,
+					gearStats: petExtras ? petExtras.gearStats : null
 				}));
 			}
 		},
@@ -997,13 +1217,41 @@ function killTree(pid) {
 						 * 设置级标量，无会话内容，枚举化边界不破。字段级合并：
 						 * 只更新携带的字段，镜像先更（轮询不等磁盘写）。 */
 						const patch = normalizePetSyncPatch(body);
+						/* 0.4.3 阶段 C（P-09 数据地基）：互动入账字段 interact
+						 * （'pet'=摸头 | 'wake'=唤起，白名单见 normalizePetInteract）
+						 * ——桌宠页摸头/唤起经既有 sync 通道顺带上行，宿主在这里
+						 * ledgerAppend 进 petLedger（90 天滚动+单日钳顶在
+						 * store.js 的闸门内）。事件不进 petDoc：petLedger 是宿主
+						 * 主管辖顶层键，走 store.js 自己的合并管道。入账
+						 * fire-and-forget（与 pendingJump 落库同款）：petDoc 写与
+						 * 响应不等人，失败落 host-debug 日志。 */
+						const interact = normalizePetInteract(body && body.interact);
+						if (interact && typeof deps.ledgerDir === 'function') {
+							ledgerAppend(deps.ledgerDir(), interact)
+								.catch((e2) => log('petLedger append failed: ' + String(e2 && e2.message || e2)));
+						}
+						if (!patch && !interact) {
+							plain(res, 400, JSON.stringify({ ok: false, error: 'aff|affMs|pos|reminders|soundMuted|petHint required' }));
+							return;
+						}
 						if (!patch) {
-							plain(res, 400, JSON.stringify({ ok: false, error: 'aff|affMs|pos required' }));
+							/* 仅互动、无 petDoc 字段：入账已 kicked，无镜像/落盘可做 */
+							plain(res, 200, JSON.stringify({ ok: true }));
 							return;
 						}
 						if (typeof patch.aff === 'number') petAff = patch.aff;
 						if (typeof patch.affMs === 'string') petAffMs = patch.affMs;
 						if (patch.pos) petPos = patch.pos;
+						/* 0.4.3 阶段 B：四类状态镜像先更（轮询不等磁盘写，与
+						 * aff/pos 同款）——字段级合并，未携带保留镜像现值。 */
+						if (!petExtras) {
+							petExtras = { reminders: null, soundMuted: null, petHintDate: null, petHintCount: null, gearStats: null };
+						}
+						if (patch.reminders !== undefined) petExtras.reminders = patch.reminders;
+						if (typeof patch.soundMuted === 'boolean') petExtras.soundMuted = patch.soundMuted;
+						if (patch.petHintDate !== undefined) petExtras.petHintDate = patch.petHintDate;
+						if (patch.petHintCount !== undefined) petExtras.petHintCount = patch.petHintCount;
+						if (patch.gearStats !== undefined) petExtras.gearStats = patch.gearStats;
 						writePetDoc(patch).then(() => {
 							plain(res, 200, JSON.stringify({ ok: true }));
 						}).catch((e) => plain(res, 500, JSON.stringify({ ok: false, error: String(e && e.message || e) })));
@@ -1013,16 +1261,32 @@ function killTree(pid) {
 						/* 通知已读联动（11-14 用户实报「在 DSH 里直接看了对话，鲸鱼红标
 						 * 不消失」）：页鲸检测到本窗口正在看某会话 → POST dismiss → 宿主
 						 * 把真实会话反查成桌宠任务码 → 广播 pet/dismiss，桌宠页把该任务
-						 * 的未读清掉。真实 sessionId 只进反查不落盘，边界同 jump。 */
+						 * 的未读清掉。真实 sessionId 只进反查不落盘，边界同 jump。
+						 * C-A6（0.4.3）：反查升级为会话级全清（见 broadcastSessionDismiss）
+						 * ——同一会话的旧任务码一并广播，不再只清 codes 正查里的最新码。 */
 						const realSid = typeof body.sessionId === 'string' ? body.sessionId : '';
-						const dCode = realSid && book.codes && typeof book.codes.get === 'function' ? book.codes.get(realSid) : null;
-						if (Number.isInteger(dCode) && dCode > 0) {
-							/* pushFrame 调用照抄 jump：管线异常不得挂死响应 */
-							try {
-								if (typeof deps.pushFrame === 'function') deps.pushFrame({ type: 'pet/dismiss', code: dCode });
-							} catch (ePush) { /* 广播失败按未送达回报 */ }
+						const sent = broadcastSessionDismiss(realSid);
+						plain(res, 200, JSON.stringify({ ok: true, delivered: sent > 0 }));
+						return;
+					}
+					if (action === 'dismiss-all') {
+						/* 页鲸双击红标全清 relay（C-A7）：页鲸把全部未读清空后通知宿主，
+						 * 宿主把码本里所有任务码逐个广播 pet/dismiss——桌宠侧红标不再
+						 * 滞留假数字。调用方是 fire-and-forget（页鲸本地已清是事实，
+						 * relay 失败/桌宠离线不回滚），本侧同样静默容错。会话全集从 rev
+						 * 反查索引取（codes 正查键是 rev 值的子集：turn 码铸码时
+						 * codes/rev 同步 set，stable 码只进 rev）——逐会话复用
+						 * broadcastSessionDismiss，不写第二份广播逻辑。 */
+						const seen = new Set();
+						let sentAll = 0;
+						if (book.rev instanceof Map) {
+							book.rev.forEach((sid) => {
+								if (seen.has(sid)) return;
+								seen.add(sid);
+								sentAll += broadcastSessionDismiss(sid);
+							});
 						}
-						plain(res, 200, JSON.stringify({ ok: true, delivered: Number.isInteger(dCode) && dCode > 0 }));
+						plain(res, 200, JSON.stringify({ ok: true, delivered: sentAll > 0 }));
 						return;
 					}
 					if (action === 'jump') {
@@ -1121,6 +1385,25 @@ function killTree(pid) {
 						}
 						return;
 					}
+					if (action === 'open-report') {
+						/* 桌宠菜单「📊 周报」跳转（11-20，用户拍板改名+直达周报
+						 * Tab）：广播 pet/open-report，页鲸收到即 selectPanel+
+						 * openTab('report')（消费端=server-events 帧路由 +
+						 * panel-page 监听，阶段 C 已就位）。v1 不做离线补投
+						 * （不同于 pendingSettings）：delivered=false 时菜单文案
+						 * 明说重开后再点，不假装成功；补投与 pendingSettings
+						 * 同构，挂账待后续。 */
+						try {
+							if (typeof deps.pushFrame === 'function') {
+								deps.pushFrame({ type: 'pet/open-report', time: Date.now() });
+							}
+							const delivered = typeof deps.hasPageClients === 'function' ? !!deps.hasPageClients() : true;
+							plain(res, 200, JSON.stringify({ ok: true, delivered: delivered }));
+						} catch (e) {
+							plain(res, 500, JSON.stringify({ ok: false, error: String(e && e.message || e) }));
+						}
+						return;
+					}
 					if (action === 'clear-history') {
 						/* 桌宠历史抽屉的清空（11-05）：清的就是共享账本——与页内
 						 * 清空同一份数据（抽屉读的也是它）。cutoff=null=清空全部；
@@ -1145,7 +1428,7 @@ function killTree(pid) {
 						}).then(
 							() => plain(res, 200, JSON.stringify({ ok: true })),
 							(e) => plain(res, 500, JSON.stringify({ ok: false, error: String(e && e.message || e) }))
-						);
+						).catch(() => { /* 外层兜底防 unhandled rejection 击穿宿主：双参 fail 只接源拒绝，ok 回调内同步抛出仍无人接 */ });
 						return;
 					}
 					if (action === 'clear-pending') {
@@ -1153,7 +1436,13 @@ function killTree(pid) {
 						 * 即时消费 jump/settings 后回执清账——pending 意图只该服务
 						 * 「页鲸不在场」的补偿场景；可见页已把动作落到用户眼前，
 						 * 留守只会变成下一次唤醒的过期重演（设置页盖住新跳转）。
-						 * kind: jump | settings（无账本环境同 clear-history 语义）。 */
+						 * kind: jump | settings（无账本环境同 clear-history 语义）。
+						 * 11-20 增：kind='report'（周报帧无落库补偿形态）=纯确认
+						 * no-op——绝不误清 jump/settings 在途意图。 */
+						if (body && body.kind === 'report') {
+							plain(res, 200, JSON.stringify({ ok: true, cleared: 0 }));
+							return;
+						}
 						const kind = body && body.kind === 'settings' ? 'settings' : 'jump';
 						if (typeof deps.ledgerDir !== 'function') {
 							plain(res, 500, JSON.stringify({ ok: false, error: 'ledger unavailable' }));
@@ -1169,7 +1458,34 @@ function killTree(pid) {
 						}).then(
 							() => plain(res, 200, JSON.stringify({ ok: true })),
 							(e) => plain(res, 500, JSON.stringify({ ok: false, error: String(e && e.message || e) }))
-						);
+						).catch(() => { /* 外层兜底防 unhandled rejection 击穿宿主：双参 fail 只接源拒绝，ok 回调内同步抛出仍无人接 */ });
+						return;
+					}
+					if (action === 'ledger') {
+						/* 0.4.3 阶段 C（C-A8 双账本收口）：页鲸（非 PET_MODE）摸头/
+						 * 唤起此前只写自己 origin 的 localStorage——桌宠与页鲸两侧
+						 * 互动账目对不上（同一份 petLedger 永远缺页鲸那半）。新通
+						 * 道：页鲸 POST {action:'ledger', kind:'pet'|'wake'}
+						 * （fence-only，与 dismiss-all 同信任级；载荷只有白名单枚
+						 * 举串，零内容零 id，枚举化边界不破）。宿主 ledgerAppend
+						 * 进 petLedger。fire-and-forget 语义：页鲸本地爱心爆发已
+						 * 是事实，入账失败不回滚、调用方不读响应体——但本侧仍等
+						 * 写链落地再回（与 clear-history 同款 ok/fail 双参回执，
+						 * 测试可确定性断言）。 */
+						const kind = normalizePetInteract(body && body.kind);
+						if (!kind) {
+							plain(res, 400, JSON.stringify({ ok: false, error: "kind must be 'pet'|'wake'" }));
+							return;
+						}
+						if (typeof deps.ledgerDir !== 'function') {
+							plain(res, 500, JSON.stringify({ ok: false, error: 'ledger unavailable' }));
+							return;
+						}
+						const dir = deps.ledgerDir();
+						ledgerAppend(dir, kind).then(
+							() => plain(res, 200, JSON.stringify({ ok: true })),
+							(e) => plain(res, 500, JSON.stringify({ ok: false, error: String(e && e.message || e) }))
+						).catch(() => { /* 链尾兜底：ok/fail 回调内同步抛出时防 unhandled rejection 击穿宿主（clear-history 先例，注释指纹不同=不进既有计数断言） */ });
 						return;
 					}
 					throw new Error('unknown action');
@@ -1228,6 +1544,17 @@ function killTree(pid) {
 	petAff = boot.aff;
 	petAffMs = boot.affMs;
 	petPos = boot.pos;
+	/* 0.4.3 阶段 B（BUG-1 后半程）：四类状态镜像随 petDoc boot 恢复——同一条
+	 * 通道；字段缺席=账本缺货（null），桌宠页保持现值等首次上报。同时它们
+	 * 已进 /pet/page 的头部种入信封（petBootStateScript 第 4 参）：新 origin
+	 * 的 localStorage 在 whale.js 求值前落好，轮询采用只兜本地空白。 */
+	petExtras = {
+		reminders: Array.isArray(boot.reminders) ? boot.reminders : null,
+		soundMuted: typeof boot.soundMuted === 'boolean' ? boot.soundMuted : null,
+		petHintDate: typeof boot.petHintDate === 'string' ? boot.petHintDate : null,
+		petHintCount: typeof boot.petHintCount === 'number' ? boot.petHintCount : null,
+		gearStats: boot.gearStats || null
+	};
 	spawnPet();
 	/* 审计 D-C1（11-04）：自愈心跳=宿主自主定时器（30s，unref），任何页面
 	 * 状态都跑——页鲸 SSE 在线时 /events 轮询被短路（sseUp return），
@@ -1271,7 +1598,7 @@ function killTree(pid) {
 				if (typeof t2 === 'string' && t2 && t2 !== t && typeof deps.pushFrame === 'function') {
 					deps.pushFrame({ type: 'session/projection', sessionId: sessionId, key: 'title', value: t2 });
 				}
-			});
+			}).catch(() => { /* 外层兜底防 unhandled rejection 击穿宿主：这条链原本完全没有失败分支（源拒绝/回调抛出都无人接） */ });
 		},
 		/* SSE 枚举流（11-06，用户实报「任务通知有延时」）：桌宠页此前不订
 		 * /events/stream（SSE 推全量原文帧，枚举边界不允许）只能 3s 轮询

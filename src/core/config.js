@@ -23,6 +23,28 @@
 
 	var CONFIG_KEY = 'dsh-whale:config';
 
+	/* I-③-2 治本（0.4.3 阶段 C）：默认值快照——loadConfig 越界回落用（不在
+	 * 钳制处逐字段重抄默认值，单点防漂移；CONFIG 字面量改默认时这里自动跟）。 */
+	var CONFIG_DEFAULTS = JSON.parse(JSON.stringify(CONFIG));
+	/* I-③-2 治本（0.4.3 阶段 C）：DND 时段白名单——旧 /^\d{1,2}:\d{2}$/ 放行
+	 * 99:99（=全天免打扰假象）。小时 0-23 / 分钟 00-59；applyConfig（写入
+	 * 路径）与 loadConfig（旁路路径）共用一判据；dings.js dndToMin 是第二
+	 * 道防线（越界→null）。 */
+	var DND_TIME_RE = /^([01]?\d|2[0-3]):([0-5]\d)$/;
+	/* 音色白名单（0.4.3 阶段 C 从 applyConfig 局部上移）：**只服务 applyConfig
+	 * 写入路径**。loadConfig 有意不钳音色——存量脏音色走 panel-page 音色下拉
+	 * 的「回落显示到第一项且 CONFIG 不改写」契约（11-11 审计 P3-7；test
+	 * 「dirty tone value displays option 0」/「display fallback does not
+	 * rewrite CONFIG」双断言）：load 期改写会让下拉走 sel.value 分支、桩上
+	 * selectedIndex 成空，且违反「显示回落不改写存量」。数值/时段越界才在
+	 * load 钳制（I-③-2 治本范围）。 */
+	var SOUND_SETS = {
+		soundDone: ['ding', 'bell', 'chime', 'none'],
+		soundFail: ['thud', 'ding', 'bell', 'chime', 'none'],
+		soundAttn: ['chime', 'ding', 'bell', 'none'],
+		soundRemind: ['bell', 'ding', 'chime', 'thud', 'none']
+	};
+
 	function loadConfig() {
 		var saved = safeGet(CONFIG_KEY, function (v0) {
 			/* legacy shapes were never persisted before this feature — ignore */
@@ -32,6 +54,20 @@
 		Object.keys(CONFIG).forEach(function (key) {
 			if (typeof saved[key] === typeof CONFIG[key]) CONFIG[key] = saved[key];
 		});
+		/* I-③-2 治本（0.4.3 阶段 C）：采纳后过 applyConfig 同款范围钳制——
+		 * localStorage 手改的越界值（volume:5 / toolStuckMs:99 / 压力 5% /
+		 * 99:99 时段）不再旁路生效。判据与 applyConfig 写入路径逐条同源；
+		 * 越界回落默认值（脏数据语义未知，回落比贴边诚实）。 */
+		if (!(CONFIG.toolStuckMs >= 3000 && CONFIG.toolStuckMs <= 60000)) CONFIG.toolStuckMs = CONFIG_DEFAULTS.toolStuckMs;
+		if (!(CONFIG.recentFailWindowMs >= 0)) CONFIG.recentFailWindowMs = CONFIG_DEFAULTS.recentFailWindowMs;
+		if (!(CONFIG.volume >= 0 && CONFIG.volume <= 1)) CONFIG.volume = CONFIG_DEFAULTS.volume;
+		if (!(CONFIG.pressureWarnPct >= 20 && CONFIG.pressureWarnPct <= 95)) CONFIG.pressureWarnPct = CONFIG_DEFAULTS.pressureWarnPct;
+		if (!DND_TIME_RE.test(CONFIG.dndFrom)) CONFIG.dndFrom = CONFIG_DEFAULTS.dndFrom;
+		if (!DND_TIME_RE.test(CONFIG.dndTo)) CONFIG.dndTo = CONFIG_DEFAULTS.dndTo;
+		/* 音色四键有意不在 load 期钳制：存量脏值（如 done 塞了 thud）按既定
+		 * 契约走显示回落（panel-page 音色下拉 selectedIndex 0 + CONFIG 存量
+		 * 不改写）——load 改写会让下拉误走 sel.value 分支（vm 桩 selectedIndex
+		 * 成空）并违反「display fallback does not rewrite CONFIG」。 */
 		/* one-time migration: the old single soundScheme rides onto the
 		 * completion sound (fail/attn keep their own defaults) */
 		if (typeof saved.soundScheme === 'string' && saved.soundDone === undefined) {
@@ -89,12 +125,6 @@
 			CONFIG.volume = patch.volume;
 			changed = true;
 		}
-		var SOUND_SETS = {
-			soundDone: ['ding', 'bell', 'chime', 'none'],
-			soundFail: ['thud', 'ding', 'bell', 'chime', 'none'],
-			soundAttn: ['chime', 'ding', 'bell', 'none'],
-			soundRemind: ['bell', 'ding', 'chime', 'thud', 'none']
-		};
 		Object.keys(SOUND_SETS).forEach(function (key) {
 			if (typeof patch[key] === 'string' && SOUND_SETS[key].indexOf(patch[key]) >= 0 && patch[key] !== CONFIG[key]) {
 				CONFIG[key] = patch[key];
@@ -113,11 +143,11 @@
 			CONFIG.dndEnabled = patch.dndEnabled;
 			changed = true;
 		}
-		if (typeof patch.dndFrom === 'string' && /^\d{1,2}:\d{2}$/.test(patch.dndFrom) && patch.dndFrom !== CONFIG.dndFrom) {
+		if (typeof patch.dndFrom === 'string' && DND_TIME_RE.test(patch.dndFrom) && patch.dndFrom !== CONFIG.dndFrom) {
 			CONFIG.dndFrom = patch.dndFrom;
 			changed = true;
 		}
-		if (typeof patch.dndTo === 'string' && /^\d{1,2}:\d{2}$/.test(patch.dndTo) && patch.dndTo !== CONFIG.dndTo) {
+		if (typeof patch.dndTo === 'string' && DND_TIME_RE.test(patch.dndTo) && patch.dndTo !== CONFIG.dndTo) {
 			CONFIG.dndTo = patch.dndTo;
 			changed = true;
 		}

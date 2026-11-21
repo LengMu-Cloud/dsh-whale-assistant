@@ -215,15 +215,23 @@
 		});
 	}
 
+	/** I-③-2 治本（0.4.3 阶段 C）：HH:MM → 分钟数（0..1439）；形状/范围
+	 * 非法一律 null。旧内联 toMin 的 \d{1,2}:\d{2} 放行 99:99 → 6039「分钟」
+	 * 被当合法端点 → 全天免打扰假象（I-③-3「指示挂失真状态=另一种撒谎」
+	 * 的根）。这里钳回 0-1439，越界即 null → dndActive false；config.js 的
+	 * DND_TIME_RE 是第一道闸，本函数是第二道（防御纵深）。 */
+	function dndToMin(v) {
+		var p = /^(\d{1,2}):(\d{2})$/.exec(v || '');
+		if (!p) return null;
+		var mins = (+p[1]) * 60 + (+p[2]);
+		return (mins >= 0 && mins <= 1439) ? mins : null;
+	}
+
 	/** 免打扰窗口：开着且当前本地时间落在 [from, to) 内（支持跨零点）。 */
 	function dndActive() {
 		if (!CONFIG.dndEnabled) return false;
-		var toMin = function (v) {
-			var p = /^(\d{1,2}):(\d{2})$/.exec(v || '');
-			return p ? (+p[1]) * 60 + (+p[2]) : null;
-		};
-		var from = toMin(CONFIG.dndFrom);
-		var to = toMin(CONFIG.dndTo);
+		var from = dndToMin(CONFIG.dndFrom);
+		var to = dndToMin(CONFIG.dndTo);
 		if (from === null || to === null || from === to) return false;
 		var d = new Date();
 		var cur = d.getHours() * 60 + d.getMinutes();
@@ -258,11 +266,19 @@
 			return typeof v0 === 'string' ? v0 : null;
 		}) === 'off';
 	}
-	function setSoundMuted(muted) {
+	/** setSoundMuted(muted, fromRelay)（0.4.3 阶段 B 起）：fromRelay=服务器→
+	 * 页面采用（page.html 的 petConfig relay 差分应用、petSyncExtrasFromHost
+	 * 快照采用）——采用不回推 petDoc（同值回写空转，relay 驱动的应用更不该
+	 * 覆盖桌宠页用户自设的静音权威值）。 */
+	function setSoundMuted(muted, fromRelay) {
 		soundMuted = !!muted;
 		safeSet(SOUND_KEY, soundMuted ? 'off' : 'on');
-		/* 11-11 真机修复轮：总静音也要过 relay 到桌宠（桌面响的是桌宠） */
+		/* 11-11 真机修复轮：总静音也要过 relay 到桌宠（桌面响的是桌宠）；
+		 * BUG-1 后半程（0.4.3 阶段 B）：PET_MODE 反向——桌宠页自设静音沿
+		 * pushPetSync 进 petDoc（此前桌宠页静音跨 DSH 重启静默蒸发）。
+		 * fire-and-forget：宿主离线静默，下次切换自然补上。 */
 		if (!PET_MODE) pushPetConfig();
+		else if (!fromRelay) pushPetSync({ soundMuted: soundMuted });
 	}
 
 	/* ------------------------------------------------------------------ */

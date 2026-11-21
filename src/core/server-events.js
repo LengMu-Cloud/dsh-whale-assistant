@@ -539,6 +539,22 @@
 				}
 				continue;
 			}
+			/* 桌宠菜单「📊 周报」跳转（0.4.3 阶段 C）：宿主广播 pet/open-report
+			 * → 本页派发自定义事件，panel-page.js 开机胶水监听后执行
+			 * selectPanel('whale-assistant') + openTab('report')（core 不引用
+			 * ui/client 方向闸门，与 pet/open-settings 派发模式同款）。10s 内
+			 * 新帧才执行（重放闸同 settings，petFrameOnce 多槽清单）；PET_MODE
+			 * 短路（桌宠页无 DSH 面板可开）。宿主侧广播（lib/pet.js 的
+			 * open-report action）是并行同事半区——帧未广播时本块自然静默。 */
+			if (f && f.type === 'pet/open-report') {
+				var orTime = f.time || 0;
+				if (!PET_MODE && Date.now() - orTime < 10000 && petFrameOnce('report', orTime) &&
+					typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+					try { window.dispatchEvent(new CustomEvent('dsh-whale:pet-open-report')); } catch (e) {}
+					ackPendingClear('report');
+				}
+				continue;
+			}
 			if (!f || typeof f.seq !== 'number' || f.seq <= lastSeq) continue;
 			rememberSeq(f.seq);
 			/* a fresh page must not replay the buffer's history — same
@@ -729,7 +745,7 @@
 		 * poll 恢复跑 /pet/feed 补漏帧，lastSeq 闸门去重）。 */
 		if (typeof EventSource !== 'function') return; /* vm sandbox / ancient browsers */
 		try { sse = new EventSource('/api/whale-assistant/events/stream'); } catch (e) { return; }
-		sse.onopen = function () { sseUp = true; sseFails = 0; };
+		sse.onopen = function () { sseUp = true; sseFails = 0; clearSseProbe(); };
 		sse.onerror = function () {
 			sseUp = false; /* EventSource auto-reconnects */
 			/* v15（11-13）：离线熔断——壳退出时宿主服务器排空连接，EventSource
@@ -739,26 +755,96 @@
 			 * 9s）即关闭事件源停止重连，让壳干净退场；恢复钩子=可见/聚焦/上线
 			 * 三事件重新 connectSSE（关窗唤醒后页鲸照常回线，hello 补投兑现）。 */
 			if (++sseFails >= 3 && sse) {
+				/* 0.4.3 探活自愈（用户实锤根因：常驻可见+聚焦的 DSH 主窗在宿主
+				 * 重启 ~20s 后，下面三个恢复钩子永不触发，通知链路从此永久降级
+				 * 3s 轮询，不刷新页面回不来）：熔断即挂低频探活定时器，每 60s
+				 * 用 fetch 探一次流可达（3s 短超时，探完即撤不留常驻连接），通
+				 * 了走既有重连路径重建 EventSource——宿主重启窗口过后无需用户
+				 * 刷新也能自动回线（onerror 全程零日志是已知盲区，休眠期静默
+				 * 原则允许 debug 级，熔断/探活/恢复各留一条）。 */
+				console.debug('[dsh-whale] sse breaker open after 3 fails: probing every 60s');
+				m5Count('sseCircuit'); /* M5（0.4.3 阶段 B）：熔断开一次计一数（可信度度量，不参与任何闸门） */
 				try { sse.close(); } catch (e2) { }
 				sse = null;
+				startSseProbe();
 			}
 		};
 		sse.onmessage = function (ev) { handleSseData(ev.data); };
+	}
+
+	/* 0.4.3 熔断探活机（v15 的补丁）：熔断后的恢复只押在可见/聚焦/上线三个
+	 * 用户事件上，常驻主窗永远等不到（见 onerror 内注释）。定时器纪律=谁
+	 * 创建谁清理：重连成功（onopen）、既有恢复钩子重建连接、页面卸载
+	 * （pagehide/beforeunload）各有一条清理路径，探活成功也自清。隐藏页
+	 * 不探活（与恢复钩子同语义）——壳退出排空期页面必隐藏，本文件没有独
+	 * 立的排空标志位（v15 防护=熔断+隐藏钩子），以 hidden 闸兜底排空期，
+	 * 探活不会重演 v15 的重连风暴死锁。 */
+	var SSE_PROBE_MS = 60000;
+	var SSE_PROBE_TIMEOUT = 3000;
+	var sseProbeTimer = null;
+	function clearSseProbe() {
+		if (sseProbeTimer === null) return;
+		try { clearInterval(sseProbeTimer); } catch (e) {}
+		sseProbeTimer = null;
+	}
+	function startSseProbe() {
+		clearSseProbe(); /* 重复熔断不叠定时器：先清旧再挂新 */
+		sseProbeTimer = setInterval(probeSseOnce, SSE_PROBE_MS);
+	}
+	function probeSseOnce() {
+		/* 既有钩子已把连接重建：探活使命完成，自己退场 */
+		if (sse) { clearSseProbe(); return; }
+		/* 隐藏闸：休眠页轮询兜底照旧，探活不动（排空期兜底，见上注释） */
+		if (typeof document === 'undefined' || document.hidden) return;
+		var settled = false; /* 3s 判定窗：超时与应答谁先到谁定胜负，后到者静默 */
+		var ctl = null;
+		try { ctl = new AbortController(); } catch (e) { ctl = null; } /* 老引擎无 abort：退化为纯 3s 判定 */
+		var killer = setTimeout(function () {
+			if (settled) return;
+			settled = true; /* 3s 未应答=不可达：保持熔断等下一轮 */
+			if (ctl) { try { ctl.abort(); } catch (e2) {} }
+			console.debug('[dsh-whale] sse probe timeout: breaker stays open');
+		}, SSE_PROBE_TIMEOUT);
+		fetch('/api/whale-assistant/events/stream', { signal: ctl ? ctl.signal : undefined }).then(function (r) {
+			if (settled) return;
+			settled = true;
+			try { clearTimeout(killer); } catch (e3) {}
+			if (ctl) { try { ctl.abort(); } catch (e4) {} } /* 探完即撤：不留半开连接（v15 教训） */
+			if (!r || !r.ok) {
+				console.debug('[dsh-whale] sse probe http ' + (r && r.status) + ': breaker stays open');
+				return;
+			}
+			console.debug('[dsh-whale] sse probe ok: stream reachable, reconnecting');
+			m5Count('sseProbeOk'); /* M5（0.4.3 阶段 B）：探活恢复一次计一数（熔断/恢复对的分子分母） */
+			clearSseProbe(); /* 成功即清自己的定时器（谁创建谁清理） */
+			sseFails = 0;
+			connectSSE(); /* 走既有重连路径；重建再败 3 次会再熔断并重启探活，链路无死端 */
+		}).catch(function () {
+			if (settled) return;
+			settled = true;
+			try { clearTimeout(killer); } catch (e5) {}
+			console.debug('[dsh-whale] sse probe unreachable: breaker stays open');
+		});
 	}
 	/* v15：熔断后的恢复钩子——窗口重新可见/获得焦点/系统网络恢复时重连。
 	 * 退出挂起期的隐藏页不会触发这些事件=保持断开=排空不被打扰。 */
 	if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
 		document.addEventListener('visibilitychange', function () {
-			try { if (!document.hidden && !sse) { sseFails = 0; connectSSE(); } } catch (e) { }
+			try { if (!document.hidden && !sse) { sseFails = 0; clearSseProbe(); connectSSE(); } } catch (e) { }
 		});
 	}
 	if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
 		window.addEventListener('focus', function () {
-			try { if (!sse) { sseFails = 0; connectSSE(); } } catch (e) { }
+			try { if (!sse) { sseFails = 0; clearSseProbe(); connectSSE(); } } catch (e) { }
 		});
 		window.addEventListener('online', function () {
-			try { if (!sse) { sseFails = 0; connectSSE(); } } catch (e) { }
+			try { if (!sse) { sseFails = 0; clearSseProbe(); connectSSE(); } } catch (e) { }
 		});
+		/* 定时器纪律补口子：页面卸载时探活定时器必须跟着走，不给壳退出
+		 * 排空期留下任何会再建连接的活口（v15 死锁教训）。pagehide 比
+		 * unload 在现代 Chromium 上更可靠，两个都挂（幂等清）。 */
+		window.addEventListener('pagehide', function () { try { clearSseProbe(); } catch (e) { } });
+		window.addEventListener('beforeunload', function () { try { clearSseProbe(); } catch (e) { } });
 	}
 	/* test seam: this whole module is a closure, so exports.js can't see it —
 	 * mirror the _pollConsume pattern and hang the handler on the window seam */

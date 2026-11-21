@@ -20,8 +20,8 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { loadStore, saveStoreAtomic, saveFileAtomic, mergeHistory, queueStoreWrite } from './store.js';
-import { applyPet } from './pet.js';
+import { loadStore, saveStoreAtomic, saveFileAtomic, mergeHistory, queueStoreWrite, normalizePetLedger } from './store.js';
+import { applyPet, petScriptEtag, etagMatches } from './pet.js';
 
 const inject = ['webServer', 'sessionController'];
 
@@ -269,7 +269,16 @@ function apply(ctx) {
 				 * the old direct readFileSync handed a corrupt ledger back
 				 * as the body (and only a later save would quarantine it) */
 				const doc = loadStore(storeDir());
-				const body = doc === null ? '{}' : JSON.stringify(doc);
+				/* 0.4.3 阶段 C（P-09 数据地基）：/state 顶层新增 petLedger（互动
+				 * 账本），UI 半区按钉死契约渲染：
+				 * {"days":[{"date":"YYYY-MM-DD","pets":12,"wakes":22}]}
+				 * days 按 date 升序、90 天滚动（超 90 天的日剔除）、单日
+				 * pets/wakes 各钳 9999。下发侧统一过 normalizePetLedger（与写
+				 * 入端 ledgerAppend 同一条闸门）：老账本里的超龄日/脏条目不出
+				 * 宿主；账本缺货/损坏也下发空集——键恒在，消费方无需判缺。 */
+				const base = doc && typeof doc === 'object' && !Array.isArray(doc) ? doc : {};
+				base.petLedger = normalizePetLedger(base.petLedger);
+				const body = JSON.stringify(base);
 				res.writeHead(200, {
 					'content-type': 'application/json; charset=utf-8',
 					'cache-control': 'no-store'
@@ -505,9 +514,22 @@ function apply(ctx) {
 					res.end('console.error("[dsh-whale] whale.js not found on the host");');
 					return;
 				}
+				/* 0.4.3 阶段 C（D-A1）：no-store 全量重传 → no-cache+ETag 条件
+				 * GET——语义不变（文件有更新必拉新），没更新时 304 空响应省掉
+				 * ~470KB 重传（页鲸每次窗口加载/刷新都拉一次本文件）。指纹与
+				 * If-None-Match 判定走 petScriptEtag/etagMatches 纯函数对
+				 * （pet.js 定义，两条 whale.js 路由共用一处实现）。304/200 都
+				 * 带 ETag+no-cache：下一拍条件请求照常成立。 */
+				const etag = petScriptEtag(code);
+				if (etagMatches(req.headers['if-none-match'], etag)) {
+					res.writeHead(304, { etag: etag, 'cache-control': 'no-cache' });
+					res.end();
+					return;
+				}
 				res.writeHead(200, {
 					'content-type': 'application/javascript; charset=utf-8',
-					'cache-control': 'no-store'
+					'cache-control': 'no-cache',
+					etag: etag
 				});
 				res.end(code);
 			}

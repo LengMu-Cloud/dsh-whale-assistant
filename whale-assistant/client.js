@@ -50,7 +50,14 @@ window.__ModuleLoader__.load({
 				}
 			});
 		}
-		Promise.all([
+		/* 0.4.3 阶段 A（可靠性二）：宿主瞬态不可达（引擎热重载窗口期）曾让首
+		 * 次加载整体失败且永不自愈——鲸鱼缺席到用户手动刷新。整条链提炼成
+		 * 命名路径，失败后按 3s/10s 退避重跑同一条 fetch+注入逻辑（whale.js
+		 * 文本 → 建槽 → eval，见下 then 体）；任一次成功即恢复（后续流程照
+		 * 走），两次全败才落兜底文案。重试期间不刷屏：只 console.warn 一行，
+		 * 面板文案与 console.error 都留在终局。 */
+		const WHALE_RETRY_DELAYS = [3000, 10000];
+		const loadWhaleAssets = (attempt) => Promise.all([
 			fetch('/api/whale-assistant/whale.js').then((r) => (r.ok ? r.text() : Promise.reject(new Error('whale.js http ' + r.status)))),
 			fetch('/api/whale-assistant/assets').then((r) => (r.ok ? r.json() : Promise.reject(new Error('assets http ' + r.status)))),
 		]).then(([code, assets]) => {
@@ -90,7 +97,16 @@ window.__ModuleLoader__.load({
 				}
 			} catch (e) { /* 页面没开：无需兜底 */ }
 		}).catch((e) => {
-			console.error('[dsh-whale-assistant] whale load failed', e);
+			/* 退避重试（0.4.3）：引擎热重载窗口一般几秒内收尾，第一班 3s 多半
+			 * 就够；两班全败才算真死，才落兜底文案。重试期间面板保持「还在
+			 * 加载」原样（语义真实），不刷屏不重复报错。 */
+			if (attempt < WHALE_RETRY_DELAYS.length) {
+				const delay = WHALE_RETRY_DELAYS[attempt];
+				console.warn('[dsh-whale-assistant] whale load failed (attempt ' + (attempt + 1) + '), retrying in ' + delay + 'ms:', e && e.message || e);
+				setTimeout(() => loadWhaleAssets(attempt + 1), delay);
+				return;
+			}
+			console.error('[dsh-whale-assistant] whale load failed after retries', e);
 			/* eval 失败时兜底文案不能永远谎称「还在加载」 */
 			try {
 				const fh = document.querySelector('.dsh-whale-pp-host');
@@ -99,6 +115,7 @@ window.__ModuleLoader__.load({
 				}
 			} catch (e2) { /* 页面没开 */ }
 		});
+		loadWhaleAssets(0);
 			return {
 				apply(ctx) {
 					/* 0.4.0: bridge the client-side sessions service into the whale —

@@ -35,7 +35,7 @@
 
 ## **src/core/history.js**
 
-> Task history (inline module): the most recent finished main-task records, newest first, persisted as 'dsh-whale:history' (v1 envelope, cap 50). Consumed by the history drawer (ui/history.js) and the fail-recall hint (M3.2, via recentFailAt).
+> Task history (inline module): the most recent finished main-task records, newest first, persisted as 'dsh-whale:history' (v1 envelope, cap 500). Consumed by the history drawer (ui/history.js) and the fail-recall hint (M3.2, via recentFailAt).
 
 **getClearAt()** · **bumpClearAt()** · **dedupeKey()** · **mergeHistories()** · **pushCloudHistory()** · **pullCloudHistory()** · **loadHistory()** · **pushHistory()** · **correctHistoryTitle()** · **correctHistoryTurnTokens()** · **recentFailAt()**
 
@@ -63,13 +63,13 @@
 
 > Server-events consumer (inline module): polls the whale-assistant host's /api/whale-assistant/events route (the host lives in the dsh server's cordis container and buffers session events for EVERY session) and feeds the frames the DOM adapter cannot see:    - turn/start of EVERY session (2026-09-02 
 
-**rememberSeq()** · **petDormantOf()** · **feedEventFrame()** · **registerBackground()** · **lookupTitlesFromHistory()** · **consume()** · **poll()** · **handleSseData()** · **connectSSE()** · **petFrameOnce()** · **ackPendingClear()**
+**rememberSeq()** · **petDormantOf()** · **feedEventFrame()** · **registerBackground()** · **lookupTitlesFromHistory()** · **consume()** · **poll()** · **handleSseData()** · **connectSSE()** · **clearSseProbe()** · **startSseProbe()** · **probeSseOnce()** · **petFrameOnce()** · **ackPendingClear()**
 
 ## **src/core/health.js**
 
 > Dependency self-check (inline module): the whale fails QUIETLY by design (a stale DOM selector or a missing event route just means no notifications), and twice already that silence hid real breakage for days (the f.time ReferenceError, the rc.1 usage-DOM migration). This module makes degradation VIS
 
-**markServerPoll()** · **recordUsageHealth()** · **runHealthCheck()** · **updateHealthChip()** · **ensureHealthChip()** · **openHealthPanel()**
+**m5Count()** · **markServerPoll()** · **recordUsageHealth()** · **runHealthCheck()** · **updateHealthChip()** · **ensureHealthChip()** · **openHealthPanel()**
 
 ## **src/core/state.js**（行切片）
 
@@ -87,7 +87,7 @@
 
 > One synthesized notification. 'done' = bicycle-bell "ding-ding": two metallic strikes (2400Hz fundamental + 2×/2.76× inharmonic partials) with a long resonant decay. 'fail' = dull descending minor third (550 → 415). Back-to-back dings stay clear because the queue gap (DING_GAP_MS) outlasts the ring'
 
-**ensureAudio()** · **renderDing()** · **pumpDings()** · **pumpPreview()** · **previewDing()** · **armAudioUnlockRetry()** · **dndActive()** · **playDing()** · **setSoundMuted()**
+**ensureAudio()** · **renderDing()** · **pumpDings()** · **pumpPreview()** · **previewDing()** · **armAudioUnlockRetry()** · **dndToMin()** · **dndActive()** · **playDing()** · **setSoundMuted()**
 
 ## **src/ui/status-panel.js**（行切片）
 
@@ -105,7 +105,7 @@
 
 > Local-date key "YYYY-MM-DD" (the daily counter's bucket).
 
-**todayKey()** · **resetUnlockedGear()** · **loadGearStats()** · **saveGearStats()** · **checkDayRollover()** · **unlockCheck()**
+**todayKey()** · **resetUnlockedGear()** · **loadGearStats()** · **saveGearStats()** · **adoptGearStatsFromHost()** · **checkDayRollover()** · **unlockCheck()**
 
 ## **src/core/affection.js**（行切片）
 
@@ -145,13 +145,13 @@
 
 > Lines spoken while idle, per mood stage (gradually mixed in).
 
-**completedTail()** · **updateMood()** · **bumpWork()** · **moodStageIndex()** · **pickIdleLine()** · **pickCatchLine()** · **loadPetHint()** · **savePetHint()** · **hasRunningJobs()** · **idleTick()**
+**completedTail()** · **updateMood()** · **bumpWork()** · **moodStageIndex()** · **pickIdleLine()** · **pickCatchLine()** · **loadPetHint()** · **savePetHint()** · **adoptPetHintFromHost()** · **hasRunningJobs()** · **idleTick()**
 
 ## **src/ui/bubble.js**（行切片）
 
 > Keep the bubble inside the viewport (动态边界 2026-11-04): flip BELOW the whale when it would clip off the top (the `.dsh-whale-bubble-flip` variant mirrors the arrow and the pop animation), nudge horizontally with a margin when an edge clips it. Measured from the LAYOUT boxes (whale.offset* + bubble.of
 
-**uiSay()** · **clampBubble()** · **armBubbleHide()** · **bubbleResumeMs()** · **bindBubbleHover()** · **showWhaleNote()**
+**bubbleTruncate()** · **uiSay()** · **clampBubble()** · **armBubbleHide()** · **bubbleResumeMs()** · **bindBubbleHover()** · **showWhaleNote()**
 
 ## **src/ui/bootstrap.js**（行切片）
 

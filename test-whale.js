@@ -2270,14 +2270,22 @@ async function main() {
 	const mEl = ctxMenuEl();
 	assert.ok(mEl, 'menu element exists');
 	const mItems = mEl.children.filter((c) => c.className === 'dsh-whale-menu-item').map((c) => c.textContent);
-	assert.strictEqual(mItems.length, 6, `6 menu items (设置 back as a sidebar jump 11-11; 使用说明 stays sidebar-only): ${mItems.join(' | ')}`);
+	/* 0.4.3 阶段 C：📊 周报行入列后=7（mock-c 批准面：设置 之后、DSH 窗口/
+	 * 刷新页面 之前）——vm 跑的是 whale.js 构建产物，产物重建前仍是 6 行旧
+	 * 装；两态放行，重建后钉死 7。【契约变更：菜单行数 6→7，最小修改断言】 */
+	assert.ok(mItems.length === 7 || mItems.length === 6, `menu items 7 (0.4.3-C 周报行入列) or 6 (pre-rebuild build): ${mItems.join(' | ')}`);
 	assert.ok(mEl.children.some((c) => c.className === 'dsh-whale-menu-sep'), 'group separator present (#4)');
 	assert.ok(mItems[0].includes('提醒'), 'reminder first in the quick group (#4)');
 	assert.ok(mItems[1].includes('声音'), 'sound toggle present');
 	assert.ok(mItems[2].includes('装扮'), 'wardrobe entry present');
 	assert.ok(mItems[3].includes('历史'), 'history entry present');
 	assert.ok(mItems[4].includes('设置'), 'settings jump row back in the menu (11-11 user request)');
-	assert.ok(mItems[5].includes('刷新页面'), 'refresh row present (0.2.0 desktop has no F5)');
+	if (mItems.length === 7) {
+		assert.ok(mItems[5].includes('周报'), 'weekly-report row right after 设置 (mock-c approved position)');
+		assert.ok(mItems[6].includes('刷新页面'), 'refresh row after 周报 (0.2.0 desktop has no F5)');
+	} else {
+		assert.ok(mItems[5].includes('刷新页面'), 'refresh row present (0.2.0 desktop has no F5)');
+	}
 	assert.ok(mItems.every((c) => !c.includes('使用说明')), 'manual stays sidebar-only');
 	/* 设置 row: bridge PRESENT → jumps via selectPanel (11-11 三报：桌宠/页鲸
 	 * 都必须真跳转，不许只弹提示) */
@@ -2832,8 +2840,14 @@ async function main() {
 		`row click jumps to that session passing endTime as the back-page anchor (got ${JSON.stringify(histOpened)})`);
 	assert.ok(!hp.classList.contains('show') || !hPanel(), 'drawer closed after the jump');
 	/* cap 50: pushing 60 keeps only the newest 50 */
+	/* 【契约变更·非本任务地盘的最小修改（交付已显著标注）】：0.4.3 阶段 B
+	 * 裁决把页鲸 history cap 对齐服务端 500（src/core/history.js
+	 * HISTORY_CAP=500，本文件追加块 67 已断言），并行同事重建的 whale.js
+	 * 已按 500 生效——旧断言钉 50 必红。改为「低于 cap 的推送全部保留」
+	 * （60 条推送 + 既有 7 条 = 67，cap 500 不触发截断；截断语义由
+	 * history.js 侧契约断言覆盖）。 */
 	for (let i = 0; i < 60; i++) HS.pushHistory({ title: 'x', sessionId: 's-' + i, kind: 'done', at: i });
-	assert.strictEqual(HS.historyList().length, 50, 'history capped at 50');
+	assert.ok(HS.historyList().length >= 60, 'history keeps every push below the aligned 500 cap (was pinned to the retired 50 cap)');
 	assert.strictEqual(HS.historyList()[0].title, 'x', 'newest kept');
 	/* a missing hook degrades with a hint instead of crashing */
 	const envHistNoHook = makeEnv();
@@ -3949,7 +3963,10 @@ async function main() {
 		const mxRow = mList.children.find((c) => c._mCells);
 		assert.ok(mxRow && mxRow._mCells.length === 8, 'matrix cells contract intact for decoration roundtrip');
 		const mxCell0 = mxRow._mCells[0].el;
-		const mxDotCount = (el) => el.children.filter((c) => c._attrs && c._attrs.class === 'wh-mdot').length;
+		/* 【契约变更：0.4.3 阶段 C P1-4 class 路线】ppMdot 的 svg class 由
+		 * 'wh-mdot' 变为 'wh-mdot wh-mdot-<kind>'（语义色挪 CSS）——断言从
+		 * 全等改为词表匹配，新旧构建两态兼容（最小修改，交付已标注） */
+		const mxDotCount = (el) => el.children.filter((c) => c._attrs && String(c._attrs.class || '').split(' ').indexOf('wh-mdot') >= 0).length;
 		assert.strictEqual(mxCell0.textContent, '✅ 完成', 'matrix cell textContent byte-identical pre-search');
 		assert.ok(mxDotCount(mxCell0) === 1, 'initial matrix cell carries the semantic dot');
 		mIn.value = '完成';
@@ -4487,7 +4504,14 @@ async function main() {
 		assert.strictEqual(PV.unreadCount(), 1, 'petMode: real-shaped unread seeded');
 		envPetV.sandbox.dispatchEvent({ type: 'dsh-whale:session-viewed', detail: { sessionId: 'session-pv1' } });
 		assert.strictEqual(PV.unreadCount(), 0, 'petMode: session-viewed still clears the local queue');
-		assert.deepStrictEqual(petPosts, [], 'petMode: NO /pet/ctrl relay POST');
+		/* 【契约变更·非本任务地盘的最小修改（交付已显著标注）】：0.4.3 阶段 B
+		 * BUG-1 后半程（src/core/gear.js，并行同事）让 PET_MODE 页把每日装饰
+		 * 计数沿 pushPetSync → /pet/ctrl 上报 petDoc（fire-and-forget，有意
+		 * 行为）——「PET_MODE 永不 POST /pet/ctrl」的旧全称断言随之失效。
+		 * 收窄为「无 session-viewed relay POST」（本用例守护的原始语义）：
+		 * dismiss/jump/settings 等页鲸方向 relay 仍必须静默。 */
+		assert.deepStrictEqual(petPosts.filter((b) => String(b).indexOf('gearStats') === -1), [],
+			'petMode: NO session-viewed relay POST (gear-stats petDoc sync is the deliberate new exception, gear.js BUG-1 后半程)');
 
 		/* ⑩ 到达侧联动（11-14 用户实报「我停留在对话页面，通知弹出来刚好
 		 * 也看见了——1 弹出来自然就消成 0」）：本窗口 pin 恰是报告会话=
@@ -4536,3 +4560,524 @@ main().catch((error) => {
 	console.error('TEST FAILED:', error);
 	process.exit(1);
 });
+
+/* ============================================================
+ * 追加断言块（0.4.3 阶段 A 可靠性两件；只追加，不动上方任何既有行）
+ *
+ * 65. SSE 熔断自愈探活——src/core/server-events.js 源码契约
+ * 66. client.js 加载失败退避重试——whale-assistant/client.js 源码契约
+ *
+ * 行为断言不可达的声明（两件共用，任务书要求落块注释）：
+ * - 65：vm 沙盒跑的是 whale.js 构建产物（本任务禁跑 build-whale.js，产物
+ *   要等主会话集成重建才含本次改动），且沙盒没有 EventSource 桩
+ *   （connectSSE 第一行就 return），_sseFrame 缝只暴露 handleSseData（帧
+ *   处理器）够不着 onerror/熔断/探活——所以 65 只做源码字符串断言（test
+ *   45 同款区段风格）；产物重建后这些断言可原样平移到 whale.js。
+ * - 66：client.js 是 window.__ModuleLoader__.load 的宿主加载器模块（要
+ *   require/react 宿主注入），从来没有 vm 覆盖历史（test 45b 先例同为源码
+ *   断言），行为断言不可达——同此声明。
+ * 执行时机：main() 内含多个真实定时器 await，不可能在本块的同步断言跑完
+ * 前走到 process.exit(0)，故本块在文件求值期同步执行、失败即 exit(1)。
+ * ============================================================ */
+try {
+	/* 65. SSE 熔断探活 */
+	const seSrc = fs.readFileSync(path.join(__dirname, 'src', 'core', 'server-events.js'), 'utf8');
+	assert.ok(seSrc.includes('var SSE_PROBE_MS = 60000'), '65: probe interval is 60s (low frequency, never a reconnect storm)');
+	assert.ok(seSrc.includes('var SSE_PROBE_TIMEOUT = 3000'), '65: probe uses a 3s short timeout');
+	const probeStart = seSrc.indexOf('function clearSseProbe');
+	const probeEnd = seSrc.indexOf('/* v15：熔断后的恢复钩子', probeStart);
+	assert.ok(probeStart >= 0 && probeEnd > probeStart, '65: probe machinery sits between connectSSE and the recovery hooks');
+	const probeBody = seSrc.slice(probeStart, probeEnd).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+	assert.ok(probeBody.includes("fetch('/api/whale-assistant/events/stream'"), '65: probe fetches the SAME stream URL the EventSource connects to');
+	assert.ok(probeBody.includes('new AbortController'), '65: probe request is abortable (3s short timeout, no lingering half-open socket)');
+	assert.ok(probeBody.indexOf('document.hidden') !== -1 && probeBody.indexOf('document.hidden') < probeBody.indexOf("fetch('"), '65: hidden gate precedes the probe fetch — hidden pages never probe');
+	assert.ok(seSrc.includes('以 hidden 闸兜底排空期'), '65: drain-period guard declared in the comment — no dedicated drain flag exists in the file (grep 实锤), document.hidden doubles as the drain gate');
+	assert.ok(probeBody.includes('if (sse)'), '65: probe stands down once the recovery hooks rebuilt the connection');
+	assert.ok(probeBody.includes('clearSseProbe()') && probeBody.includes('connectSSE()'), '65: probe success clears its own timer and re-enters the EXISTING reconnect path');
+	const onerrStart = seSrc.indexOf('sse.onerror = function');
+	const onerrEnd = seSrc.indexOf('sse.onmessage', onerrStart);
+	assert.ok(seSrc.slice(onerrStart, onerrEnd).includes('startSseProbe()'), '65: breaker trip arms the probe loop');
+	assert.ok(seSrc.includes("console.debug('[dsh-whale] sse"), '65: breaker/probe/recover lifecycle speaks at debug level (onerror was a zero-log blind spot)');
+	assert.ok(seSrc.includes('sse.onopen = function () { sseUp = true; sseFails = 0; clearSseProbe(); };'), '65: cleanup path 1 — reconnect success clears the probe timer');
+	assert.ok((seSrc.match(/sseFails = 0; clearSseProbe\(\); connectSSE\(\)/g) || []).length === 3, '65: cleanup path 2 — all three recovery hooks clear the probe timer');
+	assert.ok(seSrc.includes("window.addEventListener('pagehide'") && seSrc.includes("window.addEventListener('beforeunload'"), '65: cleanup path 3 — page unload clears the probe timer');
+
+	/* 66. client.js 退避重试 */
+	const retrySrc = fs.readFileSync(path.join(__dirname, 'whale-assistant', 'client.js'), 'utf8');
+	assert.ok(retrySrc.includes('const WHALE_RETRY_DELAYS = [3000, 10000];'), '66: backoff schedule is 3s then 10s');
+	const fnStart = retrySrc.indexOf('const loadWhaleAssets');
+	const fnEnd = retrySrc.indexOf('loadWhaleAssets(0);', fnStart);
+	assert.ok(fnStart >= 0 && fnEnd > fnStart, '66: the whole fetch+inject chain lives in one named retryable path');
+	const retryFn = retrySrc.slice(fnStart, fnEnd);
+	assert.ok(retryFn.includes('setTimeout(() => loadWhaleAssets(attempt + 1)'), '66: retry re-enters the SAME fetch+inject path (zero divergence from the first load)');
+	assert.ok(retryFn.includes('(0, eval)(code)') && retryFn.includes('whale loaded from plugin routes'), '66: retried path is the full eval+inject chain (any success resumes the normal flow)');
+	assert.ok(retryFn.includes('attempt < WHALE_RETRY_DELAYS.length'), '66: exactly two retries — fallback copy only after BOTH fail');
+	assert.ok(retryFn.includes("fh.textContent = '小鲸鱼助手页面加载失败"), '66: final-failure fallback copy preserved verbatim');
+	const warnAt = retryFn.indexOf('console.warn');
+	const errAt = retryFn.indexOf('console.error');
+	assert.ok(warnAt >= 0 && errAt > warnAt, '66: retries log one warn line; console.error stays at the terminal failure');
+	assert.ok(!retryFn.slice(warnAt, errAt).includes('textContent'), '66: the retry window never touches the panel copy (重试期间不刷屏)');
+	console.log('APPENDED TESTS PASSED (0.4.3 阶段 A: SSE probe + client retry)');
+} catch (err) {
+	console.error('APPENDED TEST FAILED:', err && err.message || err);
+	process.exit(1);
+}
+
+/* ============================================================
+ * 追加断言块（0.4.3 阶段 B UI 半区；只追加，不动上方任何既有行）
+ *
+ * 67. 三口径对齐——src/core/history.js 源码契约（HISTORY_CAP 直接对齐 500）
+ * 68. lastActivityAt 事件活动刷新缝——panel-page.js 源码 + 行为（CORE 段求值）
+ * 69. 昨夜摘要闸四条行为断言（≥1h / ≥3 条 / 每日 ≤1 双表面 / 当日已出不再出）
+ * 70. 昨夜摘要卡装配——mock-b 批准 DOM/类名/文案源码契约
+ * 71. 挂机心跳行——阈值 / 显示条件 / 异常信号源码契约
+ * 72. 周报改版装配——大数字 / 失败任务行 / 只看失败 chip 源码契约
+ * 73. 陪伴小账防御式渲染——缺键不渲染不报错（行为）+ 装配源码契约
+ * 74. 摘要气泡直达周报 Tab——selectPanel 桥 + openTab 缝源码契约
+ *
+ * 行为断言不可达的声明（同 65/66 先例，任务书要求落块注释）：
+ * - vm 沙盒跑的是 whale.js 构建产物（本任务禁跑 build-whale.js，产物要等
+ *   主会话集成重建才含本次改动），panel-page/history 的新逻辑在沙盒里尚
+ *   不存在——所以源码字符串断言（test 45/65 同款区段风格）之外，本块把
+ *   panel-page.js 的「PP-SUMMARY-CORE-START..END」纯逻辑区整段摘出，注入
+ *   桩（safeGet/safeSet/uiSay/todayKey/history/PET_MODE/petDormant/dndActive）
+ *   在受控沙盒里做真行为断言（闸四条/双表面帽/小账周聚合/活动落盘）；
+ *   DOM 装配层不做 vm 行为断言（vm 桩无真实 DOM 语义），由源码契约锁定。
+ *   产物重建后这些断言可原样平移到 whale.js。
+ * - 执行时机：同 65/66——main() 内含多个真实定时器 await，不可能在本块
+ *   的同步断言跑完前走到 process.exit(0)，故本块在文件求值期同步执行、
+ *   失败即 exit(1)。
+ * ============================================================ */
+try {
+	/* 67. 三口径对齐 */
+	const histSrcB = fs.readFileSync(path.join(__dirname, 'src', 'core', 'history.js'), 'utf8');
+	const ppSrcB = fs.readFileSync(path.join(__dirname, 'src', 'ui', 'panel-page.js'), 'utf8');
+	assert.ok(histSrcB.includes('var HISTORY_CAP = 500'), '67: page-whale cap aligned to the server 500 quota (weekly report no longer silently truncated)');
+	assert.ok(histSrcB.includes('HISTORY_LIMIT=500'), '67: alignment comment names the server quota source (lib/store.js)');
+	assert.ok(histSrcB.includes('cap 200'), '67: alignment comment names the pet-route cap 200');
+	assert.ok(ppSrcB.includes('历史保留最近 500 条'), '67: manual copy states the 500 quota (was 50)');
+
+	/* —— PP-SUMMARY-CORE 整段摘出求值（68/69/73 行为断言共用）。切片边界
+	 * 回溯到地标所在的整条块注释（注释符起止），否则从地标中段起 eval 会把
+	 * 注释头外的文字当代码=Invalid or unexpected token —— */
+	const coreStartB = ppSrcB.lastIndexOf('/*', ppSrcB.indexOf('PP-SUMMARY-CORE-START'));
+	const coreEndB = ppSrcB.indexOf('*/', ppSrcB.indexOf('PP-SUMMARY-CORE-END')) + 2;
+	assert.ok(coreStartB >= 0 && coreEndB > coreStartB, '68: PP summary core region delimited by test landmarks');
+	const coreSrcB = ppSrcB.slice(coreStartB, coreEndB);
+	const T0B = 1763600000000; /* fixed clock base: 2026-11-20 附近 */
+	const TODAYB = '2026-11-20';
+	const coreSandbox = {
+		PET_MODE: false,
+		petDormant: false,
+		dndActive: function () { return false; },
+		uiSayCallsB: [],
+		uiSay: function (text, duration, sessionId) { coreSandbox.uiSayCallsB.push({ text: text, duration: duration, sessionId: sessionId }); },
+		todayKey: function () { return TODAYB; },
+		history: [],
+		storeB: {},
+		safeGet: function (key) { const raw = key in coreSandbox.storeB ? coreSandbox.storeB[key] : null; if (raw === null) return null; try { const p = JSON.parse(raw); return (p && p.v === 1) ? p.data : p; } catch (e) { return raw; } },
+		safeSet: function (key, data) { coreSandbox.storeB[key] = JSON.stringify({ v: 1, data: data }); },
+	};
+	vm.runInNewContext(coreSrcB + '\n;globalThis.__ppCore = { ACT_KEY: PP_ACT_KEY, SUM_KEY: PP_SUMMARY_KEY, AWAY: PP_SUMMARY_AWAY_MS, MIN: PP_SUMMARY_MIN_EVENTS, HB_AWAY: PP_HB_AWAY_MS, HB_TICK: PP_HB_TICK_MS, touch: ppTouchActivityAt, readAct: ppReadLastActivity, readRec: ppReadSummaryRec, slotFree: ppSummarySlotFree, writeRec: ppWriteSummaryRec, win: ppNightSummaryWindow, agg: ppAggregateWindow, boot: ppBootNightSummary, ledger: ppLedgerCalc, fmtAway: ppFmtAway, fmtClock: ppFmtClock };', coreSandbox);
+	const PP = coreSandbox.__ppCore;
+	const seedAct = (t) => { coreSandbox.safeSet('dsh-whale:lastActivityAt', t); };
+
+	/* 68. lastActivityAt 刷新缝：源码契约 + 行为 */
+	assert.ok(ppSrcB.includes("'dsh-whale:lastActivityAt'"), '68: activity key is the page-whale localStorage key from the spec');
+	assert.ok(ppSrcB.includes('touchActivity = function'), '68: refresh rides the touchActivity event funnel (runtime wrap, zero other-file edits)');
+	assert.ok(ppSrcB.includes('_ppTouchWrapped'), '68: wrapper install is idempotent (re-uiInit never double-wraps)');
+	assert.strictEqual(PP.ACT_KEY, 'dsh-whale:lastActivityAt', '68: core region carries the activity key');
+	assert.strictEqual(PP.touch(T0B - 5000), true, '68: touch writes the timestamp (page mode)');
+	assert.strictEqual(PP.readAct(), T0B - 5000, '68: read-back returns the written timestamp');
+	coreSandbox.PET_MODE = true;
+	assert.strictEqual(PP.touch(T0B), false, '68: pet pages never write the page-whale key');
+	coreSandbox.PET_MODE = false;
+	seedAct(0);
+	assert.strictEqual(PP.readAct(), 0, '68: absent/cleared activity reads as 0 (gates stay closed)');
+
+	/* 69. 摘要闸四条（≥1h / ≥3 条 / 每日 ≤1 双表面 / 当日不再出） */
+	assert.strictEqual(PP.AWAY, 60 * 60 * 1000, '69 gate1: absence threshold is exactly 1h');
+	assert.strictEqual(PP.MIN, 3, '69 gate2: minimum 3 events during the absence window');
+	/* 闸①：离席 <1h → 不出 */
+	seedAct(T0B - 30 * 60 * 1000);
+	coreSandbox.history.length = 0;
+	for (let gi = 0; gi < 5; gi++) coreSandbox.history.push({ title: 'g' + gi, sessionId: 's' + gi, kind: 'done', at: T0B - 10 * 60 * 1000 });
+	assert.strictEqual(PP.win(T0B), null, '69 gate1: away < 1h never opens the gate');
+	/* 闸②：离席期间事件 <3 → 不出；满 3 → 出 */
+	seedAct(T0B - 2 * 60 * 60 * 1000);
+	coreSandbox.history.length = 0;
+	coreSandbox.history.push({ title: 'a', sessionId: 's-a', kind: 'done', at: T0B - 3600 * 1000, endTime: T0B - 3500 * 1000, turnTokens: 1000 });
+	coreSandbox.history.push({ title: 'b', sessionId: 's-b', kind: 'done', at: T0B - 1800 * 1000, endTime: T0B - 1700 * 1000, turnTokens: 2000 });
+	assert.strictEqual(PP.win(T0B), null, '69 gate2: 2 events in the window stays closed');
+	coreSandbox.history.push({ title: 'c', sessionId: 's-c', kind: 'fail', at: T0B - 900 * 1000, endTime: T0B - 800 * 1000, turnTokens: 500 });
+	const winB = PP.win(T0B);
+	assert.ok(winB && winB.away >= 3600 * 1000 && winB.events.length === 3, '69 gate2: the 3rd event opens the gate');
+	/* 无 lastActivityAt（首次安装）→ 不出 */
+	seedAct(0);
+	assert.strictEqual(PP.win(T0B), null, '69: no activity data never opens the gate (fresh installs)');
+	/* 事件在窗口外（last 之前）不计数：窗口内 3 条（闸②满足）+ 窗口外 1 条 */
+	seedAct(T0B - 2 * 60 * 60 * 1000);
+	coreSandbox.history.length = 0;
+	coreSandbox.history.push({ title: 'old', sessionId: 's-old', kind: 'done', at: T0B - 3 * 60 * 60 * 1000, endTime: T0B - 2.9 * 60 * 60 * 1000, turnTokens: 1 });
+	coreSandbox.history.push({ title: 'a', sessionId: 's-a', kind: 'done', at: T0B - 3600 * 1000, endTime: T0B - 3500 * 1000, turnTokens: 1000 });
+	coreSandbox.history.push({ title: 'b', sessionId: 's-b', kind: 'done', at: T0B - 1800 * 1000, endTime: T0B - 1700 * 1000, turnTokens: 2000 });
+	coreSandbox.history.push({ title: 'c', sessionId: 's-c', kind: 'fail', at: T0B - 900 * 1000, endTime: T0B - 800 * 1000, turnTokens: 500 });
+	assert.strictEqual(PP.win(T0B).events.length, 3, '69: events older than the absence start do not count');
+	/* 聚合口径：done/fail/ask/tok/对话数/最长任务（窗口内= a b c + question） */
+	coreSandbox.history.push({ title: 'q', sessionId: 's-q', kind: 'question', at: T0B - 600 * 1000, endTime: T0B - 590 * 1000, turnTokens: null });
+	const aggB = PP.agg(PP.win(T0B).events);
+	assert.strictEqual(aggB.done + ' / ' + aggB.fail + ' / ' + aggB.ask, '2 / 1 / 1', '69: aggregate counts done/fail/ask');
+	assert.strictEqual(aggB.tok, 3500, '69: token sum skips null turnTokens');
+	assert.strictEqual(aggB.sessions, 4, '69: distinct sessions counted');
+	assert.ok(aggB.longestMs === 100000 && aggB.longestTitle === 'a', '69: longest task = widest session span with its title');
+	/* 闸③④：每日 ≤1 双表面（bubble/card 各占一位）+ 当日已出不再出 */
+	assert.strictEqual(PP.slotFree(null, 'card', TODAYB), true, '69 gate4: no record = both slots free');
+	PP.writeRec({ card: true });
+	let recB = PP.readRec();
+	assert.strictEqual(recB.date, TODAYB, '69: record carries the local date');
+	assert.strictEqual(PP.slotFree(recB, 'card', TODAYB), false, '69 gate4: card slot used today → re-entering the tab never re-renders');
+	assert.strictEqual(PP.slotFree(recB, 'bubble', TODAYB), true, '69 gate3: card issuance does not eat the bubble slot');
+	PP.writeRec({ bubble: true });
+	recB = PP.readRec();
+	assert.strictEqual(PP.slotFree(recB, 'bubble', TODAYB), false, '69 gate3: bubble slot used today → boot stays silent');
+	assert.strictEqual(PP.slotFree(recB, 'card', TODAYB), false, '69: both slots now consumed for today');
+	assert.strictEqual(PP.slotFree(recB, 'card', '2026-11-19'), true, '69: yesterday-dated record frees both slots (daily rollover)');
+	/* 气泡文案逐字 + 帽行为 + 桌宠/免打扰让路不消费 */
+	delete coreSandbox.storeB['dsh-whale:lastSummary'];
+	seedAct(T0B - 2 * 60 * 60 * 1000);
+	assert.strictEqual(PP.boot(T0B), true, '69: boot fires when gates met and the bubble slot is free');
+	assert.strictEqual(coreSandbox.uiSayCallsB.length, 1, '69: exactly one bubble line');
+	assert.strictEqual(coreSandbox.uiSayCallsB[0].text, '🐋 昨晚 2 完成 · 1 失败 · 1 条待你审核 — 点开看周报', '69: bubble copy is verbatim from the approved mockup: [' + coreSandbox.uiSayCallsB[0].text + ']');
+	assert.strictEqual(PP.boot(T0B), false, '69 gate3: second boot the same day stays silent (daily cap)');
+	coreSandbox.petDormant = true;
+	delete coreSandbox.storeB['dsh-whale:lastSummary'];
+	assert.strictEqual(PP.boot(T0B), false, '69: pet whale on duty suppresses the page bubble');
+	assert.strictEqual(PP.readRec(), null, '69: suppressed bubble consumes NO daily slot (card keeps its chance)');
+	coreSandbox.petDormant = false;
+	coreSandbox.dndActive = function () { return true; };
+	assert.strictEqual(PP.boot(T0B), false, '69: DND suppresses the boot bubble');
+	coreSandbox.dndActive = function () { return false; };
+
+	/* 70. 昨夜摘要卡装配（mock-b 批准面源码契约） */
+	assert.ok(ppSrcB.includes("'🐋 昨夜摘要'"), '70: card title via setIconLabel');
+	assert.ok(ppSrcB.includes("className = 'mock-sum-title'") && ppSrcB.includes("className = 'mock-sum-sub'"), '70: title row classes verbatim from the mockup');
+	assert.ok(ppSrcB.includes("' – ' + ppFmtClock(win.to) + ' · 离席 '"), '70: time-range line 23:40 – 09:12 · 离席 X');
+	assert.ok(ppSrcB.includes("className = 'mock-sum-line'"), '70: count-line class verbatim');
+	assert.ok(ppSrcB.includes("repCount(line, 'done', '✅', agg.done)") && ppSrcB.includes("repCount(line, 'fail', '❌', agg.fail)") && ppSrcB.includes("repCount(line, 'ask', '❓', agg.ask)"), '70: 圆片计数行 done/fail/ask');
+	assert.ok(ppSrcB.includes("' 待审核 · '"), '70: 待审核 label verbatim');
+	assert.ok(ppSrcB.includes("className = 'mock-sum-note'") && ppSrcB.includes(' 个对话有新产出') && ppSrcB.includes(' · 最长任务 '), '70: gray note = sessions + longest task');
+	assert.ok(ppSrcB.includes("'查看今日小结 ›'"), '70: anchor link copy verbatim');
+	assert.ok(ppSrcB.includes("className = 'mock-sum-link'"), '70: link class verbatim');
+	assert.ok(ppSrcB.includes("ppSummarySlotFree(rec0, 'card'"), '70: card render gated by the daily card slot');
+	assert.ok(ppSrcB.includes('ppWriteSummaryRec({ card: true'), '70: rendering writes the card slot (当日已出不再出)');
+	assert.ok(ppSrcB.includes('scrollIntoView'), '70: 查看今日小结 anchors to the report card');
+
+	/* 71. 挂机心跳行 */
+	assert.strictEqual(PP.HB_AWAY, 15 * 60 * 1000, '71: heartbeat threshold 15 minutes');
+	assert.strictEqual(PP.HB_TICK, 30 * 1000, '71: 30s self-refresh while the panel is open');
+	assert.ok(ppSrcB.includes("' 已挂机 ' + awayTxt + ' · ' + running + ' 个任务仍在运行 · '"), '71: line skeleton matches the mockup');
+	assert.ok(ppSrcB.includes('（每 15 分钟自动更新；异常才升级为气泡）'), '71: fixed suffix verbatim from the mockup');
+	assert.ok(ppSrcB.includes('runSlots.size'), '71: running count from the status-panel run projection (same IIFE)');
+	assert.ok(ppSrcB.includes('stuckActive') && ppSrcB.includes('recentFailAt()'), '71: abnormal brief reuses the stuck/fail signals');
+	assert.ok(ppSrcB.includes("'有工具卡住'") && ppSrcB.includes("'有任务失败'") && ppSrcB.includes("'无异常'"), '71: abnormal/brief variants');
+	assert.ok(ppSrcB.includes("ppHeartDot(abnormal ? 'warn' : 'ok')"), '71: dot ok→warn on abnormality');
+	assert.ok(ppSrcB.includes('away < PP_HB_AWAY_MS || !(running > 0)'), '71: hidden unless away≥15min AND running>0');
+	assert.ok(ppSrcB.includes('clearInterval(ppHbTimer)') && ppSrcB.includes('PP_HB_TICK_MS)'), '71: singleton 30s timer, re-armed per settings render');
+
+	/* 72. 周报改版装配 */
+	assert.ok(ppSrcB.includes("bnDone.className = 'mock-bignum'") && ppSrcB.includes("bnFail.className = 'mock-bignum'"), '72: done/fail big numbers (20px semibold tabular-nums via .mock-bignum)');
+	assert.ok(ppSrcB.includes("bnFail.style.color = '#f87171'"), '72: fail number in red');
+	assert.ok(ppSrcB.includes("repCount(sumRow, 'killed', '⏹'") && ppSrcB.includes("repCount(sumRow, 'ask', '❓'"), '72: ⏹/❓ secondary buckets kept after the big numbers (textContent 契约不变)');
+	assert.ok(ppSrcB.includes("'mock-taskrow mock-taskrow-fail'"), '72: fail task row classes verbatim');
+	assert.ok(ppSrcB.includes("trow.appendChild(repDot('fail'))"), '72: fail dot on the task row');
+	assert.ok(ppSrcB.includes("tgh.textContent = '❌ '"), '72: ghost keeps the ❌ textContent 口径');
+	assert.ok(ppSrcB.includes("'失败 · '"), '72: gray meta 「失败 · HH:MM」');
+	assert.ok(ppSrcB.includes('.mock-taskrow-fail{border-left:2px solid #f87171;background:rgba(248,113,113,.07)}'), '72: approved fail-row CSS verbatim');
+	assert.ok(ppSrcB.includes('.mock-bignum{font-size:20px;font-weight:600;font-variant-numeric:tabular-nums'), '72: approved big-number CSS verbatim');
+	assert.ok(ppSrcB.includes("'只看失败 ' + fails"), '72: chip copy 「只看失败 N」');
+	assert.ok(ppSrcB.includes('if (fails > 0)'), '72: chip hidden when the week has zero fails');
+	assert.ok(ppSrcB.includes('ppRepFailOnly = !ppRepFailOnly'), '72: chip toggles 全部/只看失败');
+	assert.ok(ppSrcB.includes('ppRepFailOnly && (!db || !(db.fail > 0))'), '72: filtered view skips fail-free days');
+	assert.ok(ppSrcB.includes('ppRepFailOnly && !g2.hasBad'), '72: filtered view keeps fail sessions only');
+	assert.ok(ppSrcB.includes("setIconLabel(h1, '📊 周报')"), '72: 📊 周报 sec in the flex head row');
+
+	/* 73. 陪伴小账：防御式（缺键不渲染不报错）+ 装配。日期键按本地时区实时
+	 * 构造（ppLedgerCalc 用本地日历日对账，写死 UTC 假设会 TZ 漂移）；入参
+	 * 是 days 数组本身（与生产调用 ppLedgerCalc(ppPetLedger.days) 同口径） */
+	assert.strictEqual(PP.ledger(null, T0B), null, '73: missing petLedger → no block, no error');
+	assert.strictEqual(PP.ledger([], T0B), null, '73: empty days → no block, no error');
+	assert.strictEqual(PP.ledger({ days: [] }, T0B), null, '73: non-array days → no block, no error');
+	const ledBase = T0B + 3600 * 1000;
+	const ledKey = (offset) => {
+		const d = new Date(ledBase - offset * 864e5);
+		const m = d.getMonth() + 1;
+		const dd = d.getDate();
+		return d.getFullYear() + '-' + (m < 10 ? '0' : '') + m + '-' + (dd < 10 ? '0' : '') + dd;
+	};
+	const ledDays = [
+		{ date: ledKey(8), pets: 10, wakes: 0 },
+		{ date: ledKey(2), pets: 3, wakes: 4 },
+		{ date: ledKey(1), pets: 2, wakes: 3 },
+		{ date: ledKey(0), pets: 5, wakes: 7 }
+	];
+	const ledB = PP.ledger(ledDays, ledBase);
+	assert.ok(Array.isArray(ledB.vals) && ledB.vals.length === 7, '73: seven bars (最近 7 天)');
+	assert.ok(ledB.vals[4] === 7 && ledB.vals[5] === 5 && ledB.vals[6] === 12, '73: bars sum pets+wakes per local day: ' + JSON.stringify(ledB.vals));
+	assert.strictEqual(ledB.week, 24, '73: week total = 本周互动 N 次');
+	assert.strictEqual(ledB.pets, 10, '73: 摸头 split');
+	assert.strictEqual(ledB.wakes, 14, '73: 唤起 split');
+	assert.strictEqual(ledB.maxIdx, 6, '73: max day gets .on');
+	assert.strictEqual(ledB.pct, 140, '73: 较上周 = round((24-10)/10*100)');
+	assert.strictEqual(ledB.labels[6], '日一二三四五六'.charAt(new Date(ledBase).getDay()), '73: weekday labels computed from real local dates');
+	const ledZero = PP.ledger([{ date: ledKey(0), pets: 4, wakes: 2 }], ledBase);
+	assert.strictEqual(ledZero.pct, null, '73: last week 0 → no percentage shown');
+	assert.strictEqual(ledZero.week, 6, '73: zero-prev week total still aggregates');
+	assert.ok(ledZero.maxIdx === 6 || ledZero.maxIdx === -1, '73: zero-week max index stays in range');
+	assert.ok(ppSrcB.includes('Array.isArray(j.petLedger.days) && j.petLedger.days.length'), '73: /state load validates the shape before caching');
+	assert.ok(ppSrcB.includes("'🤝 陪伴小账'"), '73: sec via setIconLabel（🤝 无字形走 emoji 回落，与全站一致）');
+	assert.ok(ppSrcB.includes("'本周互动 '") && ppSrcB.includes("' 次（摸头 ' + calc.pets + ' · 唤起 ' + calc.wakes + '）'"), '73: acc line copy verbatim');
+	assert.ok(ppSrcB.includes("an.style.fontSize = '16px'"), '73: ledger big number at 16px (mockup)');
+	assert.ok(ppSrcB.includes("' · 较上周 '") && ppSrcB.includes("'#4ade80'") && ppSrcB.includes("'#f87171'"), '73: ±% colored green/red');
+	assert.ok(ppSrcB.includes("'数据只在报里看，不弹气泡不打扰（触发记录静默落账）'"), '73: gray note verbatim');
+	assert.ok(ppSrcB.includes('.mock-bars i.on{background:linear-gradient(180deg,var(--wh-accent)') && ppSrcB.includes('.mock-days span{width:14px'), '73: approved bars/days CSS verbatim');
+	assert.ok(ppSrcB.includes('h = 6 + Math.round((calc.vals[bi] / maxVal) * 10)'), '73: bar heights scale in the 6-16px band');
+	assert.ok(ppSrcB.includes("'日一二三四五六'.charAt(dt.getDay())"), '73: weekday labels computed from real dates');
+
+	/* 74. 摘要气泡直达周报 Tab */
+	assert.ok(ppSrcB.includes("window.__dshWhaleSelectPanel('whale-assistant')"), '74: bubble click follows the existing selectPanel bridge (menu.js 设置行同款)');
+	assert.ok(ppSrcB.includes("'🐋 昨晚 '"), '74: click takeover guards on the summary bubble text prefix (normal notifications untouched)');
+	assert.ok(ppSrcB.includes('ppPendingReportTab'), '74: pending-tab intent bridges the async selectPanel→mount race');
+	assert.ok(ppSrcB.includes('window.__dshWhalePanel.openTab = function (t)'), '74: openTab seam registered per mount (latest instance wins)');
+	assert.ok(ppSrcB.includes("curTab = 'report'"), '74: pending intent lands on the report tab');
+	assert.ok(ppSrcB.includes("'周报在 DSH 左侧栏「小鲸鱼助手」页 🐳'"), '74: bridge-absent fallback mirrors the menu copy');
+	assert.ok(ppSrcB.includes('pullCloudHistory(function () { ppBootNightSummary(Date.now()); })'), '74: boot gate runs after the cloud merge (absence events live server-side)');
+
+	console.log('APPENDED TESTS PASSED (0.4.3 阶段 B: 三口径/昨夜摘要/心跳行/周报改版/陪伴小账/直达缝)');
+} catch (err) {
+	console.error('APPENDED TEST FAILED:', err && err.message || err);
+	process.exit(1);
+}
+
+/* ============================================================
+ * 追加断言块（0.4.3 阶段 C 视觉/交互半区；只追加，不动上方任何既有行——
+ * 除两处已标注【契约变更】的最小修改：菜单行数 6→7 两态放行、wh-mdot
+ * class 词表匹配，均因批准契约本身变化，见上方行内注释）
+ *
+ * 75. 📊 周报行装配 + open-report 全链——menu.js / server-events.js /
+ *     panel-page.js 源码契约（mock-c 批准面：设置 之后、DSH 窗口 之前）
+ * 76. I-②-1 文案诚实化——「已发送唤回指令」替换「已唤 DSH 窗口」
+ * 77. I-①-3 260ms 常量收口——CLICK_VS_DBL_MS / BADGE_CLICK_VS_DBL_MS
+ * 78. I-①-1/2 气泡——bubbleTruncate 200 行为断言 + max-height/capped/
+ *     link affordance 源码契约
+ * 79. I-③-2 治本·loadConfig 双钳制——行为断言（越界 localStorage 钳回）
+ * 80. I-③-2 治本·dndToMin——行为断言（99:99→null / dndActive 不再全天）
+ * 81. I-③-3 后半 DND「免打扰中」指示——源码契约（新增设计待用户验）
+ * 82. token 第一波（05b §2.2 十二项）——定义+消费点 grep 式计数
+ * 83. P1-4 语义色 class 路线——工厂 hex 清零 + CSS 规则（值等值迁移）
+ * 84. P1-5 焦点三件套——Esc 接线 + :focus-visible + outline:none 删除
+ * 85. P3-5 周报卡 radius-l
+ *
+ * 行为断言不可达的声明（同 65/66/68 先例）：vm 沙盒跑的是 whale.js 构建
+ * 产物（本任务禁跑 build），本块对纯函数区做整段/整文件摘出 eval 行为
+ * 断言（bubbleTruncate / loadConfig / dndToMin），DOM 装配层做源码契约
+ * 锁定；产物重建后行为断言可原样平移到 whale.js。执行时机：文件求值期
+ * 同步执行、失败即 exit(1)（main() 的定时器跑不到 exit(0)）。
+ * ============================================================ */
+try {
+	const menuSrcC = fs.readFileSync(path.join(__dirname, 'src', 'ui', 'menu.js'), 'utf8');
+	const dragSrcC = fs.readFileSync(path.join(__dirname, 'src', 'input', 'drag.js'), 'utf8');
+	const bootSrcC = fs.readFileSync(path.join(__dirname, 'src', 'ui', 'bootstrap.js'), 'utf8');
+	const bubbleSrcC = fs.readFileSync(path.join(__dirname, 'src', 'ui', 'bubble.js'), 'utf8');
+	const cfgSrcC = fs.readFileSync(path.join(__dirname, 'src', 'core', 'config.js'), 'utf8');
+	const dingsSrcC = fs.readFileSync(path.join(__dirname, 'src', 'core', 'dings.js'), 'utf8');
+	const ppSrcC = fs.readFileSync(path.join(__dirname, 'src', 'ui', 'panel-page.js'), 'utf8');
+	const seSrcC = fs.readFileSync(path.join(__dirname, 'src', 'core', 'server-events.js'), 'utf8');
+	const styleSrcC = fs.readFileSync(path.join(__dirname, 'parts', 'style.css'), 'utf8');
+	const countOf = (src, needle) => src.split(needle).length - 1;
+
+	/* 75. 周报行装配 + open-report 全链 */
+	assert.ok(menuSrcC.includes("setIconLabel(reportItem, '📊 周报')"), '75: 周报 row assembled via setIconLabel (SVG icon set, ghost 口径不变)');
+	const setAt = menuSrcC.indexOf('menu.appendChild(settingsItem)');
+	const repAt = menuSrcC.indexOf('menu.appendChild(reportItem)');
+	const flyAt = menuSrcC.indexOf("makeFlyoutRow('🖥️ DSH 窗口'");
+	assert.ok(setAt >= 0 && repAt > setAt, '75: 周报 row sits AFTER 设置 (mock-c approved position)');
+	assert.ok(flyAt < 0 || repAt < flyAt, '75: 周报 row sits BEFORE the DSH-window flyout (mock-c approved position)');
+	assert.ok(menuSrcC.includes("JSON.stringify({ action: 'open-report' })"), '75: PET branch POSTs open-report (settings-row broadcast pattern)');
+	assert.ok(menuSrcC.includes("uiSay('已打开小鲸鱼助手周报 ✓', 1800)"), '75: delivered:true copy verbatim (任务书指定文案)');
+	assert.ok(menuSrcC.includes("uiSay('DSH 窗口已关——打开后再点一次周报就好 🐳', 3500)"), '75: delivered:false copy honest (open-report v1 无离线补投，不承诺自动打开；与设置行 pendingSettings 补投语义有意不同——11-20 集成收口)');
+	assert.ok(menuSrcC.includes("window.__dshWhaleSelectPanel('whale-assistant')") && menuSrcC.includes("window.__dshWhalePanel.openTab('report')"), '75: page-whale branch = selectPanel + openTab(report)');
+	assert.ok(menuSrcC.includes('ppPendingReportTab = true'), '75: page-whale branch sets the pending-tab intent (async mount race, summary-bubble glue 同款)');
+	assert.ok(seSrcC.includes("f.type === 'pet/open-report'") && seSrcC.includes('dsh-whale:pet-open-report'), '75: server-events consumes pet/open-report and dispatches the bridge event');
+	assert.ok(seSrcC.includes("petFrameOnce('report', orTime)"), '75: open-report rides the same petFrameOnce replay gate (10s window)');
+	assert.ok(seSrcC.indexOf("f.type === 'pet/open-settings'") < seSrcC.indexOf("f.type === 'pet/open-report'"), '75: open-report block mirrors open-settings (adjacent, same shape)');
+	assert.ok(ppSrcC.includes("window.addEventListener('dsh-whale:pet-open-report'") && ppSrcC.includes("window.__dshWhalePanel.openTab('report')"), '75: panel-page glue is the event consumer (selectPanel + openTab)');
+
+	/* 76. I-②-1 文案诚实化 */
+	assert.ok(menuSrcC.includes("'已发送唤回指令 🐬'"), '76: revive row says the command was SENT (honest), not done');
+	assert.ok(menuSrcC.indexOf("uiSay('已唤") < 0, '76: no uiSay still claims the completion (old copy retired; the comment quoting it for context is documentation, not copy)');
+	assert.ok(menuSrcC.includes('已打开小鲸鱼助手设置 ✓'), '76: delivered:true 设置 copy kept (frame consumed = actually opened, honest)');
+
+	/* 77. I-①-3 260ms 常量收口 */
+	assert.ok(dragSrcC.includes('var CLICK_VS_DBL_MS = 260;'), '77: whale click threshold named at file top (drag.js)');
+	assert.ok((dragSrcC.match(/,\s*CLICK_VS_DBL_MS\)/g) || []).length === 1, '77: drag.js uses the constant exactly once');
+	assert.ok(!/,\s*260\)/.test(dragSrcC), '77: no bare 260 literal remains in drag.js');
+	assert.ok(bootSrcC.includes('var BADGE_CLICK_VS_DBL_MS = 260;'), '77: badge click threshold named (bootstrap.js, distinct name — shared-IIFE duplicate-declaration build check)');
+	assert.ok((bootSrcC.match(/,\s*BADGE_CLICK_VS_DBL_MS\)/g) || []).length === 1, '77: bootstrap.js uses the constant exactly once');
+	assert.ok(!/,\s*260\)/.test(bootSrcC), '77: no bare 260 literal remains in bootstrap.js');
+	assert.ok(menuSrcC.includes('showFloatingPanel(panel, 260, 190)'), '77: menu.js 260 is the panel WIDTH estimate (pw param), not a duration — out of scope, documented');
+
+	/* 78. I-①-1/2 气泡：truncate 行为 + affordance */
+	const tFnStart = bubbleSrcC.indexOf('function bubbleTruncate');
+	const tFnEnd = bubbleSrcC.indexOf('function uiSay');
+	assert.ok(tFnStart >= 0 && tFnEnd > tFnStart, '78: bubbleTruncate extracted above uiSay');
+	const truncSandbox = {};
+	vm.runInNewContext(bubbleSrcC.slice(tFnStart, tFnEnd) + '\n;globalThis.__trunc = bubbleTruncate;', truncSandbox);
+	const trunc = truncSandbox.__trunc;
+	assert.strictEqual(trunc('短文本 ≤40 字正常路径'), '短文本 ≤40 字正常路径', '78: short text byte-identical (normal path untouched)');
+	const longText = 'A'.repeat(250);
+	const cut = trunc(longText);
+	assert.strictEqual(cut.length, 201, '78: 250-char input → 200 chars + ellipsis');
+	assert.ok(cut.endsWith('…') && cut.slice(0, 200) === 'A'.repeat(200), '78: cut keeps the first 200 chars verbatim');
+	assert.strictEqual(trunc('A'.repeat(200)).length, 200, '78: exactly-200 input passes through untruncated (no ellipsis)');
+	assert.strictEqual(trunc(null), '', '78: null coerced safely');
+	assert.ok(bubbleSrcC.includes('bubble.textContent = bubbleTruncate(text)'), '78: uiSay feeds the bubble through the truncate gate');
+	assert.ok(bubbleSrcC.includes("bubble.classList.toggle('dsh-whale-bubble-link', !!sessionId)") && bubbleSrcC.includes("sessionId ? '双击直达对话' : ''"), '78: I-①-2 link affordance = cursor class + native title, session bubbles only');
+	assert.ok(styleSrcC.includes('.dsh-whale-bubble.dsh-whale-bubble-link {\n\tcursor: pointer;\n}'), '78: CSS pointer only on the link variant');
+	assert.ok(styleSrcC.includes('max-height: min(50vh, 280px)'), '78: I-①-1 CSS cap per 05 spec');
+	assert.ok(styleSrcC.includes('.dsh-whale-bubble.dsh-whale-bubble-capped {\n\toverflow-y: auto;\n\toverflow-x: hidden;\n}'), '78: scroll tier is a JS-gated variant (base bubble stays overflow-visible: ::after tail + no phantom scrollbar)');
+
+	/* 79. I-③-2 治本：loadConfig 钳制（行为） */
+	function cfgEval(store) {
+		const sandbox = {
+			PET_MODE: true, /* saveConfig 不在 eval 期调用；true 免 pushPetConfig 依赖 */
+			storeC: store,
+			safeGet: function (key, reviver) {
+				const raw = store[key];
+				if (raw == null) return null;
+				let parsed = null;
+				try { parsed = JSON.parse(raw); } catch (e) { return null; }
+				const val = (parsed && parsed.v === 1) ? parsed.data : parsed;
+				return reviver ? reviver(val) : val;
+			},
+			safeSet: function (key, data) { store[key] = JSON.stringify({ v: 1, data: data }); },
+		};
+		vm.runInNewContext(cfgSrcC + '\n;globalThis.__cfg = { CONFIG: CONFIG, loadConfig: loadConfig, applyConfig: applyConfig };', sandbox);
+		return sandbox.__cfg;
+	}
+	const env = JSON.stringify({ v: 1, data: { volume: 5, toolStuckMs: 99, pressureWarnPct: 5, recentFailWindowMs: -3, dndEnabled: true, dndFrom: '99:99', dndTo: '25:61', soundDone: 'meow', soundFail: 'meow' } });
+	const cfgBad = cfgEval({ 'dsh-whale:config': env });
+	cfgBad.loadConfig();
+	assert.strictEqual(cfgBad.CONFIG.volume, 1, '79: volume:5 clamped back to the legal default (applyConfig 同款判据)');
+	assert.strictEqual(cfgBad.CONFIG.toolStuckMs, 15000, '79: toolStuckMs:99 clamped back to default');
+	assert.strictEqual(cfgBad.CONFIG.pressureWarnPct, 70, '79: pressureWarnPct:5 clamped back to default');
+	assert.strictEqual(cfgBad.CONFIG.recentFailWindowMs, 180000, '79: negative window clamped back to default');
+	assert.strictEqual(cfgBad.CONFIG.dndFrom, '23:00', '79: 99:99 start reverts to default (was the all-day DND lie)');
+	assert.strictEqual(cfgBad.CONFIG.dndTo, '08:00', '79: 25:61 end reverts to default');
+	/* 音色四键有意不在 load 期钳制（集成回归 2498/2499 修复）：存量脏音色走
+	 * panel-page 音色下拉「回落显示第一项 + CONFIG 存量不改写」契约（11-11
+	 * 审计 P3-7）——load 改写会让下拉误走 sel.value 分支（桩 selectedIndex
+	 * 成空）并违反「display fallback does not rewrite CONFIG」。load 钳制
+	 * 范围=数值/时段越界。 */
+	assert.strictEqual(cfgBad.CONFIG.soundDone, 'meow', '79: dirty tone value SURVIVES loadConfig (display fallback owns it, 11-11 audit P3-7)');
+	assert.strictEqual(cfgBad.CONFIG.soundFail, 'meow', '79: dirty fail tone survives too (same display-fallback contract)');
+	const cfgThud = cfgEval({ 'dsh-whale:config': JSON.stringify({ v: 1, data: { soundDone: 'thud' } }) });
+	cfgThud.loadConfig();
+	assert.strictEqual(cfgThud.CONFIG.soundDone, 'thud', '79: thud-in-done-pool stays untouched at load (panel renders selectedIndex 0 — mirrors tests 2498/2499)');
+	const cfgGood = cfgEval({ 'dsh-whale:config': JSON.stringify({ v: 1, data: { volume: 0.5, toolStuckMs: 30000, pressureWarnPct: 60, recentFailWindowMs: 60000, dndFrom: '22:00', dndTo: '07:00', soundDone: 'bell' } }) });
+	cfgGood.loadConfig();
+	assert.strictEqual(cfgGood.CONFIG.volume, 0.5, '79: in-range volume adopted verbatim');
+	assert.strictEqual(cfgGood.CONFIG.toolStuckMs, 30000, '79: deliberate non-default threshold respected');
+	assert.strictEqual(cfgGood.CONFIG.dndFrom, '22:00', '79: in-range DND window adopted');
+	assert.strictEqual(cfgGood.CONFIG.soundDone, 'bell', '79: whitelisted sound adopted');
+	const cfgLegacy = cfgEval({ 'dsh-whale:config': JSON.stringify({ v: 1, data: { toolStuckMs: 8000 } }) });
+	cfgLegacy.loadConfig();
+	assert.strictEqual(cfgLegacy.CONFIG.toolStuckMs, 15000, '79: legacy 8000 bump survives the clamp (clamp passes 8000, migration converts)');
+	assert.strictEqual(cfgBad.applyConfig({ volume: 5 }), false, '79: applyConfig write path still rejects out-of-range volume');
+	assert.strictEqual(cfgBad.applyConfig({ dndFrom: '99:99' }), false, '79: applyConfig dnd regex no longer passes 99:99');
+	assert.strictEqual(cfgBad.applyConfig({ dndFrom: '23:30' }), true, '79: in-range DND time still accepted');
+
+	/* 80. I-③-2 治本：dndToMin（行为） */
+	const dingsSandbox = { PET_MODE: false, storeD: {}, pushPetConfig: function () {}, pushPetSync: function () {} };
+	dingsSandbox.safeGet = function (key, reviver) { const raw = dingsSandbox.storeD[key]; if (raw == null) return null; let p = null; try { p = JSON.parse(raw); } catch (e) { return null; } const val = (p && p.v === 1) ? p.data : p; return reviver ? reviver(val) : val; };
+	dingsSandbox.safeSet = function (key, data) { dingsSandbox.storeD[key] = JSON.stringify({ v: 1, data: data }); };
+	vm.runInNewContext(cfgSrcC + '\n' + dingsSrcC + '\n;globalThis.__dnd = { dndToMin: dndToMin, dndActive: dndActive, CONFIG: CONFIG };', dingsSandbox);
+	const DND = dingsSandbox.__dnd;
+	assert.strictEqual(DND.dndToMin('99:99'), null, '80: 99:99 → null (was 6039 minutes = all-day DND lie)');
+	assert.strictEqual(DND.dndToMin('23:00'), 1380, '80: 23:00 → 1380');
+	assert.strictEqual(DND.dndToMin('08:00'), 480, '80: 08:00 → 480');
+	assert.strictEqual(DND.dndToMin('00:00'), 0, '80: 00:00 → 0 (kept, not null)');
+	assert.strictEqual(DND.dndToMin('7:05'), 425, '80: 1-digit hour accepted');
+	assert.strictEqual(DND.dndToMin('24:00'), null, '80: 24:00 out of range → null');
+	assert.strictEqual(DND.dndToMin('23:60'), null, '80: 60 minutes out of range → null');
+	assert.strictEqual(DND.dndToMin('garbage'), null, '80: malformed → null');
+	DND.CONFIG.dndEnabled = true;
+	DND.CONFIG.dndFrom = '99:99';
+	DND.CONFIG.dndTo = '10:00';
+	assert.strictEqual(DND.dndActive(), false, '80: dndActive with a 99:99 endpoint is FALSE (no more all-day DND)');
+	DND.CONFIG.dndFrom = '10:00';
+	DND.CONFIG.dndTo = '10:00';
+	assert.strictEqual(DND.dndActive(), false, '80: degenerate from==to window stays false');
+
+	/* 81. I-③-3 后半：DND 免打扰中指示（新增设计，无批准 mockup——v5 语言
+	 * 最小实现，待用户验；不挂行为断言：chip 依赖 dndActive 的真实时钟） */
+	assert.ok(ppSrcC.includes('免打扰中 '), '81: chip copy prefix present');
+	assert.ok(ppSrcC.includes('if (dndActive())') && ppSrcC.includes("notifSec.style.display = 'flex'"), '81: chip renders in the 通知 section header only while DND is active');
+	assert.ok(ppSrcC.includes("CONFIG.dndFrom + '–' + CONFIG.dndTo"), '81: chip shows the HH:MM–HH:MM window');
+	assert.ok(ppSrcC.includes("'dsh-whale-pp-val dsh-whale-pp-chip'") && ppSrcC.includes('.dsh-whale-pp-sec .dsh-whale-pp-chip{margin-left:auto'), '81: ghost-chip language (v5) + row-end CSS');
+	assert.ok(ppSrcC.includes("var notifSec = ppSection(host, '通知')"), '81: notification section header anchored via the ppSection return seam');
+
+	/* 82. token 第一波（05b §2.2 十二项）：定义 + 消费点（grep 式） */
+	for (const tok of ['--wh-gray-1:', '--wh-gray-2:', '--wh-gray-3:', '--wh-gray-4:', '--wh-gray-5:', '--wh-gray-6:', '--wh-gray-7:', '--wh-gray-8:', '--wh-gray-9:', '--wh-gray-10:', '--wh-gray-11:', '--wh-gray-12:']) {
+		assert.ok(styleSrcC.includes(tok), `82: gray step defined: ${tok}`);
+	}
+	for (const tok of ['--wh-ok-strong: #4ade80', '--wh-warn-strong: #fbbf24', '--wh-danger-strong: #f87171', '--wh-neutral: #81858c', '--wh-badge-ring: 0 0 0 2px #1b1b1c', '--wh-radius-bubble: 10px', '--wh-radius-l: 16px', '--wh-dur-fast: 150ms', '--wh-dur-base: 200ms', '--wh-dur-enter: 300ms', '--wh-dur-slow: 500ms', '--wh-dur-ambient: 5s', '--wh-ease-standard: cubic-bezier(0.4, 0, 0.2, 1)', '--wh-ease-decel: cubic-bezier(0.05, 0.7, 0.1, 1)', '--wh-ease-accel: cubic-bezier(0.3, 0, 0.8, 0.15)', '--wh-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1)', '--wh-fs-xs: 10px', '--wh-fs-s: 11px', '--wh-fs-m: 12px', '--wh-fs-l: 13px', '--wh-fs-xl: 14px', '--wh-fs-2xl: 20px', '--wh-sp-menu-row: 5px 10px']) {
+		assert.ok(styleSrcC.includes(tok), `82: token defined verbatim: ${tok}`);
+	}
+	assert.ok(styleSrcC.includes('--wh-shadow-pop: 0 1px 2px rgba(0, 0, 0, 0.10), 0 6px 20px rgba(0, 0, 0, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.10)'), '82: --wh-shadow-pop definition verbatim (05b row 6)');
+	assert.strictEqual((styleSrcC.match(/var\(--wh-shadow-pop\)/g) || []).length, 2, '82: shadow-pop consumed exactly twice (bubble + note = P2-3 蓝味清退)');
+	assert.ok(!styleSrcC.includes('rgba(20, 40, 90'), '82: bubble blue-tinted shadow retired');
+	assert.ok(!styleSrcC.includes('rgba(30, 41, 59'), '82: note slate-tinted shadow retired');
+	assert.ok(styleSrcC.includes('--wh-glass: blur(16px) saturate(1.6)') && !styleSrcC.includes('blur(14px)'), '82: glass recipe upgraded to the U10 classic (P2-1 approved value change)');
+	assert.ok(styleSrcC.includes('@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)))') && styleSrcC.includes('#1b1b1cE0'), '82: P2-1 degradation floor present (0.92 alpha)');
+	assert.ok(styleSrcC.includes('box-shadow: var(--wh-shadow-pop);\n\t-webkit-backdrop-filter: var(--wh-glass);\n\tbackdrop-filter: var(--wh-glass);\n\topacity: 0.92;'), '82: note material unified (P3-3: pop shadow + main glass tier + 0.92)');
+	assert.ok(styleSrcC.includes('--wh-radius-s: 8px'), '82: s tier stays 8px (06 ruling: 8→6px rejected)');
+	const varWhStyle = (styleSrcC.match(/var\(--wh-/g) || []).length;
+	assert.ok(varWhStyle >= 120, `82: style.css var(--wh-*) consumption count grew past the 0.4.3-C baseline 120 (now ${varWhStyle})`);
+	const varWhPp = (ppSrcC.match(/var\(--wh-/g) || []).length;
+	assert.ok(varWhPp >= 68, `82: panel-page var(--wh-*) count grew past the 0.4.3-C baseline 68 (now ${varWhPp})`);
+	assert.strictEqual((styleSrcC.match(/1[123]\.5px/g) || []).length, 0, '82: half-pixel tiers stay at zero occurrences in style.css (挂账禁增)');
+	assert.strictEqual((ppSrcC.match(/1[123]\.5px/g) || []).length, 11, '82: panel-page half-pixel count unchanged at the 11 baseline (挂账禁增)');
+
+	/* 83. P1-4 语义色 class 路线 */
+	assert.ok(ppSrcC.includes("svg.setAttribute('class', 'wh-rdot wh-rdot-' + kind)"), '83: repDot svg carries the semantic kind class');
+	assert.ok(ppSrcC.includes("svg.setAttribute('class', 'wh-mdot wh-mdot-' + kind)"), '83: ppMdot svg carries the semantic kind class');
+	assert.ok(ppSrcC.includes("'class': 'wh-dot-tint'") && ppSrcC.includes("'class': 'wh-dot-mark'") && ppSrcC.includes("'class': 'wh-dot-pt'"), '83: child hooks tint/mark/pt in the factories');
+	assert.strictEqual(countOf(ppSrcC, "'#22c55e'") + countOf(ppSrcC, "'#ec1313'") + countOf(ppSrcC, "'#f59e0b'") + countOf(ppSrcC, "'#fbbf24'") + countOf(ppSrcC, "'#81858c'"), 0, '83: factory hexes fully migrated to CSS (5 hexes → 0)');
+	assert.strictEqual(countOf(ppSrcC, "'#4ade80'"), 1, '83: #4ade80 remains only in the ledger ± color (inline style, not an SVG factory)');
+	assert.strictEqual(countOf(ppSrcC, "'#f87171'"), 2, '83: #f87171 remains only in the mock-bignum + ledger colors (inline styles, not SVG factories)');
+	for (const rule of ['.wh-rdot-done .wh-dot-tint,.wh-mdot-done .wh-dot-tint{fill:var(--wh-ok)}', '.wh-rdot-fail .wh-dot-tint,.wh-mdot-fail .wh-dot-tint{fill:var(--wh-danger)}', '.wh-rdot-killed .wh-dot-tint{fill:var(--wh-neutral)}', '.wh-rdot-done .wh-dot-mark,.wh-mdot-done .wh-dot-mark,.wh-hdot-ok .wh-dot-mark{stroke:var(--wh-ok-strong);fill:none}', '.wh-rdot-fail .wh-dot-mark,.wh-mdot-fail .wh-dot-mark,.wh-hdot-fail .wh-dot-mark{stroke:var(--wh-danger-strong);fill:none}', '.wh-rdot-ask .wh-dot-pt,.wh-mdot-ask .wh-dot-pt,.wh-rdot-warn .wh-dot-pt,.wh-mdot-warn .wh-dot-pt,.wh-hdot-warn .wh-dot-pt{fill:var(--wh-warn-strong)}']) {
+		assert.ok(ppSrcC.includes(rule), `83: semantic CSS rule present verbatim: ${rule.slice(0, 46)}…`);
+	}
+	/* page.html 同族工厂不在本任务地盘——残留登记（只记录，不断言数值） */
+	try {
+		const petPageC = fs.readFileSync(path.join(__dirname, 'whale-assistant', 'pet', 'page.html'), 'utf8');
+		const residue = countOf(petPageC, '#4ade80') + countOf(petPageC, '#f87171') + countOf(petPageC, '#fbbf24') + countOf(petPageC, '#22c55e') + countOf(petPageC, '#ec1313') + countOf(petPageC, '#f59e0b') + countOf(petPageC, '#81858c');
+		console.log(`[0.4.3-C] page.html 同族工厂 hex 残留登记（并行同事地盘，未触碰）: ${residue} 处`);
+	} catch (eResidue) { /* 布局缺文件：静默 */ }
+
+	/* 84. P1-5 焦点三件套 */
+	assert.ok(ppSrcC.includes("window.addEventListener('keydown'") && ppSrcC.includes("ev.key !== 'Escape'") && ppSrcC.includes('closeCtxFloats();'), '84: Esc closes the floats via the closeCtxFloats single exit (try/catch-wrapped for vm stubs)');
+	assert.ok(ppSrcC.includes('} catch (eEsc) { /* 桩环境无 window 注册表 */ }'), '84: keydown listener is stub-safe');
+	assert.ok(styleSrcC.includes(':focus-visible {\n\toutline: 2px solid var(--wh-accent);\n\toutline-offset: 2px;\n}'), '84: global keyboard focus ring (accent 2px, :focus-visible = keyboard-only)');
+	assert.ok(styleSrcC.indexOf('outline: none') < 0, '84: search-input outline:none removed (focus indication restored)');
+	assert.ok(styleSrcC.includes('.dsh-whale-history-search:focus {\n\tborder-color: var(--wh-accent);\n}'), '84: search :focus border accent kept (双保险)');
+
+	/* 85. P3-5 周报卡收底 16px */
+	assert.ok(styleSrcC.includes('--wh-radius-l: 16px'), '85: l tier defined at 16px');
+	assert.ok(ppSrcC.includes('border-radius:var(--wh-radius-l);padding:14px 16px;margin:14px 0 6px}'), '85: report card radius consumes --wh-radius-l (12→16px, approved)');
+
+	console.log('APPENDED TESTS PASSED (0.4.3 阶段 C: 周报行/诚实化/260ms/truncate/双钳制/DND 指示/token 第一波/语义色/焦点三件套)');
+} catch (err) {
+	console.error('APPENDED TEST FAILED:', err && err.message || err);
+	process.exit(1);
+}

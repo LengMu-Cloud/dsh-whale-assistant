@@ -135,6 +135,29 @@
 		try {
 			localStorage.setItem('dsh-whale:petHint', JSON.stringify({ day: todayKey(), n: petHintCount }));
 		} catch (e) {}
+		/* BUG-1 后半程（0.4.3 阶段 B）：引导台词日限困在桌宠页每-boot 失忆的
+		 * localStorage——PET_MODE 下沿 pushPetSync 进 petDoc。日期+计数**成对**
+		 * 上报（只存日期会丢计数=日限重启归零，限流失效）。容量预算：日期 10
+		 * 字符 + 计数宿主侧钳顶 999。fire-and-forget：宿主离线静默，下次台词
+		 * 自然补上。 */
+		if (PET_MODE && petHintDay) pushPetSync({ petHintDate: petHintDay, petHintCount: petHintCount });
+	}
+
+	/** BUG-1 后半程（0.4.3 阶段 B）：宿主 /pet/state 下行的日限快照采用——
+	 * 本地已有记录（今天或历史）不覆盖（幂等，与 petSyncFromHost 的
+	 * affMsHave「本地权威值在先」同款）；只认**今天**的快照（隔日计数对
+	 * 本地日限毫无意义，跳过=本地按新的一天从 0 起步，与 loadPetHint 的
+	 * raw.day===todayKey() 闸同款）；由 ui/drawers.js 的
+	 * petSyncExtrasFromHost 转发。坏日期整字段丢弃；坏计数按 0 处理
+	 * （「今天还没说过话」）。 */
+	function adoptPetHintFromHost(day, n) {
+		try {
+			if (localStorage.getItem('dsh-whale:petHint') !== null) return;
+		} catch (e) { return; /* 存储不可用：放弃采用 */ }
+		if (typeof day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(day) || day !== todayKey()) return;
+		petHintDay = day;
+		petHintCount = typeof n === 'number' && isFinite(n) && n >= 0 ? Math.min(999, Math.floor(n)) : 0;
+		savePetHint();
 	}
 
 	function hasRunningJobs() {

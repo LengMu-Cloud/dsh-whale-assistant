@@ -227,6 +227,15 @@
           fetch('ctrl', { method: 'POST', headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ action: 'form', value: 'full' }) }).catch(function () { });
         } catch (e1) { }
+        /* 0.4.3 阶段 C（P-09 数据地基）：气泡破裂=唤起——互动入账随既有
+           sync 通道上报（interact:'wake'，宿主 sync 处理处白名单校验后
+           ledgerAppend 进 petLedger；本页只有这一个自产唤起点，摸头在
+           whale.js 半区经 pushPetSync 通道走）。fire-and-forget：鲸鱼冒
+           出来已是事实，宿主入账失败静默（与上方 form POST 同款）。 */
+        try {
+          fetch('ctrl', { method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ action: 'sync', interact: 'wake' }) }).catch(function () { });
+        } catch (e1b) { }
         try { petPeek.classList.add('burst'); } catch (e2) { }
         setTimeout(function () {
           try { petPeek.classList.remove('burst'); } catch (e3) { }
@@ -336,7 +345,9 @@
               if (window.__dshWhale && typeof window.__dshWhale.applyConfig === 'function') {
                 window.__dshWhale.applyConfig(doc.petConfig.config || {});
                 if (typeof window.__dshWhale.setSoundMuted === 'function') {
-                  window.__dshWhale.setSoundMuted(doc.petConfig.sound === 'off');
+                  /* 第二参 true=relay 驱动的采用（0.4.3 阶段 B）：不回推 petDoc
+                     ——同值回写空转，且不覆盖桌宠页用户自设静音的权威值 */
+                  window.__dshWhale.setSoundMuted(doc.petConfig.sound === 'off', true);
                 }
               }
             } catch (e1) { }
@@ -352,6 +363,23 @@
               window.__dshWhale.petSyncFromHost(doc.aff, doc.affMs, doc.pos);
             }
           } catch (e2) { }
+        }
+        /* ---- BUG-1 后半程（0.4.3 阶段 B）：提醒/总静音/引导台词日限/每日
+           装饰计数随 state 轮询下发——采用逻辑在 whale.js
+           petSyncExtrasFromHost（drawers.js，幂等：本地已有权威值=键存在时
+           纯 no-op；boot 头部种入通常已先落好，本下行只兜本地空白）。 ---- */
+        if (doc && (doc.reminders != null || doc.soundMuted != null || doc.petHintDate != null || doc.gearStats != null)) {
+          try {
+            if (window.__dshWhale && typeof window.__dshWhale.petSyncExtrasFromHost === 'function') {
+              window.__dshWhale.petSyncExtrasFromHost({
+                reminders: doc.reminders,
+                soundMuted: doc.soundMuted,
+                petHintDate: doc.petHintDate,
+                petHintCount: doc.petHintCount,
+                gearStats: doc.gearStats
+              });
+            }
+          } catch (e5) { }
         }
       }).catch(function () {
         if (++fetchFails >= 3) { try { clearInterval(stateTimer); } catch (e3) { } }
@@ -864,13 +892,14 @@
 <script>
 /* 设置 relay 早到序兜底（11-11 真机修复轮）：state 轮询若在 whale.js 就绪
  * 前已带回 petConfig（缓存的极快响应），上面轮询块的 applyConfig 会因
- * __dshWhale 缺席而空过——这里补一拍应用（幂等，与轮询差分互不冲突）。 */
+ * __dshWhale 缺席而空过——这里补一拍应用（幂等，与轮询差分互不冲突）。
+ * setSoundMuted 第二参 true=relay 驱动采用（0.4.3 阶段 B）：不回推 petDoc。 */
 try {
   var pc0 = window.__dshPetHost && window.__dshPetHost.petConfig;
   if (pc0 && window.__dshWhale && typeof window.__dshWhale.applyConfig === 'function') {
     window.__dshWhale.applyConfig(pc0.config || {});
     if (typeof window.__dshWhale.setSoundMuted === 'function') {
-      window.__dshWhale.setSoundMuted(pc0.sound === 'off');
+      window.__dshWhale.setSoundMuted(pc0.sound === 'off', true);
     }
   }
 } catch (e) { }

@@ -1,7 +1,13 @@
 
 	function say(text, duration, sessionId) {
+		/* P2 清偿批（11-24）：ui 就绪前的待播队列有界——页面加载慢/被系统冻结
+		 * 时帧仍在入队（旧实现无上界，长冻结期的完成通知可无限堆内存）。
+		 * 保留最新 50 条：旧通知越晚越没有播报价值（红标/历史各自独立记账）。 */
 		if (uiReady) uiSay(text, duration, sessionId);
-		else pendingSay.push({ text: text, duration: duration, sessionId: sessionId });
+		else {
+			if (pendingSay.length >= 50) pendingSay.shift();
+			pendingSay.push({ text: text, duration: duration, sessionId: sessionId });
+		}
 	}
 
 	/** Unread job-report count: accumulates reports, one click reads one. */

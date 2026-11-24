@@ -422,6 +422,18 @@
 		/** 📤 导出历史: Markdown → clipboard; CSV → file download.
 		 * onDone(ok) 可选——侧边栏页（ui/panel-page.js）用它驱动行内闪现：
 		 * 剪贴板写入是异步的，且失败气泡在桌宠在岗时打进隐藏元素零可见。 */
+		/** CSV 单元格（P2 清偿批，11-24）：双引号包裹 + 内部引号翻倍，并中和
+		 * 公式注入——会话名/任务标题来自模型与用户输入，Excel/Sheets 会把
+		 * `=` `+` `-` `@`（以及 TAB/CR）开头的单元格当公式执行。前置单引号是
+		 * 最通用的中和方式（导出后仍可读，仅 Excel 显示时去掉引导）。 */
+		function csvCell(v) {
+			var s = String(v == null ? '' : v);
+			if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+			return '"' + s.replace(/"/g, '""') + '"';
+		}
+		/* 测试缝：drawers 闭包内的纯函数由本模块自挂（exports.js 够不着） */
+		try { window.__dshWhale._csvCell = csvCell; } catch (eCsvSeam) { }
+
 		function exportHistory(fmt, onDone) {
 			if (!history.length) { uiSay('还没有历史可导出哦 🐳', 2000); if (onDone) onDone(false); return; }
 			if (fmt === 'csv') {
@@ -430,7 +442,7 @@
 					var r = history[i];
 					var d = new Date(r.at || 0);
 					var ts = d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate() + ' ' + d.toTimeString().slice(0, 8);
-					rows.push([ts, r.kind || '', '"' + String(r.title || '').replace(/"/g, '""') + '"', r.sessionId || '', r.turnTokens == null ? '' : r.turnTokens].join(','));
+					rows.push([csvCell(ts), csvCell(r.kind || ''), csvCell(r.title || ''), csvCell(r.sessionId || ''), csvCell(r.turnTokens == null ? '' : r.turnTokens)].join(','));
 				}
 				var blob = new Blob(['\ufeff' + rows.join('\n')], { type: 'text/csv;charset=utf-8' });
 				var a = document.createElement('a');

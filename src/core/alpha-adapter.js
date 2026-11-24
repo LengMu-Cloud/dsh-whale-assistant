@@ -371,6 +371,13 @@
 					synthOn(t.sid, 'tool/result', { callId: id });
 				}
 			}
+			/* P2 清偿批（11-24）：表空即自停——旧实现每 2.5s 永久空转一次
+			 * （页面生命周期内跑几十万次空循环）。下一次 trackToolCall 会
+			 * 再经 ensureToolSweep() 起表。 */
+			if (!sweepTimer) return;
+			var any = false;
+			for (var k in pendingTools) { any = true; break; }
+			if (!any) { clearInterval(sweepTimer); sweepTimer = null; }
 		}, 2500);
 	}
 

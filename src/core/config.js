@@ -15,7 +15,7 @@
 		soundFail: 'thud',             /* 失败通知音效: thud(低沉下行)|ding|bell|chime|none */
 		soundAttn: 'chime',            /* 提问/审核音效: chime|ding|bell|none */
 		soundRemind: 'bell',           /* 定时提醒音效: bell|ding|chime|thud|none */
-		pressureWarnPct: 70,           /* context pressure that fires the /compact warning */
+		pressureWarnPct: 70,           /* context pressure that fires the /compact warning (20..100; BUG-G 2026-11-24 起上限 100=满仓才提醒) */
 		dndEnabled: false,             /* 免打扰: completion sounds+popups silenced in the window */
 		dndFrom: '23:00',              /* DND window start (HH:MM, local) */
 		dndTo: '08:00'                 /* DND window end */
@@ -61,7 +61,9 @@
 		if (!(CONFIG.toolStuckMs >= 3000 && CONFIG.toolStuckMs <= 60000)) CONFIG.toolStuckMs = CONFIG_DEFAULTS.toolStuckMs;
 		if (!(CONFIG.recentFailWindowMs >= 0)) CONFIG.recentFailWindowMs = CONFIG_DEFAULTS.recentFailWindowMs;
 		if (!(CONFIG.volume >= 0 && CONFIG.volume <= 1)) CONFIG.volume = CONFIG_DEFAULTS.volume;
-		if (!(CONFIG.pressureWarnPct >= 20 && CONFIG.pressureWarnPct <= 95)) CONFIG.pressureWarnPct = CONFIG_DEFAULTS.pressureWarnPct;
+		/* BUG-G（2026-11-24 用户拍板）：可调区间 20%~100%（旧 20~95 钳制与
+		 * 滑块上限 100 冲突——99/100 会被 load 静默打回 70，用户设了等于没设） */
+		if (!(CONFIG.pressureWarnPct >= 20 && CONFIG.pressureWarnPct <= 100)) CONFIG.pressureWarnPct = CONFIG_DEFAULTS.pressureWarnPct;
 		if (!DND_TIME_RE.test(CONFIG.dndFrom)) CONFIG.dndFrom = CONFIG_DEFAULTS.dndFrom;
 		if (!DND_TIME_RE.test(CONFIG.dndTo)) CONFIG.dndTo = CONFIG_DEFAULTS.dndTo;
 		/* 音色四键有意不在 load 期钳制：存量脏值（如 done 塞了 thud）按既定
@@ -135,7 +137,7 @@
 		if (typeof patch.soundScheme === 'string' && ['bell', 'chime', 'ding'].indexOf(patch.soundScheme) >= 0) {
 			patch.soundDone = patch.soundScheme;
 		}
-		if (typeof patch.pressureWarnPct === 'number' && patch.pressureWarnPct >= 20 && patch.pressureWarnPct <= 95 && patch.pressureWarnPct !== CONFIG.pressureWarnPct) {
+		if (typeof patch.pressureWarnPct === 'number' && patch.pressureWarnPct >= 20 && patch.pressureWarnPct <= 100 && patch.pressureWarnPct !== CONFIG.pressureWarnPct) {
 			CONFIG.pressureWarnPct = Math.round(patch.pressureWarnPct);
 			changed = true;
 		}

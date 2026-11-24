@@ -257,11 +257,19 @@
 	/** Busy flag: a turn is running — the panel (if visible) gets a subtle
 	 * pulsing emphasis until the turn ends. Pure visual, zero behaviour.
 	 * ensureStatusEl() is used so a start that precedes any panel creation
-	 * still gets the class; the panel is opacity:0 until first shown. */
+	 * still gets the class; the panel is opacity:0 until first shown.
+	 * P2 清偿批（11-24）：**并发回合计数**——旧布尔位在两会话并行时，先结束
+	 * 的那个一 `false` 就把脉动摘掉，另一个还在跑面板却静止。start/end 由
+	 * frames.handleEventFrame 严格成对调用（turn/start +1 / turn/end -1），
+	 * 计数下限 0；上限钳 50 防丢失 end 的脏帧把脉动永久焊死（纯视觉，不进
+	 * 任何记账/通知逻辑）。 */
+	var statusBusyCount = 0;
 	function markStatusBusy(busy) {
-		var el = statusEl || (busy ? ensureStatusEl() : null);
+		statusBusyCount = Math.max(0, statusBusyCount + (busy ? 1 : -1));
+		if (statusBusyCount > 50) statusBusyCount = 50;
+		var el = statusEl || (statusBusyCount > 0 ? ensureStatusEl() : null);
 		if (!el) return;
-		if (busy) el.classList.add('dsh-whale-status-busy');
+		if (statusBusyCount > 0) el.classList.add('dsh-whale-status-busy');
 		else el.classList.remove('dsh-whale-status-busy');
 	}
 
@@ -316,7 +324,7 @@
 
 	/** One-shot warning when the context fills up; re-arms after relief.
 	 * 2026-11-18（全面分析 C-2 实弹 bug）：重臂线原为固定 50%，与可配阈值
-	 * （20~95）脱钩——阈值调到 <50（验收 P1-21 实测就设了 20%）时，投影帧
+	 * （20~100）脱钩——阈值调到 <50（验收 P1-21 实测就设了 20%）时，投影帧
 	 * 落在 [warnAt, 50) 区间每两帧循环「警告→重臂→警告」，一次性语义被
 	 * 打破。改为分级回落：默认及以上阈值（≥70）保持经典 50% 重置线；低
 	 * 阈值按 30% 回落（warnAt=20 → 6%），任何配置下恒有 resetAt < warnAt。 */

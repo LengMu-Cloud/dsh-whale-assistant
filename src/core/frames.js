@@ -387,8 +387,9 @@
 		try { window.__dshWhale._titleProbe = { sid: frame.sessionId, seq: frame.seq, label: info.label, infoTitle: info.title, mem: sessionTitles.get(frame.sessionId), book: bookTitle(frame.sessionId), chosen: title }; } catch (e) {}
 		if (event.type === 'turn/start') {
 			bumpWork(1);
-			/* mark the status panel as busy while this turn runs */
-			markStatusBusy(true);
+			/* P2 清偿批（11-24）：busy 标记改由 handleEventFrame 的 turn/start
+			 * 与 turn/end 在同一函数内严格成对增/减（旧布尔位在两会话并行时
+			 * 会被先结束的那个摘掉）；本函数只负责播报，不再动 busy。 */
 			/* (the task counter was already reset on the live turn/start
 			 * event, before the name-hold, so early usage is kept) */
 			if (CONFIG.notifyOnStart && !event.replaySuppress) {
@@ -595,6 +596,10 @@
 			}
 			/* long-task run timer (>2min ⇒ "⏳ 已运行" line in the panel) */
 			startRunTimer(frame.sessionId);
+			/* P2 清偿批（11-24）：并发回合计数 +1 —— 与下方 turn/end 的 -1 在
+			 * 同一函数内成对（status-panel.markStatusBusy 改为计数实现），
+			 * 两会话并行时先结束的那个不再摘掉另一个的脉动。 */
+			markStatusBusy(true);
 		}
 		if (event.type === 'turn/end') {
 			/* a finished turn un-sticks any outstanding tool watchdog — this

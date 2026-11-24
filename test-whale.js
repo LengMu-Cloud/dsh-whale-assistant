@@ -2491,14 +2491,52 @@ async function main() {
 	const settingsTabIdem = ppTabsIdem.children.find((c) => (c.textContent || '').indexOf('⚙️ 设置') >= 0);
 	settingsTabIdem._fire('click', { stopPropagation() {} });
 	assert.ok(ppHost.textContent.includes('v' + envCtx.sandbox.__dshWhale.version) && ppHost.textContent.includes('当前版本'), `about row reads 当前版本 + the build version (11-11 三报：让其他用户看懂这是版本号): v${envCtx.sandbox.__dshWhale.version}`);
+	/* BUG-G（2026-11-24）：压力阈值 = 20%~100% 滑块（原 50~90 五档预设下拉）。
+	 * 契约：range 20/100/step5 + 读数 chip 同步、拖动 input 只回显不落盘、
+	 * change 落盘、滚轮 ±step 立即落盘并夹紧两端、change 后不重建。 */
 	const ppPress0 = findPpRow(ppHost, '🚨 压力提醒');
-	const pressSel = ppSelOf(ppPress0);
-	assert.ok(pressSel && /^\d+$/.test(pressSel.value), `pressure select renders a percent: ${pressSel ? pressSel.value : 'null'}`);
-	const pressBefore = pressSel.value;
-	pressSel.value = pressBefore === '80' ? '90' : '80';
-	pressSel._fire('change', {});
-	assert.strictEqual(JSON.parse(envCtx.sandbox.localStorage.getItem('dsh-whale:config')).data.pressureWarnPct, Number(pressSel.value), 'pressure change applies + persists (⑳A select 化)');
-	assert.strictEqual(ppSelOf(findPpRow(ppHost, '🚨 压力提醒')).value, pressSel.value, 'pressure select keeps its value (no re-render clobber)');
+	const ppRangeOf = (row) => {
+		const right = row.children.find((c) => (c.className || '') === 'dsh-whale-pp-range');
+		return right ? right.children.find((c) => c.tag === 'input') : null;
+	};
+	const pressSlider = ppRangeOf(ppPress0);
+	assert.ok(pressSlider, 'pressure row renders the range slider (BUG-G)');
+	assert.strictEqual(pressSlider.min, '20', 'slider lower bound is 20% (old preset floor was 50%)');
+	assert.strictEqual(pressSlider.max, '100', 'slider upper bound is 100% (old preset ceiling was 90%)');
+	assert.strictEqual(pressSlider.step, '5', 'slider step 5% keeps every legacy preset on-grid');
+	assert.strictEqual(pressSlider.value, '70', 'slider starts at the default/persisted threshold');
+	const pressRight = ppPress0.children.find((c) => (c.className || '') === 'dsh-whale-pp-range');
+	const pressChip = pressRight && pressRight.children.find((c) => c.className === 'dsh-whale-pp-range-val');
+	assert.ok(pressChip && pressChip.textContent === '70%', `value chip renders the percent: ${pressChip && pressChip.textContent}`);
+	const pressCfgOf = () => {
+		const raw = envCtx.sandbox.localStorage.getItem('dsh-whale:config');
+		return raw ? JSON.parse(raw).data.pressureWarnPct : null;
+	};
+	/* 拖动：input 只回显（每个 pointermove 都落盘=白写 localStorage + 中继洪峰） */
+	pressSlider.value = '85';
+	pressSlider._fire('input', {});
+	assert.strictEqual(pressChip.textContent, '85%', 'input event mirrors the dragged value in the chip');
+	assert.notStrictEqual(pressCfgOf(), 85, 'dragging does not persist per pointermove (commit happens on change)');
+	pressSlider._fire('change', {});
+	assert.strictEqual(pressCfgOf(), 85, 'change commits + persists the dragged threshold');
+	assert.strictEqual(ppRangeOf(findPpRow(ppHost, '🚨 压力提醒')).value, '85', 'slider keeps its value (no re-render clobber)');
+	/* 滚轮：Chromium 原生 range 不响应滚轮——±step 并立即落盘，两端夹紧 */
+	let wheelPrevented = 0;
+	pressSlider._fire('wheel', { deltaY: -120, preventDefault() { wheelPrevented++; }, stopPropagation() {} });
+	assert.strictEqual(pressSlider.value, '90', 'wheel up = +5% (native range ignores wheel)');
+	assert.strictEqual(pressCfgOf(), 90, 'a wheel notch persists immediately');
+	assert.strictEqual(wheelPrevented, 1, 'wheel is preventDefault-ed (settings page must not scroll under it)');
+	pressSlider.value = '100';
+	pressSlider._fire('wheel', { deltaY: -120, preventDefault() {}, stopPropagation() {} });
+	assert.strictEqual(pressSlider.value, '100', 'wheel up clamps at 100%');
+	pressSlider.value = '20';
+	pressSlider._fire('wheel', { deltaY: 120, preventDefault() {}, stopPropagation() {} });
+	assert.strictEqual(pressSlider.value, '20', 'wheel down clamps at 20%');
+	assert.strictEqual(pressCfgOf(), 20, 'the 20% floor persists (earliest warning)');
+	/* 100% end-to-end（旧 20~95 钳制会把 100 静默打回 70） */
+	pressSlider.value = '100';
+	pressSlider._fire('change', {});
+	assert.strictEqual(pressCfgOf(), 100, '100% persists (clamp widened 95 → 100, BUG-G)');
 	/* export flash reports the REAL outcome: the vm has no clipboard, so a
 	 * fake 「✓ 已复制」 here would be the P2-3 regression */
 	envCtx.sandbox.navigator = {}; /* vm 沙箱无 navigator：补空壳走「不可用」分支 */
@@ -2508,6 +2546,16 @@ async function main() {
 	const ppExpVal = ppExp.children.find((c) => c.className === 'dsh-whale-pp-val');
 	assert.ok(!ppExpVal.textContent.includes('已复制'), `export flash never fakes success: ${ppExpVal.textContent}`);
 	assert.ok(ppExpVal.textContent.includes('复制失败') || ppExpVal.textContent.includes('还没有记录'), `flash reflects the real outcome: ${ppExpVal.textContent}`);
+	/* P2 清偿批（11-24）：CSV 导出公式注入中和（_csvCell seam） */
+	const csvCell = envCtx.sandbox.__dshWhale._csvCell;
+	assert.ok(typeof csvCell === 'function', 'csvCell seam published');
+	assert.strictEqual(csvCell('=1+1'), '"\'=1+1"', 'leading = neutralized with a quote prefix');
+	assert.strictEqual(csvCell('+SUM(A1)'), '"\'+SUM(A1)"', 'leading + neutralized');
+	assert.strictEqual(csvCell('-2'), '"\'-2"', 'leading - neutralized');
+	assert.strictEqual(csvCell('@cmd'), '"\'@cmd"', 'leading @ neutralized');
+	assert.strictEqual(csvCell('normal title'), '"normal title"', 'plain cells quoted verbatim');
+	assert.strictEqual(csvCell('a"b'), '"a""b"', 'embedded quotes doubled (CSV contract kept)');
+	assert.strictEqual(csvCell(null), '""', 'null renders as an empty quoted cell');
 	await sleep(2100);
 	assert.strictEqual(ppExpVal.textContent, 'Markdown → 复制到剪贴板', 'export flash falls back after 2s');
 	/* tone select: dirty legacy value (not in the kind's opts) falls back to
@@ -2517,8 +2565,8 @@ async function main() {
 	const toneHost = envTone.sandbox.document.createElement('div');
 	envTone.sandbox.window.__dshWhalePanel.mount(toneHost);
 	const toneSel = (() => {
-		/* ⑳A 后页面里有 8 个 sound-sel（新增免打扰/音量/超时/压力四行）——
-		 * 搜索必须限定在音色展开区内，否则抓到的是 DND 行的下拉 */
+		/* ⑳A 后页面里有多个 sound-sel（免打扰/音量/超时三行；压力行 BUG-G 起
+		 * 改为滑块）——搜索必须限定在音色展开区内，否则抓到的是别的行的下拉 */
 		const ppContentT = ppInner(toneHost).children.find((c) => (c.className || '') === 'dsh-whale-pp-content');
 		const toneDetT = ppContentT && ppContentT.children.find((c) => (c.className || '') === 'dsh-whale-pp-tone-detail');
 		if (!toneDetT) return null;
@@ -3445,7 +3493,44 @@ async function main() {
 	muxpBs({ type: 'session/event', sessionId: 'session-bs1', event: { type: 'turn/end', seq: 2, time: 1, data: {} } });
 	assert.ok(busyEl() && !busyEl().classList.contains('dsh-whale-status-busy'), 'end releases the busy flag');
 	assert.ok(busyEl() && !busyEl().classList.contains('dsh-whale-status-busy'), 'panel element persists, busy released');
+	/* P2 清偿批（11-24）：并发回合计数——旧布尔位会被「先结束的那个」摘掉 */
+	muxpBs({ type: 'session/projection', sessionId: 'session-bs2', key: 'subagentTiming', value: { settledMs: 0 } });
+	muxpBs({ type: 'session/projection', sessionId: 'session-bs2', key: 'title', value: '并行会话', seq: 1 });
+	await sleep(20);
+	muxpBs({ type: 'session/event', sessionId: 'session-bs1', event: { type: 'turn/start', seq: 3, time: 2, data: {} } });
+	muxpBs({ type: 'session/event', sessionId: 'session-bs2', event: { type: 'turn/start', seq: 1, time: 3, data: {} } });
+	assert.ok(busyEl() && busyEl().classList.contains('dsh-whale-status-busy'), 'two concurrent turns keep the panel busy');
+	muxpBs({ type: 'session/event', sessionId: 'session-bs1', event: { type: 'turn/end', seq: 4, time: 4, data: {} } });
+	assert.ok(busyEl() && busyEl().classList.contains('dsh-whale-status-busy'), 'one turn ending does NOT clear busy while the other still runs (P2 concurrency count)');
+	muxpBs({ type: 'session/event', sessionId: 'session-bs2', event: { type: 'turn/end', seq: 2, time: 5, data: {} } });
+	assert.ok(busyEl() && !busyEl().classList.contains('dsh-whale-status-busy'), 'busy released once the LAST concurrent turn ends');
 	BS._setHoldMs(null);
+
+	/* 42b. P2 清偿批（11-24）：ui 就绪前待播队列有界 + 游泳时间参数 clamp */
+	const envP2 = makeEnv();
+	const P2 = envP2.sandbox.__dshWhale;
+	envP2.setFetch(() => Promise.resolve({ ok: false, json: () => Promise.resolve({}) }));
+	P2.handleMuxPayload({ type: 'session/projection', sessionId: 'session-p2', key: 'subagentTiming', value: { settledMs: 0 } });
+	P2.handleMuxPayload({ type: 'session/projection', sessionId: 'session-p2', key: 'title', value: '队列上限', seq: 1 });
+	for (let qi = 0; qi < 60; qi++) {
+		P2.handleMuxPayload({ type: 'session/event', sessionId: 'session-p2', event: { type: 'turn/start', seq: 10 + qi, time: qi, data: {} } });
+	}
+	assert.strictEqual(P2._pendingSayCount(), 50, 'pre-ready say queue is bounded at 50 (old: unbounded)');
+	envP2.ready();
+	assert.strictEqual(P2._pendingSayCount(), 0, 'pending queue drains once the UI is ready');
+	/* 游泳 clamp：rAF 时间戳早于起点（后台节流/时钟回跳）不得把 t 拉负外插 */
+	envP2.whale.style.left = '200px';
+	envP2.whale.style.top = '200px';
+	envP2.whale._fire('dblclick', {});
+	const p2swim = P2.swimState();
+	assert.ok(p2swim, 'clamp test: swim started');
+	envP2.stepRaf(p2swim.start - 5000);
+	assert.strictEqual(envP2.whale.style.left, '200px', 't clamped at 0: no backward extrapolation (P2 swim clamp)');
+	assert.strictEqual(envP2.whale.style.top, '200px', 't clamped at 0 keeps the swim start position');
+	let p2guard = 0;
+	let p2ts = p2swim.start;
+	while (P2.swimState() && p2guard++ < 5000) { p2ts += 16; envP2.stepRaf(p2ts); }
+	assert.ok(!P2.swimState(), 'clamp test swim still finishes normally');
 
 	/* 43. pressure-tinted border: the pure color function spans blue-grey at
 	 * 0% to deep red at 100%, and the pressure frame drives the CSS variable
@@ -3889,6 +3974,19 @@ async function main() {
 		assert.ok(bubT.classList.contains('show'), 'bubble still shown after a hover round-trip');
 		assert.strictEqual(BT._bubble.resumeMs(200), 1500, 'mouseleave floor: remaining < 1.5s is topped up');
 		assert.strictEqual(BT._bubble.resumeMs(4000), 4000, 'mouseleave resumes with the remaining time');
+		/* P2 清偿批（11-24）：悬停中换文不得重起倒计时（旧实现当场恢复读秒） */
+		bubT._fire('mouseenter', {});
+		assert.strictEqual(BT._bubble.state().hovering, true, 'hover state tracked');
+		assert.strictEqual(BT._bubble.state().armed, false, 'hover pauses the countdown');
+		BT._bubble.say('悬停中换文测试', 800);
+		assert.ok(bubT.textContent.includes('悬停中换文'), 'a new message replaces the bubble text in place');
+		assert.strictEqual(BT._bubble.state().armed, false, 'a message arriving while hovered does NOT re-arm the hide timer');
+		await sleep(900);
+		assert.ok(bubT.classList.contains('show'), 'bubble survives past the new duration because the pointer is still on it');
+		bubT._fire('mouseleave', {});
+		assert.strictEqual(BT._bubble.state().armed, true, 'mouseleave re-arms the countdown');
+		assert.strictEqual(BT._bubble.state().hovering, false, 'hover state cleared on leave');
+		BT._dismissBubble();
 		/* #10 clear feedback: faint note with the count */
 		BT.showWhaleNote('已清空 7 条通知', 3000);
 		const noteEl = envT.whale.children.find((c) => (c.className || '') === 'dsh-whale-note');
@@ -5036,6 +5134,7 @@ try {
 	const dingsSrcC = fs.readFileSync(path.join(__dirname, 'src', 'core', 'dings.js'), 'utf8');
 	const ppSrcC = fs.readFileSync(path.join(__dirname, 'src', 'ui', 'panel-page.js'), 'utf8');
 	const seSrcC = fs.readFileSync(path.join(__dirname, 'src', 'core', 'server-events.js'), 'utf8');
+	const alphaSrcC = fs.readFileSync(path.join(__dirname, 'src', 'core', 'alpha-adapter.js'), 'utf8');
 	const styleSrcC = fs.readFileSync(path.join(__dirname, 'parts', 'style.css'), 'utf8');
 	const countOf = (src, needle) => src.split(needle).length - 1;
 
@@ -5139,6 +5238,21 @@ try {
 	assert.strictEqual(cfgBad.applyConfig({ volume: 5 }), false, '79: applyConfig write path still rejects out-of-range volume');
 	assert.strictEqual(cfgBad.applyConfig({ dndFrom: '99:99' }), false, '79: applyConfig dnd regex no longer passes 99:99');
 	assert.strictEqual(cfgBad.applyConfig({ dndFrom: '23:30' }), true, '79: in-range DND time still accepted');
+	/* BUG-G（2026-11-24）：区间上界 95 → 100——99/100 不再被 load 静默打回 70
+	 * （旧钳制下「滑块拖到 100」会存 100、下次加载变 70，等于用户设了没生效） */
+	const cfgEdge99 = cfgEval({ 'dsh-whale:config': JSON.stringify({ v: 1, data: { pressureWarnPct: 99 } }) });
+	cfgEdge99.loadConfig();
+	assert.strictEqual(cfgEdge99.CONFIG.pressureWarnPct, 99, 'BUG-G: 99% survives load (old 20~95 clamp reset it to 70)');
+	const cfgEdge100 = cfgEval({ 'dsh-whale:config': JSON.stringify({ v: 1, data: { pressureWarnPct: 100 } }) });
+	cfgEdge100.loadConfig();
+	assert.strictEqual(cfgEdge100.CONFIG.pressureWarnPct, 100, 'BUG-G: 100% is a legal stored value (满仓才提醒)');
+	const cfgEdge101 = cfgEval({ 'dsh-whale:config': JSON.stringify({ v: 1, data: { pressureWarnPct: 101 } }) });
+	cfgEdge101.loadConfig();
+	assert.strictEqual(cfgEdge101.CONFIG.pressureWarnPct, 70, 'BUG-G: 101% still clamps back to the default');
+	assert.strictEqual(cfgEdge99.applyConfig({ pressureWarnPct: 80 }), true, 'BUG-G: applyConfig accepts 80%');
+	assert.strictEqual(cfgEdge99.applyConfig({ pressureWarnPct: 100 }), true, 'BUG-G: applyConfig accepts the 100% upper bound');
+	assert.strictEqual(cfgEdge99.applyConfig({ pressureWarnPct: 101 }), false, 'BUG-G: applyConfig rejects >100%');
+	assert.strictEqual(cfgEdge99.applyConfig({ pressureWarnPct: 19 }), false, 'BUG-G: applyConfig rejects <20%');
 
 	/* 80. I-③-2 治本：dndToMin（行为） */
 	const dingsSandbox = { PET_MODE: false, storeD: {}, pushPetConfig: function () {}, pushPetSync: function () {} };
@@ -5219,6 +5333,13 @@ try {
 	/* 85. P3-5 周报卡收底 16px */
 	assert.ok(styleSrcC.includes('--wh-radius-l: 16px'), '85: l tier defined at 16px');
 	assert.ok(ppSrcC.includes('border-radius:var(--wh-radius-l);padding:14px 16px;margin:14px 0 6px}'), '85: report card radius consumes --wh-radius-l (12→16px, approved)');
+
+	/* 86. P2 清偿批（11-24）源码契约：工具清扫自停 + 游泳 t clamp + 气泡悬停态
+	 *    （行为断言在主体块 42b / 50；这里是帧级时序不可单测的那部分） */
+	assert.ok(alphaSrcC.includes('if (!any) { clearInterval(sweepTimer); sweepTimer = null; }'), '86: tool sweep self-stops once the pending table empties (P2 空转)');
+	assert.ok(alphaSrcC.includes('ensureToolSweep();'), '86: trackToolCall still re-arms the sweep on the next call');
+	assert.ok(fs.readFileSync(path.join(__dirname, 'src', 'input', 'swim.js'), 'utf8').includes('Math.min(1, Math.max(0, (now - s.start) / s.duration))'), '86: swim parameter clamped to [0,1] (P2 无 clamp)');
+	assert.ok(bubbleSrcC.includes('if (stillHover) {') && bubbleSrcC.includes("clearTimeout(uiSay.timer);\n\t\t\tuiSay.timer = null;\n\t\t} else {"), '86: uiSay keeps the countdown paused while hovered (P2 悬停中换文)');
 
 	console.log('APPENDED TESTS PASSED (0.4.3 阶段 C: 周报行/诚实化/260ms/truncate/双钳制/DND 指示/token 第一波/语义色/焦点三件套)');
 } catch (err) {

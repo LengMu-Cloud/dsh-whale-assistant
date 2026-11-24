@@ -320,7 +320,7 @@ function adoptCurrentSessionPin() {
 		soundFail: 'thud',             /* 失败通知音效: thud(低沉下行)|ding|bell|chime|none */
 		soundAttn: 'chime',            /* 提问/审核音效: chime|ding|bell|none */
 		soundRemind: 'bell',           /* 定时提醒音效: bell|ding|chime|thud|none */
-		pressureWarnPct: 70,           /* context pressure that fires the /compact warning */
+		pressureWarnPct: 70,           /* context pressure that fires the /compact warning (20..100; BUG-G 2026-11-24 起上限 100=满仓才提醒) */
 		dndEnabled: false,             /* 免打扰: completion sounds+popups silenced in the window */
 		dndFrom: '23:00',              /* DND window start (HH:MM, local) */
 		dndTo: '08:00'                 /* DND window end */
@@ -366,7 +366,9 @@ function adoptCurrentSessionPin() {
 		if (!(CONFIG.toolStuckMs >= 3000 && CONFIG.toolStuckMs <= 60000)) CONFIG.toolStuckMs = CONFIG_DEFAULTS.toolStuckMs;
 		if (!(CONFIG.recentFailWindowMs >= 0)) CONFIG.recentFailWindowMs = CONFIG_DEFAULTS.recentFailWindowMs;
 		if (!(CONFIG.volume >= 0 && CONFIG.volume <= 1)) CONFIG.volume = CONFIG_DEFAULTS.volume;
-		if (!(CONFIG.pressureWarnPct >= 20 && CONFIG.pressureWarnPct <= 95)) CONFIG.pressureWarnPct = CONFIG_DEFAULTS.pressureWarnPct;
+		/* BUG-G（2026-11-24 用户拍板）：可调区间 20%~100%（旧 20~95 钳制与
+		 * 滑块上限 100 冲突——99/100 会被 load 静默打回 70，用户设了等于没设） */
+		if (!(CONFIG.pressureWarnPct >= 20 && CONFIG.pressureWarnPct <= 100)) CONFIG.pressureWarnPct = CONFIG_DEFAULTS.pressureWarnPct;
 		if (!DND_TIME_RE.test(CONFIG.dndFrom)) CONFIG.dndFrom = CONFIG_DEFAULTS.dndFrom;
 		if (!DND_TIME_RE.test(CONFIG.dndTo)) CONFIG.dndTo = CONFIG_DEFAULTS.dndTo;
 		/* 音色四键有意不在 load 期钳制：存量脏值（如 done 塞了 thud）按既定
@@ -440,7 +442,7 @@ function adoptCurrentSessionPin() {
 		if (typeof patch.soundScheme === 'string' && ['bell', 'chime', 'ding'].indexOf(patch.soundScheme) >= 0) {
 			patch.soundDone = patch.soundScheme;
 		}
-		if (typeof patch.pressureWarnPct === 'number' && patch.pressureWarnPct >= 20 && patch.pressureWarnPct <= 95 && patch.pressureWarnPct !== CONFIG.pressureWarnPct) {
+		if (typeof patch.pressureWarnPct === 'number' && patch.pressureWarnPct >= 20 && patch.pressureWarnPct <= 100 && patch.pressureWarnPct !== CONFIG.pressureWarnPct) {
 			CONFIG.pressureWarnPct = Math.round(patch.pressureWarnPct);
 			changed = true;
 		}
@@ -1301,6 +1303,13 @@ if (typeof module !== 'undefined' && module.exports) {
 					synthOn(t.sid, 'tool/result', { callId: id });
 				}
 			}
+			/* P2 清偿批（11-24）：表空即自停——旧实现每 2.5s 永久空转一次
+			 * （页面生命周期内跑几十万次空循环）。下一次 trackToolCall 会
+			 * 再经 ensureToolSweep() 起表。 */
+			if (!sweepTimer) return;
+			var any = false;
+			for (var k in pendingTools) { any = true; break; }
+			if (!any) { clearInterval(sweepTimer); sweepTimer = null; }
 		}, 2500);
 	}
 
@@ -2937,8 +2946,14 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 /* ---- module: src/core/reports.js ---- */
 
 	function say(text, duration, sessionId) {
+		/* P2 清偿批（11-24）：ui 就绪前的待播队列有界——页面加载慢/被系统冻结
+		 * 时帧仍在入队（旧实现无上界，长冻结期的完成通知可无限堆内存）。
+		 * 保留最新 50 条：旧通知越晚越没有播报价值（红标/历史各自独立记账）。 */
 		if (uiReady) uiSay(text, duration, sessionId);
-		else pendingSay.push({ text: text, duration: duration, sessionId: sessionId });
+		else {
+			if (pendingSay.length >= 50) pendingSay.shift();
+			pendingSay.push({ text: text, duration: duration, sessionId: sessionId });
+		}
 	}
 
 	/** Unread job-report count: accumulates reports, one click reads one. */
@@ -3718,11 +3733,19 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	/** Busy flag: a turn is running — the panel (if visible) gets a subtle
 	 * pulsing emphasis until the turn ends. Pure visual, zero behaviour.
 	 * ensureStatusEl() is used so a start that precedes any panel creation
-	 * still gets the class; the panel is opacity:0 until first shown. */
+	 * still gets the class; the panel is opacity:0 until first shown.
+	 * P2 清偿批（11-24）：**并发回合计数**——旧布尔位在两会话并行时，先结束
+	 * 的那个一 `false` 就把脉动摘掉，另一个还在跑面板却静止。start/end 由
+	 * frames.handleEventFrame 严格成对调用（turn/start +1 / turn/end -1），
+	 * 计数下限 0；上限钳 50 防丢失 end 的脏帧把脉动永久焊死（纯视觉，不进
+	 * 任何记账/通知逻辑）。 */
+	var statusBusyCount = 0;
 	function markStatusBusy(busy) {
-		var el = statusEl || (busy ? ensureStatusEl() : null);
+		statusBusyCount = Math.max(0, statusBusyCount + (busy ? 1 : -1));
+		if (statusBusyCount > 50) statusBusyCount = 50;
+		var el = statusEl || (statusBusyCount > 0 ? ensureStatusEl() : null);
 		if (!el) return;
-		if (busy) el.classList.add('dsh-whale-status-busy');
+		if (statusBusyCount > 0) el.classList.add('dsh-whale-status-busy');
 		else el.classList.remove('dsh-whale-status-busy');
 	}
 
@@ -3777,7 +3800,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 
 	/** One-shot warning when the context fills up; re-arms after relief.
 	 * 2026-11-18（全面分析 C-2 实弹 bug）：重臂线原为固定 50%，与可配阈值
-	 * （20~95）脱钩——阈值调到 <50（验收 P1-21 实测就设了 20%）时，投影帧
+	 * （20~100）脱钩——阈值调到 <50（验收 P1-21 实测就设了 20%）时，投影帧
 	 * 落在 [warnAt, 50) 区间每两帧循环「警告→重臂→警告」，一次性语义被
 	 * 打破。改为分级回落：默认及以上阈值（≥70）保持经典 50% 重置线；低
 	 * 阈值按 30% 回落（warnAt=20 → 6%），任何配置下恒有 resetAt < warnAt。 */
@@ -4595,8 +4618,9 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		try { window.__dshWhale._titleProbe = { sid: frame.sessionId, seq: frame.seq, label: info.label, infoTitle: info.title, mem: sessionTitles.get(frame.sessionId), book: bookTitle(frame.sessionId), chosen: title }; } catch (e) {}
 		if (event.type === 'turn/start') {
 			bumpWork(1);
-			/* mark the status panel as busy while this turn runs */
-			markStatusBusy(true);
+			/* P2 清偿批（11-24）：busy 标记改由 handleEventFrame 的 turn/start
+			 * 与 turn/end 在同一函数内严格成对增/减（旧布尔位在两会话并行时
+			 * 会被先结束的那个摘掉）；本函数只负责播报，不再动 busy。 */
 			/* (the task counter was already reset on the live turn/start
 			 * event, before the name-hold, so early usage is kept) */
 			if (CONFIG.notifyOnStart && !event.replaySuppress) {
@@ -4803,6 +4827,10 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			}
 			/* long-task run timer (>2min ⇒ "⏳ 已运行" line in the panel) */
 			startRunTimer(frame.sessionId);
+			/* P2 清偿批（11-24）：并发回合计数 +1 —— 与下方 turn/end 的 -1 在
+			 * 同一函数内成对（status-panel.markStatusBusy 改为计数实现），
+			 * 两会话并行时先结束的那个不再摘掉另一个的脉动。 */
+			markStatusBusy(true);
 		}
 		if (event.type === 'turn/end') {
 			/* a finished turn un-sticks any outstanding tool watchdog — this
@@ -5580,7 +5608,23 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		uiSay.visible = true;
 		uiSay.remainMs = duration || 5000;
 		uiSay.shownAt = Date.now();
-		armBubbleHide(bubble, uiSay.remainMs);
+		/* P2 清偿批（11-24）：**悬停中换文不得重新起跑倒计时**——旧实现无条件
+		 * armBubbleHide，鼠标还压在气泡上就开始读秒，hover 暂停语义当场失效
+		 * （用户盯着一条通知时来了下一条，前者剩余时间照走）。悬停期只更新
+		 * 文案/剩余时长，mouseleave 时按新时长重新起跑。
+		 * 防脏悬停：mouseleave 若被吞（元素被外部隐藏等），用真实 :hover 兜底
+		 * 判活——桩环境无 matches，保持标志（测试用 _fire 模拟 hover）。 */
+		var stillHover = !!uiSay.hovering;
+		try {
+			if (stillHover && bubble.matches && !bubble.matches(':hover')) stillHover = false;
+		} catch (eHover) { /* 桩环境：无 matches，视为仍悬停 */ }
+		uiSay.hovering = stillHover;
+		if (stillHover) {
+			clearTimeout(uiSay.timer);
+			uiSay.timer = null;
+		} else {
+			armBubbleHide(bubble, uiSay.remainMs);
+		}
 		/* 动态边界（2026-11-04）：气泡原生只向上弹，鲸鱼贴顶时 2/3 出屏
 		 * （实机 rect.top=-67）。show 前同步夹紧——offset 布局盒不受 pop
 		 * 动画 transform 影响，判定无时序问题。 */
@@ -5625,6 +5669,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		uiSay.timer = setTimeout(function () {
 			uiSay.timer = null;
 			uiSay.visible = false;
+			uiSay.hovering = false; /* 到期即清悬停态（防脏标志冻结下一次倒计时） */
 			bubble.classList.remove('show');
 			hideStatusPanel();
 		}, ms);
@@ -5642,12 +5687,15 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		if (uiSay.hoverBound) return;
 		uiSay.hoverBound = true;
 		bubble.addEventListener('mouseenter', function () {
-			if (!uiSay.visible || !uiSay.timer) return;
+			if (!uiSay.visible) return;
+			uiSay.hovering = true;
+			if (!uiSay.timer) return;
 			clearTimeout(uiSay.timer);
 			uiSay.timer = null;
 			uiSay.remainMs = Math.max(0, uiSay.remainMs - (Date.now() - uiSay.shownAt));
 		});
 		bubble.addEventListener('mouseleave', function () {
+			uiSay.hovering = false;
 			if (!uiSay.visible || uiSay.timer) return;
 			armBubbleHide(bubble, bubbleResumeMs(uiSay.remainMs));
 		});
@@ -7476,6 +7524,18 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		/** 📤 导出历史: Markdown → clipboard; CSV → file download.
 		 * onDone(ok) 可选——侧边栏页（ui/panel-page.js）用它驱动行内闪现：
 		 * 剪贴板写入是异步的，且失败气泡在桌宠在岗时打进隐藏元素零可见。 */
+		/** CSV 单元格（P2 清偿批，11-24）：双引号包裹 + 内部引号翻倍，并中和
+		 * 公式注入——会话名/任务标题来自模型与用户输入，Excel/Sheets 会把
+		 * `=` `+` `-` `@`（以及 TAB/CR）开头的单元格当公式执行。前置单引号是
+		 * 最通用的中和方式（导出后仍可读，仅 Excel 显示时去掉引导）。 */
+		function csvCell(v) {
+			var s = String(v == null ? '' : v);
+			if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+			return '"' + s.replace(/"/g, '""') + '"';
+		}
+		/* 测试缝：drawers 闭包内的纯函数由本模块自挂（exports.js 够不着） */
+		try { window.__dshWhale._csvCell = csvCell; } catch (eCsvSeam) { }
+
 		function exportHistory(fmt, onDone) {
 			if (!history.length) { uiSay('还没有历史可导出哦 🐳', 2000); if (onDone) onDone(false); return; }
 			if (fmt === 'csv') {
@@ -7484,7 +7544,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					var r = history[i];
 					var d = new Date(r.at || 0);
 					var ts = d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate() + ' ' + d.toTimeString().slice(0, 8);
-					rows.push([ts, r.kind || '', '"' + String(r.title || '').replace(/"/g, '""') + '"', r.sessionId || '', r.turnTokens == null ? '' : r.turnTokens].join(','));
+					rows.push([csvCell(ts), csvCell(r.kind || ''), csvCell(r.title || ''), csvCell(r.sessionId || ''), csvCell(r.turnTokens == null ? '' : r.turnTokens)].join(','));
 				}
 				var blob = new Blob(['\ufeff' + rows.join('\n')], { type: 'text/csv;charset=utf-8' });
 				var a = document.createElement('a');
@@ -7890,6 +7950,14 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					/* P2-6c 动作类值 → ghost chip：透明底（v5 二次裁决——与 select
 					 * 灰底一眼可分）+1px 极弱描边+生产 muted 字色（.pp-val 继承） */
 					'.dsh-whale-pp-val.dsh-whale-pp-chip{display:inline-block;padding:3px 10px;border:1px solid var(--wh-panel-border);border-radius:var(--wh-radius-s);background:transparent;font-size:12px;line-height:16px}',
+					/* BUG-G（2026-11-24）：压力阈值滑块=原生 range。滑块固定 96px
+					 * + 38px 读数 chip，行宽不随数值位数抖动；accent-color 直接
+					 * 吃主题 accent（亮暗两套自动跟随，不自绘轨道）；focus-visible
+					 * 给键盘用户留可见焦点（Tab 可达=原生控件福利） */
+					'.dsh-whale-pp-range{display:flex;align-items:center;gap:10px}',
+					'.dsh-whale-pp-slider{width:96px;height:16px;margin:0;flex:none;accent-color:var(--wh-accent);cursor:pointer;background:transparent}',
+					'.dsh-whale-pp-slider:focus-visible{outline:1px solid var(--wh-accent);outline-offset:2px}',
+					'.dsh-whale-pp-range-val{min-width:38px;text-align:right;color:var(--wh-panel-text);font-variant-numeric:tabular-nums}',
 					/* P1-2 周报数据排版：12px 语义圆片+等宽数字+空态降级（去卡片底
 					 * 改虚线上分隔、12px/75% 透明——数据日自己浮出来） */
 					'.dsh-whale-pp-report .wh-rdot{display:inline-block;width:12px;height:12px;vertical-align:-1.5px;margin:0 2px 0 6px}',
@@ -8212,6 +8280,63 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 					row.appendChild(right);
 					host.appendChild(row);
 				}
+				/* BUG-G（2026-11-24 用户拍板）：数值型设置=原生 range 滑块
+				 * （当前唯一用点=压力提醒阈值 20~100）。交互语义：
+				 *  - 拖动：input 只回显读数（每个 pointermove 都 saveConfig 会
+				 *    白写 localStorage 并给 /pet/config 中继造成移动洪峰）；
+				 *    松手 change 才落盘（键盘 ←/→ 同样只发 change）。
+				 *  - 滚轮：Chromium 的 range 原生不响应滚轮——手动 ±step 并
+				 *    立即落盘；preventDefault 防页面跟着滚（页内设置 Tab 是
+				 *    自滚容器，不拦截会一滚就滑走）。
+				 *  - 存量任意 20~100 的旧值原样显示（不重写 CONFIG）；step=5
+				 *    ——旧预设 50/60/…/90 与默认 70 都是 5 的倍数，无跳档失真。
+				 *  - 与 ppSelectRow 同款：change 后不 render()（重渲会重建滑块，
+				 *    拖动态被打断）。 */
+				function ppRangeRow(host, label, min, max, step, cur, onChange) {
+					var row = document.createElement('div');
+					row.className = 'dsh-whale-pp-row';
+					var l = document.createElement('span');
+					setIconLabel(l, label);
+					var right = document.createElement('span');
+					right.className = 'dsh-whale-pp-range';
+					var sl = document.createElement('input');
+					sl.type = 'range';
+					sl.className = 'dsh-whale-pp-slider';
+					sl.min = String(min);
+					sl.max = String(max);
+					sl.step = String(step);
+					sl.setAttribute('aria-label', label + '（' + min + '~' + max + '%）');
+					var start = Math.max(min, Math.min(max, Math.round(Number(cur) || max)));
+					sl.value = String(start);
+					var chip = document.createElement('span');
+					chip.className = 'dsh-whale-pp-range-val';
+					chip.textContent = start + '%';
+					var commit = function (next) {
+						next = Math.max(min, Math.min(max, Math.round(Number(next) || 0)));
+						sl.value = String(next);
+						chip.textContent = next + '%';
+						onChange(next);
+					};
+					sl.addEventListener('input', function () {
+						chip.textContent = String(parseInt(sl.value, 10)) + '%';
+					});
+					sl.addEventListener('change', function () {
+						commit(parseInt(sl.value, 10));
+					});
+					sl.addEventListener('wheel', function (event) {
+						if (event.preventDefault) event.preventDefault();
+						if (event.stopPropagation) event.stopPropagation();
+						var now = parseInt(sl.value, 10);
+						if (isNaN(now)) now = start;
+						commit(now + (event.deltaY < 0 ? step : -step));
+					});
+					sl.addEventListener('click', function (event) { event.stopPropagation(); });
+					right.appendChild(sl);
+					right.appendChild(chip);
+					row.appendChild(l);
+					row.appendChild(right);
+					host.appendChild(row);
+				}
 				var DND_PRESETS = [null, ['23:00', '08:00'], ['22:00', '07:00'], ['00:00', '06:00'], ['12:00', '14:00']];
 				var dndOpts = [{ v: 'off', label: '关' }];
 				DND_PRESETS.forEach(function (pr) {
@@ -8326,11 +8451,13 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				}), String(CONFIG.toolStuckMs), function (v) {
 					if (applyConfig({ toolStuckMs: parseInt(v, 10) })) saveConfig();
 				});
-				var P_PRESETS = [50, 60, 70, 80, 90];
-				ppSelectRow(host, '🚨 压力提醒', P_PRESETS.map(function (pc) {
-					return { v: String(pc), label: pc + '%' };
-				}), String(CONFIG.pressureWarnPct || 70), function (v) {
-					if (applyConfig({ pressureWarnPct: parseInt(v, 10) })) saveConfig();
+				/* BUG-G（2026-11-24 用户拍板）：压力阈值 50~90 五档预设 select →
+				 * 20%~100% 滑块/滚轮自选（0.4.3 已知问题「排期 0.4.4」项，发布后
+				 * 第一优先修复）。100% = 只有满仓才提醒（等于基本静音，但仍保留
+				 * 一次性语义）；阈值越低提醒越早，重臂线按 30% 比例跟降（见
+				 * status-panel.js maybeWarnPressure——任何配置下 resetAt < warnAt）。 */
+				ppRangeRow(host, '🚨 压力提醒', 20, 100, 5, CONFIG.pressureWarnPct || 70, function (pct) {
+					if (applyConfig({ pressureWarnPct: pct })) saveConfig();
 				});
 			/* 行内闪现反馈（11-11 用户实报「点了没动静」）：exportHistory 的
 			 * 反馈走 uiSay 鲸鱼气泡——桌宠运行时页鲸休眠=打在隐藏元素里零可
@@ -8554,7 +8681,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				{ t: '中止与开工', d: '任务开始只播报、不算未读；手动中止不算失败，但也计入红标。' },
 				{ t: '用量面板', d: '完成通知下方同时弹出本次消耗 / 全对话累计 / 上下文占用，与气泡同生同灭。' },
 				{ cat: '🛠 盯活与健康', t: '工具超时', d: '工具跑超过设定时长，状态面板逐秒显示「⚠️ 工具已运行 Ns」——只是提醒，不打断任务。' },
-				{ t: '压力阈值', d: '上下文占用达到设定百分比提醒 /compact，一次性不重复；明显缓解后重新武装（默认回落线 50%，阈值调低时按比例跟降，永不与阈值重叠）。' },
+				{ t: '压力阈值', d: '上下文占用达到设定阈值提醒 /compact，一次性不重复；明显缓解后重新武装（默认回落线 50%，阈值调低时按比例跟降，永不与阈值重叠）。\n设置页「🚨 压力提醒」拖动滑块或滚轮在 20%~100% 间自选；100% = 只有满仓才提醒，基本等于不提醒。' },
 				{ t: '运行状态', d: '鲸鱼自查后台通知 / 用量读取 / 跳转三条链路；出问题头顶亮 ⚠️，点它看是哪条失效。' },
 				{ t: '调试模式', d: '排障用：控制台输出调试信息 + 写 ~/.dsh/whale-assistant.json 的 _debug 键，平时保持关闭。' },
 				{ cat: '📜 历史与数据', t: '历史双存储', d: '历史保留最近 500 条，本地 + 服务器双存储；支持搜索、清空、导出。' },
@@ -9924,7 +10051,10 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		function swimFrame(now) {
 			var s = swim;
 			if (!s) return;
-			var t = Math.min(1, (now - s.start) / s.duration);
+			/* P2 清偿批（11-24）：时间参数 clamp 到 [0,1]——后台标签页节流/
+			 * rAF 时间戳回跳会让 t 变负或 >1，贝塞尔外插把鲸鱼一次性甩到
+			 * 轨道之外（终点外插还会让落定位置漂移）。 */
+			var t = Math.min(1, Math.max(0, (now - s.start) / s.duration));
 			var e = easeInOutCubic(t);
 			var p = bezierPoint(s, e);
 			whale.style.left = p.x + 'px';
@@ -10976,7 +11106,17 @@ if (typeof window !== 'undefined' && (window.__dshWhaleSessions || window.__dshW
 		}
 	};
 	window.__dshWhale.showWhaleNote = showWhaleNote;
-	window.__dshWhale._bubble = { resumeMs: bubbleResumeMs };
+	/* 气泡 seam（P2 清偿批扩）：resumeMs 纯函数 + 现行状态 + 直写一条气泡
+	 * （测试验证「悬停中换文不重起倒计时」用；真实路径仍由通知调用）。 */
+	window.__dshWhale._bubble = {
+		resumeMs: bubbleResumeMs,
+		say: uiSay,
+		state: function () {
+			return { visible: !!uiSay.visible, hovering: !!uiSay.hovering, armed: !!uiSay.timer, remainMs: uiSay.remainMs };
+		}
+	};
+	/* P2 清偿批 seam：ui 就绪前待播队列长度（csvCell 在 drawers 闭包内自挂缝） */
+	window.__dshWhale._pendingSayCount = function () { return pendingSay.length; };
 	/* 桌宠仲裁 seam（第一批）：测试直接驱动休眠开关 / 读当前态（see ui/bubble.js） */
 	window.__dshWhale._petDormant = {
 		apply: applyPetDormant,
@@ -11001,6 +11141,7 @@ if (typeof window !== 'undefined' && (window.__dshWhaleSessions || window.__dshW
 	/* test seam: dismiss the current bubble and resolve the reading immediately */
 	window.__dshWhale._dismissBubble = function () {
 		uiSay.visible = false;
+		uiSay.hovering = false;
 		if (typeof uiSay.timer === 'number') clearTimeout(uiSay.timer);
 		var bubble = document.querySelector('.dsh-whale-bubble');
 		if (bubble) bubble.classList.remove('show');

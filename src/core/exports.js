@@ -197,7 +197,17 @@
 		}
 	};
 	window.__dshWhale.showWhaleNote = showWhaleNote;
-	window.__dshWhale._bubble = { resumeMs: bubbleResumeMs };
+	/* 气泡 seam（P2 清偿批扩）：resumeMs 纯函数 + 现行状态 + 直写一条气泡
+	 * （测试验证「悬停中换文不重起倒计时」用；真实路径仍由通知调用）。 */
+	window.__dshWhale._bubble = {
+		resumeMs: bubbleResumeMs,
+		say: uiSay,
+		state: function () {
+			return { visible: !!uiSay.visible, hovering: !!uiSay.hovering, armed: !!uiSay.timer, remainMs: uiSay.remainMs };
+		}
+	};
+	/* P2 清偿批 seam：ui 就绪前待播队列长度（csvCell 在 drawers 闭包内自挂缝） */
+	window.__dshWhale._pendingSayCount = function () { return pendingSay.length; };
 	/* 桌宠仲裁 seam（第一批）：测试直接驱动休眠开关 / 读当前态（see ui/bubble.js） */
 	window.__dshWhale._petDormant = {
 		apply: applyPetDormant,
@@ -222,6 +232,7 @@
 	/* test seam: dismiss the current bubble and resolve the reading immediately */
 	window.__dshWhale._dismissBubble = function () {
 		uiSay.visible = false;
+		uiSay.hovering = false;
 		if (typeof uiSay.timer === 'number') clearTimeout(uiSay.timer);
 		var bubble = document.querySelector('.dsh-whale-bubble');
 		if (bubble) bubble.classList.remove('show');

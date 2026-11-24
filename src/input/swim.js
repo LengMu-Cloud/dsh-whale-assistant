@@ -54,7 +54,10 @@
 		function swimFrame(now) {
 			var s = swim;
 			if (!s) return;
-			var t = Math.min(1, (now - s.start) / s.duration);
+			/* P2 清偿批（11-24）：时间参数 clamp 到 [0,1]——后台标签页节流/
+			 * rAF 时间戳回跳会让 t 变负或 >1，贝塞尔外插把鲸鱼一次性甩到
+			 * 轨道之外（终点外插还会让落定位置漂移）。 */
+			var t = Math.min(1, Math.max(0, (now - s.start) / s.duration));
 			var e = easeInOutCubic(t);
 			var p = bezierPoint(s, e);
 			whale.style.left = p.x + 'px';

@@ -49,7 +49,23 @@
 		uiSay.visible = true;
 		uiSay.remainMs = duration || 5000;
 		uiSay.shownAt = Date.now();
-		armBubbleHide(bubble, uiSay.remainMs);
+		/* P2 清偿批（11-24）：**悬停中换文不得重新起跑倒计时**——旧实现无条件
+		 * armBubbleHide，鼠标还压在气泡上就开始读秒，hover 暂停语义当场失效
+		 * （用户盯着一条通知时来了下一条，前者剩余时间照走）。悬停期只更新
+		 * 文案/剩余时长，mouseleave 时按新时长重新起跑。
+		 * 防脏悬停：mouseleave 若被吞（元素被外部隐藏等），用真实 :hover 兜底
+		 * 判活——桩环境无 matches，保持标志（测试用 _fire 模拟 hover）。 */
+		var stillHover = !!uiSay.hovering;
+		try {
+			if (stillHover && bubble.matches && !bubble.matches(':hover')) stillHover = false;
+		} catch (eHover) { /* 桩环境：无 matches，视为仍悬停 */ }
+		uiSay.hovering = stillHover;
+		if (stillHover) {
+			clearTimeout(uiSay.timer);
+			uiSay.timer = null;
+		} else {
+			armBubbleHide(bubble, uiSay.remainMs);
+		}
 		/* 动态边界（2026-11-04）：气泡原生只向上弹，鲸鱼贴顶时 2/3 出屏
 		 * （实机 rect.top=-67）。show 前同步夹紧——offset 布局盒不受 pop
 		 * 动画 transform 影响，判定无时序问题。 */
@@ -94,6 +110,7 @@
 		uiSay.timer = setTimeout(function () {
 			uiSay.timer = null;
 			uiSay.visible = false;
+			uiSay.hovering = false; /* 到期即清悬停态（防脏标志冻结下一次倒计时） */
 			bubble.classList.remove('show');
 			hideStatusPanel();
 		}, ms);
@@ -111,12 +128,15 @@
 		if (uiSay.hoverBound) return;
 		uiSay.hoverBound = true;
 		bubble.addEventListener('mouseenter', function () {
-			if (!uiSay.visible || !uiSay.timer) return;
+			if (!uiSay.visible) return;
+			uiSay.hovering = true;
+			if (!uiSay.timer) return;
 			clearTimeout(uiSay.timer);
 			uiSay.timer = null;
 			uiSay.remainMs = Math.max(0, uiSay.remainMs - (Date.now() - uiSay.shownAt));
 		});
 		bubble.addEventListener('mouseleave', function () {
+			uiSay.hovering = false;
 			if (!uiSay.visible || uiSay.timer) return;
 			armBubbleHide(bubble, bubbleResumeMs(uiSay.remainMs));
 		});

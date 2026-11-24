@@ -224,6 +224,14 @@
 					/* P2-6c 动作类值 → ghost chip：透明底（v5 二次裁决——与 select
 					 * 灰底一眼可分）+1px 极弱描边+生产 muted 字色（.pp-val 继承） */
 					'.dsh-whale-pp-val.dsh-whale-pp-chip{display:inline-block;padding:3px 10px;border:1px solid var(--wh-panel-border);border-radius:var(--wh-radius-s);background:transparent;font-size:12px;line-height:16px}',
+					/* BUG-G（2026-11-24）：压力阈值滑块=原生 range。滑块固定 96px
+					 * + 38px 读数 chip，行宽不随数值位数抖动；accent-color 直接
+					 * 吃主题 accent（亮暗两套自动跟随，不自绘轨道）；focus-visible
+					 * 给键盘用户留可见焦点（Tab 可达=原生控件福利） */
+					'.dsh-whale-pp-range{display:flex;align-items:center;gap:10px}',
+					'.dsh-whale-pp-slider{width:96px;height:16px;margin:0;flex:none;accent-color:var(--wh-accent);cursor:pointer;background:transparent}',
+					'.dsh-whale-pp-slider:focus-visible{outline:1px solid var(--wh-accent);outline-offset:2px}',
+					'.dsh-whale-pp-range-val{min-width:38px;text-align:right;color:var(--wh-panel-text);font-variant-numeric:tabular-nums}',
 					/* P1-2 周报数据排版：12px 语义圆片+等宽数字+空态降级（去卡片底
 					 * 改虚线上分隔、12px/75% 透明——数据日自己浮出来） */
 					'.dsh-whale-pp-report .wh-rdot{display:inline-block;width:12px;height:12px;vertical-align:-1.5px;margin:0 2px 0 6px}',
@@ -546,6 +554,63 @@
 					row.appendChild(right);
 					host.appendChild(row);
 				}
+				/* BUG-G（2026-11-24 用户拍板）：数值型设置=原生 range 滑块
+				 * （当前唯一用点=压力提醒阈值 20~100）。交互语义：
+				 *  - 拖动：input 只回显读数（每个 pointermove 都 saveConfig 会
+				 *    白写 localStorage 并给 /pet/config 中继造成移动洪峰）；
+				 *    松手 change 才落盘（键盘 ←/→ 同样只发 change）。
+				 *  - 滚轮：Chromium 的 range 原生不响应滚轮——手动 ±step 并
+				 *    立即落盘；preventDefault 防页面跟着滚（页内设置 Tab 是
+				 *    自滚容器，不拦截会一滚就滑走）。
+				 *  - 存量任意 20~100 的旧值原样显示（不重写 CONFIG）；step=5
+				 *    ——旧预设 50/60/…/90 与默认 70 都是 5 的倍数，无跳档失真。
+				 *  - 与 ppSelectRow 同款：change 后不 render()（重渲会重建滑块，
+				 *    拖动态被打断）。 */
+				function ppRangeRow(host, label, min, max, step, cur, onChange) {
+					var row = document.createElement('div');
+					row.className = 'dsh-whale-pp-row';
+					var l = document.createElement('span');
+					setIconLabel(l, label);
+					var right = document.createElement('span');
+					right.className = 'dsh-whale-pp-range';
+					var sl = document.createElement('input');
+					sl.type = 'range';
+					sl.className = 'dsh-whale-pp-slider';
+					sl.min = String(min);
+					sl.max = String(max);
+					sl.step = String(step);
+					sl.setAttribute('aria-label', label + '（' + min + '~' + max + '%）');
+					var start = Math.max(min, Math.min(max, Math.round(Number(cur) || max)));
+					sl.value = String(start);
+					var chip = document.createElement('span');
+					chip.className = 'dsh-whale-pp-range-val';
+					chip.textContent = start + '%';
+					var commit = function (next) {
+						next = Math.max(min, Math.min(max, Math.round(Number(next) || 0)));
+						sl.value = String(next);
+						chip.textContent = next + '%';
+						onChange(next);
+					};
+					sl.addEventListener('input', function () {
+						chip.textContent = String(parseInt(sl.value, 10)) + '%';
+					});
+					sl.addEventListener('change', function () {
+						commit(parseInt(sl.value, 10));
+					});
+					sl.addEventListener('wheel', function (event) {
+						if (event.preventDefault) event.preventDefault();
+						if (event.stopPropagation) event.stopPropagation();
+						var now = parseInt(sl.value, 10);
+						if (isNaN(now)) now = start;
+						commit(now + (event.deltaY < 0 ? step : -step));
+					});
+					sl.addEventListener('click', function (event) { event.stopPropagation(); });
+					right.appendChild(sl);
+					right.appendChild(chip);
+					row.appendChild(l);
+					row.appendChild(right);
+					host.appendChild(row);
+				}
 				var DND_PRESETS = [null, ['23:00', '08:00'], ['22:00', '07:00'], ['00:00', '06:00'], ['12:00', '14:00']];
 				var dndOpts = [{ v: 'off', label: '关' }];
 				DND_PRESETS.forEach(function (pr) {
@@ -660,11 +725,13 @@
 				}), String(CONFIG.toolStuckMs), function (v) {
 					if (applyConfig({ toolStuckMs: parseInt(v, 10) })) saveConfig();
 				});
-				var P_PRESETS = [50, 60, 70, 80, 90];
-				ppSelectRow(host, '🚨 压力提醒', P_PRESETS.map(function (pc) {
-					return { v: String(pc), label: pc + '%' };
-				}), String(CONFIG.pressureWarnPct || 70), function (v) {
-					if (applyConfig({ pressureWarnPct: parseInt(v, 10) })) saveConfig();
+				/* BUG-G（2026-11-24 用户拍板）：压力阈值 50~90 五档预设 select →
+				 * 20%~100% 滑块/滚轮自选（0.4.3 已知问题「排期 0.4.4」项，发布后
+				 * 第一优先修复）。100% = 只有满仓才提醒（等于基本静音，但仍保留
+				 * 一次性语义）；阈值越低提醒越早，重臂线按 30% 比例跟降（见
+				 * status-panel.js maybeWarnPressure——任何配置下 resetAt < warnAt）。 */
+				ppRangeRow(host, '🚨 压力提醒', 20, 100, 5, CONFIG.pressureWarnPct || 70, function (pct) {
+					if (applyConfig({ pressureWarnPct: pct })) saveConfig();
 				});
 			/* 行内闪现反馈（11-11 用户实报「点了没动静」）：exportHistory 的
 			 * 反馈走 uiSay 鲸鱼气泡——桌宠运行时页鲸休眠=打在隐藏元素里零可
@@ -888,7 +955,7 @@
 				{ t: '中止与开工', d: '任务开始只播报、不算未读；手动中止不算失败，但也计入红标。' },
 				{ t: '用量面板', d: '完成通知下方同时弹出本次消耗 / 全对话累计 / 上下文占用，与气泡同生同灭。' },
 				{ cat: '🛠 盯活与健康', t: '工具超时', d: '工具跑超过设定时长，状态面板逐秒显示「⚠️ 工具已运行 Ns」——只是提醒，不打断任务。' },
-				{ t: '压力阈值', d: '上下文占用达到设定百分比提醒 /compact，一次性不重复；明显缓解后重新武装（默认回落线 50%，阈值调低时按比例跟降，永不与阈值重叠）。' },
+				{ t: '压力阈值', d: '上下文占用达到设定阈值提醒 /compact，一次性不重复；明显缓解后重新武装（默认回落线 50%，阈值调低时按比例跟降，永不与阈值重叠）。\n设置页「🚨 压力提醒」拖动滑块或滚轮在 20%~100% 间自选；100% = 只有满仓才提醒，基本等于不提醒。' },
 				{ t: '运行状态', d: '鲸鱼自查后台通知 / 用量读取 / 跳转三条链路；出问题头顶亮 ⚠️，点它看是哪条失效。' },
 				{ t: '调试模式', d: '排障用：控制台输出调试信息 + 写 ~/.dsh/whale-assistant.json 的 _debug 键，平时保持关闭。' },
 				{ cat: '📜 历史与数据', t: '历史双存储', d: '历史保留最近 500 条，本地 + 服务器双存储；支持搜索、清空、导出。' },

@@ -1,6 +1,6 @@
 {
   "name": "@lengmu-cloud/dsh-whale-assistant",
-  "version": "0.4.3-rc.1",
+  "version": "0.4.3",
   "type": "module",
   "description": "dsh-whale-assistant: the companion whale for DeepSeek Harness - screen-level desktop pet, server-side history storage shared by every window, task notifications with usage reports, and hosting for the whale script itself",
   "files": [

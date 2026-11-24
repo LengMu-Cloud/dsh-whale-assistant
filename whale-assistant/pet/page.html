@@ -75,6 +75,16 @@
     box-shadow: 0 0 0 2px #1b1b1c !important;
     filter: none !important;
   }
+  /* 11-24 用户实报（截图）：气泡形态（64px 玻璃卡）里红标仍用页内 top/right:2px
+     ——压在卡的右上圆角上、把边缘描边盖掉了。气泡形态把红标**外置到卡边缘
+     上方偏右**：完全落在卡体之外（不覆盖卡面与描边），像贴在右上角的一枚
+     小标签。区域覆盖不靠加大宿主 bp（那会多一圈吞点击的死区），而由 page 的
+     rects() 红标浮层矩形兜住（.dsh-whale-badge 在 CLASSES 白名单，宿主
+     RGN_OR 叠加 + PAD 14 外扩；250ms 一拍跟上）。 */
+  body.pet-form-bubble .dsh-whale-badge {
+    top: -22px;
+    right: -8px;
+  }
   /* 气泡形态（第一批三态之一；10-31 用户反馈重做）：不是把鲸鱼缩小——
      鲸鱼实体收进一枚「玻璃圆角卡」：半透明深色玻璃渐变+高光描边+内投影
      （WebView2 透明页拿不到壁纸做 backdrop，玻璃感靠材质层叠伪造），

@@ -927,6 +927,25 @@ function killTree(pid) {
 		}
 	}
 
+	/** 11-24 用户新需求：「重启小鲸鱼」——字面重启桌宠进程（杀旧进程树 +
+	 * 重新 spawn）。桌面宠物页的 page.html / whale.js / style.css 全部由宿主
+	 * 按需从磁盘重取，所以这是**让桌宠吃到新构建**的唯一入口（🔄 刷新页面
+	 * 只刷 DSH 窗口/页鲸，碰不到桌宠页）。不碰 enabled（重启 ≠ 启停）；
+	 * 冷却锚与快速连死账本一并清零（用户主动重启不是崩溃）。
+	 * 冷启动静默：stopPet 先把 child 置 null 再 kill，旧进程的 exit/error
+	 * 处理器按 stale 退出——不会广播 up:false，页鲸不会在重启窗口闪现；
+	 * 新实例 ready 后照常广播（页鲸继续休眠）。spawn 失败/15s 超时仍走既有
+	 * 兜底广播（页鲸顶班），不会一屏无鱼。 */
+	function restartPet(why) {
+		if (!supported) return false;
+		if (spawning) { log('restart coalesced — a spawn is already in flight'); return true; }
+		lastSpawnAt = 0;
+		rapidDeaths = [];
+		log('restarting pet (' + (why || 'menu') + ')');
+		spawnPet();
+		return true;
+	}
+
 	/** 自愈心跳（2026-11-04 用户实报「小鲸鱼突然变回 DSH 内样式，重进也一样」）：
 	 * pet 进程死亡后（窗口消失自杀/宿主强杀/崩溃）页鲸原地苏醒接管，但
 	 * spawnPet 只在 boot 跑一次、死亡不自动重生（防 crash loop 的设计挡死
@@ -1335,6 +1354,17 @@ function killTree(pid) {
 							plain(res, 200, JSON.stringify({ ok: true, delivered: delivered }));
 						} catch (e) {
 							plain(res, 500, JSON.stringify({ ok: false, error: String(e && e.message || e) }));
+						}
+						return;
+					}
+					if (action === 'restart') {
+						/* 11-24 用户新需求「重启小鲸鱼」（菜单行见 src/ui/menu.js）：
+						 * 见 restartPet 注释。响应先回 ack，kill+spawn 异步进行。 */
+						try {
+							const okRestart = restartPet('page-menu');
+							plain(res, 200, JSON.stringify({ ok: okRestart, restarting: okRestart }));
+						} catch (eRestart) {
+							plain(res, 500, JSON.stringify({ ok: false, error: String(eRestart && eRestart.message || eRestart) }));
 						}
 						return;
 					}

@@ -303,7 +303,14 @@
 			}
 		};
 
-		/* badge: single click reads one report, double-click clears everything */
+		/* badge: single click reads one report, double-click clears everything.
+		 * 两动作**共用同一个 260ms 本地判定窗**。P2 追修（11-24 用户实报顾虑）：
+		 * 旧实现「读」走 260ms 定时器、「清空」挂浏览器原生 dblclick——原生窗口
+		 * = 系统双击阈（通常 ~500ms），两下间隔落在 260~500ms 时会先读一条再
+		 * 全清 = 变相误清空（用户「想快速过一遍通知、稍微点快但没想清空」正好
+		 * 踩这个区间）。现在：第二次 pointerup 在 260ms 内到达=双击全清；超过
+		 * 260ms 的每一击=独立读一条，**永不误清**。单击读的 260ms 延迟不变（快
+		 * 速连点阅读的节奏不受影响）；清空这种破坏性动作只在明确的快双击发生。 */
 		var badgeClickTimer = null;
 		badge.addEventListener('pointerdown', function (event) {
 			event.stopPropagation();
@@ -312,22 +319,17 @@
 			event.stopPropagation();
 			if (event.pointerType === 'mouse' && event.button !== 0) return; /* right-click = menu only, left reads */
 			if (badgeClickTimer) {
+				/* 第二击落在判定窗内 = 双击：取消待读，直接全清（不再依赖原生
+				 * dblclick 那套更宽的系统窗口） */
 				clearTimeout(badgeClickTimer);
 				badgeClickTimer = null;
+				clearAllUnread();
 				return;
 			}
 			badgeClickTimer = setTimeout(function () {
 				badgeClickTimer = null;
 				if (!readNext()) uiSay(clickSummary());
 			}, BADGE_CLICK_VS_DBL_MS);
-		});
-		badge.addEventListener('dblclick', function (event) {
-			event.stopPropagation();
-			if (badgeClickTimer) {
-				clearTimeout(badgeClickTimer);
-				badgeClickTimer = null;
-			}
-			clearAllUnread();
 		});
 
 		/** Clear every unread report at once. */

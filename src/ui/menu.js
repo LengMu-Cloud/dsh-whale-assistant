@@ -612,6 +612,33 @@
 				});
 				menu.appendChild(refreshItem);
 			}
+			/* 11-24 用户新需求「重启小鲸鱼」：字面重启**桌宠进程** —— 宿主杀旧
+			 * 进程树后重新 spawn，桌宠页的 page.html / whale.js / style.css 全部
+			 * 按磁盘最新版重新加载（解决「桌宠页冻结在旧构建、而 🔄 刷新页面
+			 * 只刷 DSH 窗口/页鲸，对桌宠无效」的更新死区）。页内与桌宠菜单都
+			 * 提供这一行：页鲸点它=重启屏上那只桌宠；桌宠自己点它=自重启。
+			 * 宿主侧 restart 动作见 lib/pet.js；页鲸不在场/桌宠不支持时回
+			 * ok:false，这里如实提示不假装成功。 */
+			var restartItem = document.createElement('div');
+			restartItem.className = 'dsh-whale-menu-item';
+			setIconLabel(restartItem, '🔄 重启小鲸鱼');
+			restartItem.addEventListener('click', function (event) {
+				event.stopPropagation();
+				closeCtxMenu();
+				uiSay('正在重启小鲸鱼…🐋', 2500);
+				try {
+					fetch('/api/whale-assistant/pet/ctrl', {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify({ action: 'restart' })
+					}).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (out) {
+						if (!out || out.ok !== true) {
+							uiSay('这里没法重启桌宠——请在装有桌宠的 DSH 上试 🥲', 2600);
+						}
+					}).catch(function () { uiSay('重启指令没有送达，稍后再试 🥲', 2500); });
+				} catch (eRestart) { uiSay('重启失败，稍后再试 🥲', 2500); }
+			});
+			menu.appendChild(restartItem);
 			/* 桌宠常驻（第九轮用户定稿）：页面侧不再有「桌宠模式」开关——小鲸鱼
 			 * 默认活动范围=整个桌面，开机即常驻（不支持平台由页内鲸鱼兜底）。
 			 * 桌宠窗口里由 __dshPetHost 缝追加三态形态组 */

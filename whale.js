@@ -2965,9 +2965,14 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	/** UI hook set by uiInit; receives the current unread count. */
 	var onUnreadChange = null;
 
-	/** Badge = queued reports + the one being read right now. */
+	/** Badge = 只算**等待读**的队列。11-24 用户实报「读最后一条后红标不马上
+	 * 消失」：旧口径把正在回放的 `reading` 也计 1，最后一条点开后要等 3.5s
+	 * 读回定时器到期才归零（期间再点红标=队列空→弹互动气泡，观感错乱）。
+	 * 现在正在展示的那条**已读**、立刻从红标扣除：点一条红标立刻 -1，读到 0
+	 * 立刻隐藏。`reading` 仍保留（气泡双击跳转的已读联动 / markBubbleRead 需要
+	 * 它），只是不再参与计数。 */
 	function renderUnread() {
-		if (onUnreadChange) onUnreadChange(reportQueue.length + (reading ? 1 : 0));
+		if (onUnreadChange) onUnreadChange(reportQueue.length);
 	}
 
 	/** Tokens burned by the CURRENT task (one conversation turn): reset at
@@ -6023,7 +6028,14 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			}
 		};
 
-		/* badge: single click reads one report, double-click clears everything */
+		/* badge: single click reads one report, double-click clears everything.
+		 * 两动作**共用同一个 260ms 本地判定窗**。P2 追修（11-24 用户实报顾虑）：
+		 * 旧实现「读」走 260ms 定时器、「清空」挂浏览器原生 dblclick——原生窗口
+		 * = 系统双击阈（通常 ~500ms），两下间隔落在 260~500ms 时会先读一条再
+		 * 全清 = 变相误清空（用户「想快速过一遍通知、稍微点快但没想清空」正好
+		 * 踩这个区间）。现在：第二次 pointerup 在 260ms 内到达=双击全清；超过
+		 * 260ms 的每一击=独立读一条，**永不误清**。单击读的 260ms 延迟不变（快
+		 * 速连点阅读的节奏不受影响）；清空这种破坏性动作只在明确的快双击发生。 */
 		var badgeClickTimer = null;
 		badge.addEventListener('pointerdown', function (event) {
 			event.stopPropagation();
@@ -6032,22 +6044,17 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			event.stopPropagation();
 			if (event.pointerType === 'mouse' && event.button !== 0) return; /* right-click = menu only, left reads */
 			if (badgeClickTimer) {
+				/* 第二击落在判定窗内 = 双击：取消待读，直接全清（不再依赖原生
+				 * dblclick 那套更宽的系统窗口） */
 				clearTimeout(badgeClickTimer);
 				badgeClickTimer = null;
+				clearAllUnread();
 				return;
 			}
 			badgeClickTimer = setTimeout(function () {
 				badgeClickTimer = null;
 				if (!readNext()) uiSay(clickSummary());
 			}, BADGE_CLICK_VS_DBL_MS);
-		});
-		badge.addEventListener('dblclick', function (event) {
-			event.stopPropagation();
-			if (badgeClickTimer) {
-				clearTimeout(badgeClickTimer);
-				badgeClickTimer = null;
-			}
-			clearAllUnread();
 		});
 
 		/** Clear every unread report at once. */
@@ -6700,6 +6707,33 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				});
 				menu.appendChild(refreshItem);
 			}
+			/* 11-24 用户新需求「重启小鲸鱼」：字面重启**桌宠进程** —— 宿主杀旧
+			 * 进程树后重新 spawn，桌宠页的 page.html / whale.js / style.css 全部
+			 * 按磁盘最新版重新加载（解决「桌宠页冻结在旧构建、而 🔄 刷新页面
+			 * 只刷 DSH 窗口/页鲸，对桌宠无效」的更新死区）。页内与桌宠菜单都
+			 * 提供这一行：页鲸点它=重启屏上那只桌宠；桌宠自己点它=自重启。
+			 * 宿主侧 restart 动作见 lib/pet.js；页鲸不在场/桌宠不支持时回
+			 * ok:false，这里如实提示不假装成功。 */
+			var restartItem = document.createElement('div');
+			restartItem.className = 'dsh-whale-menu-item';
+			setIconLabel(restartItem, '🔄 重启小鲸鱼');
+			restartItem.addEventListener('click', function (event) {
+				event.stopPropagation();
+				closeCtxMenu();
+				uiSay('正在重启小鲸鱼…🐋', 2500);
+				try {
+					fetch('/api/whale-assistant/pet/ctrl', {
+						method: 'POST',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify({ action: 'restart' })
+					}).then(function (r) { return r.ok ? r.json() : { ok: false }; }).then(function (out) {
+						if (!out || out.ok !== true) {
+							uiSay('这里没法重启桌宠——请在装有桌宠的 DSH 上试 🥲', 2600);
+						}
+					}).catch(function () { uiSay('重启指令没有送达，稍后再试 🥲', 2500); });
+				} catch (eRestart) { uiSay('重启失败，稍后再试 🥲', 2500); }
+			});
+			menu.appendChild(restartItem);
 			/* 桌宠常驻（第九轮用户定稿）：页面侧不再有「桌宠模式」开关——小鲸鱼
 			 * 默认活动范围=整个桌面，开机即常驻（不支持平台由页内鲸鱼兜底）。
 			 * 桌宠窗口里由 __dshPetHost 缝追加三态形态组 */
@@ -11060,8 +11094,10 @@ if (typeof window !== 'undefined' && (window.__dshWhaleSessions || window.__dshW
 		return turnTokenUsage;
 	};
 	window.__dshWhale.debugCounters = debugCounters;
+	/* 红标口径（11-24 追修）：只算**等待读**的队列——正在回放的那条已读，
+	 * 不再计入（读最后一条后红标立即消失；旧口径要等读回定时器）。 */
 	window.__dshWhale.unreadCount = function () {
-		return reportQueue.length + (reading ? 1 : 0);
+		return reportQueue.length;
 	};
 	window.__dshWhale.reportQueue = function () {
 		return reportQueue;

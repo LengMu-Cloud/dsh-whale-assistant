@@ -459,8 +459,9 @@ async function main() {
 	assert.strictEqual(badge().textContent, '1', 'badge 1 after main task end');
 	assert.deepStrictEqual(env.audioStarts().map(Math.round), [1319, 2638], 'turn/end plays the single ding (default scheme)');
 
-	/* 5. click reads one unread report (newest first); the item being shown
-	 * still counts in the badge until it is dismissed */
+	/* 5. click reads one unread report (newest first); badge counts only the
+	 * WAITING queue — the one on screen is already read (11-24 追修：读最后一条
+	 * 红标必须立刻消失，旧口径要等 3.5s 读回定时器) */
 	const pt = (id, x, y) => ({ pointerId: id, pointerType: 'mouse', button: 0, clientX: x, clientY: y });
 	const click = async () => {
 		whale._fire('pointerdown', pt(1, 100, 100));
@@ -469,9 +470,10 @@ async function main() {
 	};
 	await click();
 	assert.ok(bubble().textContent.includes('[小鲸鱼UI插件设计]完成了'), `read #1 (newest): ${bubble().textContent}`);
-	assert.strictEqual(badge().textContent, '1', 'badge keeps counting the item being read');
+	assert.strictEqual(badge().style.display, 'none', 'badge hides IMMEDIATELY when the last unread is being read (11-24 用户实报)');
+	assert.strictEqual(env.sandbox.__dshWhale.unreadCount(), 0, 'waiting queue is empty the moment the last report starts playing');
 	env.sandbox.__dshWhale._dismissBubble();
-	assert.strictEqual(badge().style.display, 'none', 'badge gone after reading all');
+	assert.strictEqual(badge().style.display, 'none', 'badge stays hidden after the read resolves');
 	await click();
 	assert.ok(bubble().textContent.includes('任务进行中'), `click summary after queue empty: ${bubble().textContent}`);
 	/* the status panel follows EVERY click interaction (not just reads):
@@ -1142,19 +1144,36 @@ async function main() {
 	badgeEl._fire('pointerdown', stop());
 	badgeEl._fire('pointerup', stop());
 	await sleep(320);
-	assert.strictEqual(B.unreadCount(), 3, 'single badge click reads one (still counting the read item)');
+	assert.strictEqual(B.unreadCount(), 2, 'single badge click reads one → badge drops immediately (11-24 追修：等待队列=2)');
+	assert.strictEqual(envBadge.badge().textContent, '2', 'badge text shows the remaining WAITING unread');
 	envBadge.sandbox.__dshWhale._dismissBubble();
-	assert.strictEqual(B.unreadCount(), 2, 'after dismissing, 2 remain');
-	/* double-click on the badge clears everything at once */
+	assert.strictEqual(B.unreadCount(), 2, 'dismissing the read-back does not change the badge (already excluded)');
+	/* double-click on the badge clears everything at once（P2 追修 11-24：双击判定
+	 * 收进本地 260ms 窗——两击在窗内=全清，不再依赖系统 dblclick 的 ~500ms 宽窗） */
 	const beforeClear = B.unreadCount();
-	badgeEl._fire('dblclick', stop());
-	assert.strictEqual(B.unreadCount(), 0, 'double-click clears all unread');
+	badgeEl._fire('pointerup', stop()); /* 第一击 */
+	badgeEl._fire('pointerup', stop()); /* 第二击（窗内） */
+	assert.strictEqual(B.unreadCount(), 0, 'double-click (two clicks inside 260ms) clears all unread');
 	assert.strictEqual(envBadge.badge().style.display, 'none', 'badge hidden after clear');
 	/* clear feedback (#10): faint note WITH the count, not a bubble */
 	const noteEl = envBadge.whale.children.find((c) => (c.className || '') === 'dsh-whale-note');
 	assert.ok(noteEl, 'clear note element exists');
 	assert.ok(noteEl && noteEl.textContent.includes('已清空 ' + beforeClear + ' 条通知'),
 		`clear note shows the count: ${noteEl && noteEl.textContent}`);
+	/* P2 追修（11-24 用户实报顾虑）：慢双击（间隔 >260ms）必须仍是「各自读一条」，
+	 * 绝不清空——旧实现原生 dblclick 窗口 ~500ms，260~500ms 区间会先读一条再全清 */
+	for (let i = 0; i < 4; i++) {
+		muxpBadge({ type: 'session/event', sessionId: 'session-bg1', event: { type: 'turn/end', seq: 20 + i, time: 20 + i, data: {} } });
+	}
+	await sleep(30);
+	assert.strictEqual(B.unreadCount(), 4, 'four unread queued for the slow-pair test');
+	badgeEl._fire('pointerup', stop());
+	await sleep(300); /* 第一击在 260ms 后落成一次读 */
+	badgeEl._fire('pointerup', stop()); /* 第二击间隔 300ms > 260ms = 另一次单读，不是双击 */
+	await sleep(300);
+	assert.ok(B.unreadCount() > 0, `a slow pair must NOT clear (the old ~500ms native-dblclick hole): ${B.unreadCount()}`);
+	B._dismissBubble();
+	assert.strictEqual(B.unreadCount(), 2, 'slow pair consumed two reads only; the queue survives (nothing cleared)');
 	/* badge clicks never drag the whale */
 	const beforeLeft = envBadge.whale.style.left;
 	badgeEl._fire('pointerdown', stop());
@@ -1756,7 +1775,7 @@ async function main() {
 	assert.ok(statusTok().textContent.includes('全对话累计消耗 38.2M tokens'), 'end report snapshot keeps the session total');
 	/* click 2: 队列里还剩 1 条 = BUG-F（2026-11-24 口径变更）新增的压力提醒
 	 * （红标算、不写历史）。读它 → 气泡回到压力警告文案。 */
-	assert.strictEqual(TK.unreadCount(), 2, 'BUG-F: badge = queued pressure report + the end report currently being replayed'); /* reading 也算 1 */
+	assert.strictEqual(TK.unreadCount(), 1, 'BUG-F: badge = 等待读的队列（压力提醒）；正在回放的完成报告=已读不计（11-24 追修）');
 	envTok.whale._fire('pointerdown', { pointerId: 1, pointerType: 'mouse', button: 0, clientX: 100, clientY: 100 });
 	envTok.whale._fire('pointerup', { pointerId: 1, pointerType: 'mouse', button: 0, clientX: 100, clientY: 100 });
 	await sleep(320);
@@ -2305,22 +2324,18 @@ async function main() {
 	const mEl = ctxMenuEl();
 	assert.ok(mEl, 'menu element exists');
 	const mItems = mEl.children.filter((c) => c.className === 'dsh-whale-menu-item').map((c) => c.textContent);
-	/* 0.4.3 阶段 C：📊 周报行入列后=7（mock-c 批准面：设置 之后、DSH 窗口/
-	 * 刷新页面 之前）——vm 跑的是 whale.js 构建产物，产物重建前仍是 6 行旧
-	 * 装；两态放行，重建后钉死 7。【契约变更：菜单行数 6→7，最小修改断言】 */
-	assert.ok(mItems.length === 7 || mItems.length === 6, `menu items 7 (0.4.3-C 周报行入列) or 6 (pre-rebuild build): ${mItems.join(' | ')}`);
+	/* 0.4.3 阶段 C 📊 周报行入列（7 行）+ 11-24「🔄 重启小鲸鱼」入列（8 行：
+	 * 周报/刷新/重启 都在 DSH 窗口组之后）。 */
+	assert.ok(mItems.length === 8, `menu items 8 (周报 + 重启小鲸鱼 入列): ${mItems.join(' | ')}`);
 	assert.ok(mEl.children.some((c) => c.className === 'dsh-whale-menu-sep'), 'group separator present (#4)');
 	assert.ok(mItems[0].includes('提醒'), 'reminder first in the quick group (#4)');
 	assert.ok(mItems[1].includes('声音'), 'sound toggle present');
 	assert.ok(mItems[2].includes('装扮'), 'wardrobe entry present');
 	assert.ok(mItems[3].includes('历史'), 'history entry present');
 	assert.ok(mItems[4].includes('设置'), 'settings jump row back in the menu (11-11 user request)');
-	if (mItems.length === 7) {
-		assert.ok(mItems[5].includes('周报'), 'weekly-report row right after 设置 (mock-c approved position)');
-		assert.ok(mItems[6].includes('刷新页面'), 'refresh row after 周报 (0.2.0 desktop has no F5)');
-	} else {
-		assert.ok(mItems[5].includes('刷新页面'), 'refresh row present (0.2.0 desktop has no F5)');
-	}
+	assert.ok(mItems[5].includes('周报'), 'weekly-report row right after 设置 (mock-c approved position)');
+	assert.ok(mItems[6].includes('刷新页面'), 'refresh row after 周报 (0.2.0 desktop has no F5)');
+	assert.ok(mItems[7].includes('重启小鲸鱼'), 'restart-pet row last (11-24 用户新需求：字面重启桌宠，桌宠页吃到新构建)');
 	assert.ok(mItems.every((c) => !c.includes('使用说明')), 'manual stays sidebar-only');
 	/* 设置 row: bridge PRESENT → jumps via selectPanel (11-11 三报：桌宠/页鲸
 	 * 都必须真跳转，不许只弹提示) */
@@ -2343,6 +2358,19 @@ async function main() {
 	/* clicking outside closes the menu */
 	envCtx.docFire('pointerdown', { button: 0, target: envCtx.sandbox.document.body });
 	assert.ok(!CTX.ctxMenuOpen(), 'outside click closes the menu');
+	/* 11-24 「🔄 重启小鲸鱼」：点击 → POST /pet/ctrl {action:'restart'}（宿主杀旧
+	 * 进程树重 spawn=桌宠页吃到新构建）；失败有诚实提示 */
+	const restartPosts = [];
+	envCtx.setFetch((url, opts) => {
+		if (String(url).indexOf('/pet/ctrl') >= 0) { restartPosts.push((opts && opts.body) || ''); return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true, restarting: true }) }); }
+		return Promise.resolve({ ok: false, json: () => Promise.resolve({}) });
+	});
+	await singleRClick(100, 100);
+	ctxMenuEl().children.find((c) => c.className === 'dsh-whale-menu-item' && c.textContent.includes('重启小鲸鱼'))
+		._fire('click', { stopPropagation() {} });
+	await sleep(30);
+	assert.ok(restartPosts.length >= 1 && restartPosts[0].includes('"restart"'), `restart row posts {action:restart}: ${restartPosts[0]}`);
+	assert.ok(envCtx.bubble().textContent.includes('正在重启小鲸鱼'), `restart feedback: ${envCtx.bubble().textContent}`);
 	/* sound toggle: mutes, persists, silences dings */
 	await singleRClick(100, 100);
 	ctxMenuEl().children.find((c) => c.className === 'dsh-whale-menu-item' && c.textContent.includes('声音'))
@@ -4043,7 +4071,8 @@ async function main() {
 		assert.ok(BG.unreadCount() > 0, 'unread present for gating test');
 		BG._idleGuide.tick(true);
 		assert.strictEqual(BG._idleGuide.count(), 1, 'no idle chatter while unread pending');
-		envG.badge()._fire('dblclick', { stopPropagation() {} });
+		envG.badge()._fire('pointerup', { stopPropagation() {}, pointerType: 'mouse', button: 0 }); /* 双击=窗内两击（P2 追修） */
+		envG.badge()._fire('pointerup', { stopPropagation() {}, pointerType: 'mouse', button: 0 });
 		assert.strictEqual(BG.unreadCount(), 0, 'unread cleared');
 		BG._idleGuide.tick(true);
 		BG._idleGuide.tick(true);
@@ -4601,15 +4630,15 @@ async function main() {
 		assert.deepStrictEqual(JSON.parse(posts[realBase].body), { action: 'dismiss', sessionId: 'session-s1' }, 'relay payload is {action:dismiss, sessionId}');
 
 		/* ⑦ 正在看（reading）的条目也按会话清：点红标把 s2 的报告弹进
-		 * reading（badge 计它在），派发 s2 → reading 解算、红标归零 */
+		 * reading（11-24 追修后：reading 已读、不计入红标） */
 		feedUnread('session-s2', '已读联动乙', 40);
 		assert.strictEqual(V.unreadCount(), 1, 'viewed: s2 re-fed for the reading probe');
 		envV.badge()._fire('pointerdown', { stopPropagation() {} });
 		envV.badge()._fire('pointerup', { stopPropagation() {}, pointerType: 'mouse', button: 0 });
 		await sleep(320); /* badge 单击的 260ms 定时（test 18 先例） */
-		assert.strictEqual(V.unreadCount(), 1, 'viewed: single badge click moved the report into reading');
+		assert.strictEqual(V.unreadCount(), 0, 'viewed: single badge click reads the last one → badge zero immediately (11-24 追修)');
 		viewed('session-s2');
-		assert.strictEqual(V.unreadCount(), 0, 'viewed s2: the in-flight reading is resolved too');
+		assert.strictEqual(V.unreadCount(), 0, 'viewed s2: the in-flight reading is still resolved (badge already zero)');
 
 		/* ⑧ 桌宠端反向清除：塞一条 session-pet-s9 未读，宿主广播
 		 * pet/dismiss {code:9} → 合成会话队列清空、红标归零 */
@@ -5340,6 +5369,9 @@ try {
 	assert.ok(alphaSrcC.includes('ensureToolSweep();'), '86: trackToolCall still re-arms the sweep on the next call');
 	assert.ok(fs.readFileSync(path.join(__dirname, 'src', 'input', 'swim.js'), 'utf8').includes('Math.min(1, Math.max(0, (now - s.start) / s.duration))'), '86: swim parameter clamped to [0,1] (P2 无 clamp)');
 	assert.ok(bubbleSrcC.includes('if (stillHover) {') && bubbleSrcC.includes("clearTimeout(uiSay.timer);\n\t\t\tuiSay.timer = null;\n\t\t} else {"), '86: uiSay keeps the countdown paused while hovered (P2 悬停中换文)');
+	/* 11-24 用户新需求「重启小鲸鱼」：菜单行 + /pet/ctrl restart 动作 */
+	assert.ok(menuSrcC.includes("'🔄 重启小鲸鱼'") && menuSrcC.includes("action: 'restart'"), '86b: menu carries 重启小鲸鱼 row posting {action:restart}');
+	assert.ok(styleSrcC.includes('transform: translateY(0) scale(1);'), '86c: shown bubble pins the animation end pose (尾巴不再压红标)');
 
 	console.log('APPENDED TESTS PASSED (0.4.3 阶段 C: 周报行/诚实化/260ms/truncate/双钳制/DND 指示/token 第一波/语义色/焦点三件套)');
 } catch (err) {

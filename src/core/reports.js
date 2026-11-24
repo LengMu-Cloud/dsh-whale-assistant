@@ -19,9 +19,14 @@
 	/** UI hook set by uiInit; receives the current unread count. */
 	var onUnreadChange = null;
 
-	/** Badge = queued reports + the one being read right now. */
+	/** Badge = 只算**等待读**的队列。11-24 用户实报「读最后一条后红标不马上
+	 * 消失」：旧口径把正在回放的 `reading` 也计 1，最后一条点开后要等 3.5s
+	 * 读回定时器到期才归零（期间再点红标=队列空→弹互动气泡，观感错乱）。
+	 * 现在正在展示的那条**已读**、立刻从红标扣除：点一条红标立刻 -1，读到 0
+	 * 立刻隐藏。`reading` 仍保留（气泡双击跳转的已读联动 / markBubbleRead 需要
+	 * 它），只是不再参与计数。 */
 	function renderUnread() {
-		if (onUnreadChange) onUnreadChange(reportQueue.length + (reading ? 1 : 0));
+		if (onUnreadChange) onUnreadChange(reportQueue.length);
 	}
 
 	/** Tokens burned by the CURRENT task (one conversation turn): reset at

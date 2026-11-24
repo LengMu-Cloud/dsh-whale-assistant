@@ -151,8 +151,10 @@
 		return turnTokenUsage;
 	};
 	window.__dshWhale.debugCounters = debugCounters;
+	/* 红标口径（11-24 追修）：只算**等待读**的队列——正在回放的那条已读，
+	 * 不再计入（读最后一条后红标立即消失；旧口径要等读回定时器）。 */
 	window.__dshWhale.unreadCount = function () {
-		return reportQueue.length + (reading ? 1 : 0);
+		return reportQueue.length;
 	};
 	window.__dshWhale.reportQueue = function () {
 		return reportQueue;

@@ -267,6 +267,13 @@ body[data-ds-dark-theme] {
 }
 .dsh-whale-bubble.show {
 	opacity: 1;
+	/* 11-24 用户实报（截图）：气泡尾巴刚好压在红标上。根因=基础规则在
+	 * `transform: translateY(6px) scale(0.96)`（本来是给淡入起点用的姿态），
+	 * pop 动画结束后（无 fill-mode）transform 回落到基础值 → 稳态气泡比
+	 * 动画终点低 6px、缩到 96%，尾巴伸到鲸鱼顶部附近，正好和红标（top:2px）
+	 * 贴在一起。show 态显式钉到动画终点，稳态回到设计位置（尾巴与红标留
+	 * 6px 间隙），入场动画不受影响（动画期间覆盖该声明）。 */
+	transform: translateY(0) scale(1);
 	animation: dsh-whale-bubble-pop 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
 	/* only a VISIBLE bubble is interactive (double-click to jump to the
 	 * conversation it reports) — a hidden one must not eat clicks */

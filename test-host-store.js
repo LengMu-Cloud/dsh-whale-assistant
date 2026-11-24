@@ -1013,6 +1013,11 @@ console.log('ALL HOST-STORE TESTS PASSED (' + passed + ' checks, phase-B blocks 
 		ok(expSrc.includes("if (payload.interact !== 'pet' && payload.interact !== 'wake') delete payload.interact;"), 'exports.js: pushPetSync passes interact through and strips non-whitelisted values (dirty field would sink the whole payload into a 400)');
 		ok(cnt(pageSrc, "JSON.stringify({ action: 'sync', interact: 'wake' })") === 1, 'page.html: peek-bubble burst (wake) carries interact:wake over the sync channel, exactly one call site');
 		ok(petSrc.includes('export function petScriptEtag(code)') && petSrc.includes('export function etagMatches(ifNoneMatch, etag)'), 'pet.js: ETag pure-function pair exported (single implementation shared by both whale.js routes, behaviorally proven in C7)');
+		/* 11-24 用户新需求「重启小鲸鱼」：菜单 → /pet/ctrl restart → 宿主杀旧树
+		 * 重 spawn（桌宠页 page.html/whale.js/CSS 吃到新构建） */
+		ok(petSrc.includes("if (action === 'restart') {") && petSrc.includes('restartPet('), 'pet.js: /pet/ctrl restart action exists (menu 重启小鲸鱼)');
+		ok(petSrc.includes('function restartPet(why)') && petSrc.includes("log('restarting pet ('"), 'pet.js: restartPet clears the cooldown anchors and reuses spawnPet (single spawn path, silent stale exit)');
+		ok(cnt(petSrc, 'if (action === \'restart\') {') === 1, 'pet.js: restart action registered exactly once');
 	}
 
 	console.log('LEDGER-PERF BLOCK PASSED (+' + (passed - passedBeforeC) + ' checks)');

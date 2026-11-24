@@ -153,8 +153,10 @@
 		capMap(sessionTitles, 150);
 	})();
 
-	/** Rewrite queued/visible reports that used the fallback name. */
-	function correctReports(sessionId, title) {
+	/** Rewrite queued/visible reports that used an older name. Fallback
+	 * names are upgraded on any title arrival; a REAL-name rename upgrades
+	 * when prevTitle is known (BUG-C 2026-11-23: DSH 动态改名). */
+	function correctReports(sessionId, title, prevTitle) {
 		correctHistoryTitle(sessionId, title); /* history rows saved pre-name follow too */
 		rememberTitle(sessionId, title); /* and the contact book learns the real name */
 		/* 桌宠占位「[任务 N]」同享晚到改写（11-03）：枚举会话的占位名与
@@ -167,12 +169,21 @@
 				? text.replace(/^\[任务 \d+\]/, '[' + title + ']')
 				: text.split('未命名任务').join(title);
 		}
+		/* BUG-C：真名动态改名——把旧名方括号替换为新名（只动本会话条目）。 */
+		function applyRename(text) {
+			if (!prevTitle || prevTitle === title) return text;
+			return text.split('[' + prevTitle + ']').join('[' + title + ']');
+		}
 		var changed = false;
 		for (var i = 0; i < reportQueue.length; i++) {
 			var item = reportQueue[i];
-			if (item.sessionId === sessionId && isFallback(item.text)) {
+			if (item.sessionId !== sessionId) continue;
+			if (isFallback(item.text)) {
 				item.text = applyTitle(item.text);
 				changed = true;
+			} else {
+				var renamed = applyRename(item.text);
+				if (renamed !== item.text) { item.text = renamed; changed = true; }
 			}
 		}
 		/* rewrite the live bubble ONLY when it is showing THIS session's
@@ -183,8 +194,9 @@
 		 * only thing a late title can still fix. */
 		if (document && document.querySelector) {
 			var bubble = document.querySelector('.dsh-whale-bubble');
-			if (bubble && currentSaySession === sessionId && isFallback(bubble.textContent)) {
-				bubble.textContent = applyTitle(bubble.textContent);
+			if (bubble && currentSaySession === sessionId) {
+				if (isFallback(bubble.textContent)) bubble.textContent = applyTitle(bubble.textContent);
+				else bubble.textContent = applyRename(bubble.textContent);
 			}
 		}
 	}
@@ -308,6 +320,7 @@
 		}
 		if (frame.key === 'title') {
 			if (typeof frame.value === 'string') {
+				var prevTitle = sessionTitles.get(frame.sessionId) || null;
 				sessionTitles.set(frame.sessionId, frame.value);
 				rememberTitle(frame.sessionId, frame.value);
 				capMap(sessionTitles, 150); /* memory audit: one entry per conversation ever seen */
@@ -320,7 +333,7 @@
 				 * for ANY session, not just registered subagent sessions
 				 * (attention reports name themselves 未命名任务 while the LLM
 				 * title is still generating, 09-05) */
-				correctReports(frame.sessionId, frame.value);
+				correctReports(frame.sessionId, frame.value, (prevTitle && prevTitle !== frame.value) ? prevTitle : undefined);
 			}
 			return;
 		}

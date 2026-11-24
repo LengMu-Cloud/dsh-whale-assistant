@@ -287,7 +287,20 @@
 			page.appendChild(tabBar);
 			page.appendChild(content);
 			var TABS = [['settings', '⚙️ 设置'], ['pet', '🐋 小鲸鱼形态'], ['report', '📊 周报'], ['help', '📖 使用说明']];
-			var curTab = 'settings';
+			/* 0.4.3 真机修（BUG-A，2026-11-23）：Tab 意向必须跨挂载存活。病态时序：
+			 * 外部入口（右键「📊 周报」/ 桌宠 pet-open-report 帧 / 摘要气泡）先置
+			 * 意向，但窗口里可能还挂着一个**已卸载的旧面板实例**——它的 openTab
+			 * 被调用后会清掉意向位、只把「周报」画进游离 DOM；随后真正的新挂载
+			 * 从 settings 起步，用户看到「先设置、几秒后才周报」甚至永不切换。
+			 * 修法：意向记在模块级 ppPanelWantedTab，只有**当前挂载实例**当场消费，
+			 * 旧实例只留意向给下一次真实挂载。 */
+			ppPanelLiveRoot = root;
+			if (ppPendingReportTab) {
+				ppPendingReportTab = false;
+				ppPanelWantedTab = 'report';
+			}
+			var curTab = ppPanelWantedTab || 'settings';
+			ppPanelWantedTab = null;
 			var tabBtns = {};
 			TABS.forEach(function (t) {
 				var b = document.createElement('button');
@@ -298,6 +311,8 @@
 				setIconLabel(b, t[1]);
 				b.addEventListener('click', function (event) {
 					event.stopPropagation();
+					ppPendingReportTab = false; /* 用户手点=意向已达成，清掉挂账 */
+					ppPanelWantedTab = null;
 					curTab = t[0];
 					render();
 				});
@@ -802,22 +817,24 @@
 			 * 由这里消费（selectPanel → React mount 是异步的，意向位补齐时序缝） */
 			try {
 				window.__dshWhalePanel.openTab = function (t) {
+					var known = false;
 					for (var i = 0; i < TABS.length; i++) {
-						if (TABS[i][0] === t) {
-							curTab = t;
-							render();
-							ppPendingReportTab = false;
-							return true;
-						}
+						if (TABS[i][0] === t) { known = true; break; }
 					}
-					return false;
+					if (!known) return false;
+					/* 跨挂载意向（BUG-A 根修）：旧实例调用只记账不消费，下一次真实
+					 * 挂载在 mount 头部把它落地；当前挂载实例则当场切换。 */
+					ppPanelWantedTab = t;
+					var live = ppPanelLiveRoot === root && !(root && root.isConnected === false);
+					if (live) {
+						curTab = t;
+						ppPanelWantedTab = null;
+						ppPendingReportTab = false;
+						render();
+					}
+					return true;
 				};
 			} catch (eOpenTab) {}
-			if (ppPendingReportTab) {
-				ppPendingReportTab = false;
-				curTab = 'report';
-				render();
-			}
 		}
 		/* 📖 使用说明 Tab（11-08 自 openHelp 抽屉迁入；11-13 三层重构——设计者
 		 * 视角 9 区 49 条全量平铺 → 纯用户视角「🚀 三步上手 / 🎮 日常操作 /
@@ -866,7 +883,7 @@
 				{ t: '常驻与自愈', d: '桌面小鲸鱼跟着 DSH 走，开 DSH 就在（关窗≠退出）；宿主每 30 秒体检，意外消失约 1 分钟内自动重生。' },
 				{ t: '设置同步', d: '侧边栏页里改的音色 / 音量 / 免打扰等，约 2 秒内自动下发到桌面的小鲸鱼，不用两边各设。' },
 				{ t: '状态与情绪', d: '任务越多越累、会打瞌睡（拖一拖或双击就醒）；右键菜单标题看得到当前心情和进行中任务数。' },
-				{ cat: '🔔 通知与红标', t: '红标计数规则', d: '完成 / 失败 / 截断 / 中止 / 提问 / 审核 / 定时提醒计入未读；开工、压力提醒、工具提示不计入，99+ 封顶。' },
+				{ cat: '🔔 通知与红标', t: '红标计数规则', d: '完成 / 失败 / 截断 / 中止 / 提问 / 审核 / 定时提醒 / 上下文压力提醒计入未读（压力不写历史任务，次数在周报汇总卡看）；开工、工具提示不计入，99+ 封顶。' },
 				{ t: '定时提醒', d: '右键菜单设的闹钟到点播报；免打扰时段也照常响——自己定的闹钟不受免打扰约束。' },
 				{ t: '中止与开工', d: '任务开始只播报、不算未读；手动中止不算失败，但也计入红标。' },
 				{ t: '用量面板', d: '完成通知下方同时弹出本次消耗 / 全对话累计 / 上下文占用，与气泡同生同灭。' },
@@ -1482,6 +1499,19 @@
 			sumTok.className = 'wh-rnum';
 			sumTok.textContent = fmtK(tb ? tb.tokens : 0) + ' tok · ' + (tb ? Object.keys(tb.sessions).length : 0) + ' 个对话';
 			sumRow.appendChild(sumTok);
+			/* BUG-F（2026-11-24 用户拍板口径 A）：压力提醒**周报计次**（7 天窗口）。
+			 * 口径：红标算、历史任务不算、周报要计——数据源是 pressureLog（不写历史）。 */
+			try {
+				var pwCount = (typeof pressureWarnCountSince === 'function') ? pressureWarnCountSince(weekAgo) : 0;
+				if (pwCount > 0) {
+					sumRow.appendChild(document.createTextNode(' · 🌡 压力 '));
+					var pwNum = document.createElement('span');
+					pwNum.className = 'wh-rnum';
+					pwNum.textContent = String(pwCount);
+					sumRow.appendChild(pwNum);
+					sumRow.appendChild(document.createTextNode(' 次'));
+				}
+			} catch (ePw) { /* 存储不可用：不显示 */ }
 			list.appendChild(sumRow);
 			/* 0.4.3 阶段 B：Tab 头行（📊 周报 sec + 只看失败 chip，mock-b 批准面）
 			 * 与陪伴小账区——都挂在卡片外、随 build 重建；空周也要出（chip 由
@@ -1662,6 +1692,7 @@
 			var headWrap = document.createElement('div');
 			var ledgerWrap = document.createElement('div');
 			var summaryCard = ppBuildNightSummaryCard(card);
+			ppClearReturnWindow(); /* BUG-E：进周报 Tab 即完成一次闸评估，窗口只消费一次 */
 			if (summaryCard) content.appendChild(summaryCard);
 			content.appendChild(headWrap);
 			content.appendChild(card);
@@ -1769,6 +1800,13 @@
 		 * todayKey/PET_MODE——test-whale 追加块整段摘出注入桩做行为断言；
 		 * DOM 装配一律在 mountWhaleReportTab/renderSettings 局部完成）—— */
 		var PP_ACT_KEY = 'dsh-whale:lastActivityAt';
+		/* BUG-E（2026-11-24 真机分析）：昨夜摘要的「离席」必须用**用户交互水位**。
+		 * 旧口径把 lastActivityAt（任务事件水位）当离席起点：任务一跑就刷新，
+		 * 闸①（离席≥1h）与闸②（窗口事件≥3）互为反条件——卡片/气泡真机永不触发。
+		 * 新口径：用户手势/键入/窗口重新可见/开机写这个键；任务事件不碰它。
+		 * ppReturnFrom = 内存里的「这次回位的离席起点」（水位推进后仍供闸消费）。 */
+		var PP_SEEN_KEY = 'dsh-whale:lastUserSeenAt';
+		var ppReturnFrom = 0;
 		var PP_SUMMARY_KEY = 'dsh-whale:lastSummary';
 		var PP_SUMMARY_AWAY_MS = 60 * 60 * 1000; /* 闸①：离席 ≥1h */
 		var PP_SUMMARY_MIN_EVENTS = 3; /* 闸②：离席期间任务事件 ≥3 条 */
@@ -1786,6 +1824,28 @@
 			var v = null;
 			try { v = safeGet(PP_ACT_KEY); } catch (e) { v = null; }
 			return typeof v === 'number' && v > 0 ? v : 0;
+		}
+		/* —— BUG-E：用户交互水位（离席判定唯一数据源） —— */
+		function ppTouchUserSeenAt(now) {
+			if (PET_MODE) return false; /* 桌宠页不落页鲸键 */
+			try { safeSet(PP_SEEN_KEY, typeof now === 'number' ? now : Date.now()); } catch (e) { return false; }
+			return true;
+		}
+		function ppReadUserSeen() {
+			var v = null;
+			try { v = safeGet(PP_SEEN_KEY); } catch (e) { v = null; }
+			return typeof v === 'number' && v > 0 ? v : 0;
+		}
+		/* 一次真实交互到达：若距上次交互已 ≥1h（=刚从离席回来），把旧水位记进
+		 * ppReturnFrom 供摘要闸消费；然后推进水位。连续在场时只是滚动刷新。 */
+		function ppNoteUserSeen(now) {
+			var t = typeof now === 'number' ? now : Date.now();
+			var last = ppReadUserSeen();
+			if (last && t - last >= PP_SUMMARY_AWAY_MS && !ppReturnFrom) ppReturnFrom = last;
+			return ppTouchUserSeenAt(t);
+		}
+		function ppClearReturnWindow() {
+			ppReturnFrom = 0;
 		}
 		function ppReadSummaryRec() {
 			var v = null;
@@ -1805,11 +1865,13 @@
 			try { safeSet(PP_SUMMARY_KEY, rec); } catch (e) {}
 			return rec;
 		}
-		/* 离席窗口判定（闸①②）：lastActivityAt 距今 ≥1h 且窗口 [last, now] 内
+		/* 离席窗口判定（闸①②）：**用户交互水位**距今 ≥1h 且窗口 [last, now] 内
 		 * 任务事件 ≥3 条。数据源=history——cap 已对齐服务端 500 口径，离席期间
-		 * 的记录由 pullCloudHistory 合并补齐（开机胶水在 pull 回调里判闸）。 */
+		 * 的记录由 pullCloudHistory 合并补齐（开机胶水在 pull 回调里判闸）。
+		 * 水位来源优先级：本次回位的离席起点（ppReturnFrom）→ 持久化用户交互
+		 * 水位 → 旧版任务活动键（升级/单测向后兼容兜底）。 */
 		function ppNightSummaryWindow(now) {
-			var last = ppReadLastActivity();
+			var last = ppReturnFrom || ppReadUserSeen() || ppReadLastActivity();
 			if (!last) return null;
 			var away = now - last;
 			if (away < PP_SUMMARY_AWAY_MS) return null;
@@ -1869,10 +1931,11 @@
 			var n = typeof now === 'number' ? now : Date.now();
 			if (!ppSummarySlotFree(ppReadSummaryRec(), 'bubble', todayKey())) return false;
 			var win = ppNightSummaryWindow(n);
-			if (!win) return false;
+			if (!win) { ppClearReturnWindow(); return false; }
 			var agg = ppAggregateWindow(win.events);
 			uiSay('🐋 昨晚 ' + agg.done + ' 完成 · ' + agg.fail + ' 失败 · ' + agg.ask + ' 条待你审核 — 点开看周报', 8000);
 			ppWriteSummaryRec({ bubble: true, from: win.from, to: win.to, events: win.events.length });
+			ppClearReturnWindow(); /* 窗口已消费：不重复出 */
 			return true;
 		}
 		/* 陪伴小账纯计算（mock-b 批准面）：/state.petLedger={days:[{date,pets,wakes}]}
@@ -2050,6 +2113,27 @@
 				};
 			}
 		} catch (eWrap) { /* 桩环境兜底 */ }
+		/* BUG-E（2026-11-24）：用户交互水位采集——只在真机上由用户手势/键入/
+		 * 窗口重新可见/开机写入；任务事件（touchActivity 漏斗）不写这里。
+		 * 开机=用户刚回来：先 ppNoteUserSeen 记录离席起点并推进水位，随后的
+		 * 开机气泡闸用「起点」判定（ppReturnFrom），所以回位本身不会把闸清零。 */
+		try {
+			if (!PET_MODE) {
+				ppNoteUserSeen(Date.now());
+				var __ppSeenMark = function () {
+					try { ppNoteUserSeen(Date.now()); } catch (eSeen0) {}
+				};
+				document.addEventListener('pointerdown', __ppSeenMark, true);
+				document.addEventListener('keydown', __ppSeenMark, true);
+				document.addEventListener('visibilitychange', function () {
+					try {
+						if (document.hidden) return;
+						ppNoteUserSeen(Date.now());
+						ppBootNightSummary(Date.now());
+					} catch (eVis) {}
+				});
+			}
+		} catch (eSeenGlue) { /* 桩环境兜底 */ }
 		/* 摘要气泡点击 → 打开侧栏页 + 直切周报 Tab（menu.js 设置行同款
 		 * __dshWhaleSelectPanel 桥；桥缺席回落 uiSay 指路）。只接管当前显示中
 		 * 的摘要气泡（文本前缀守卫），普通通知气泡零波及。 */
@@ -2110,6 +2194,10 @@
 		/* 阶段 B 状态位（uiInit 闭包级）：摘要气泡的 Tab 切换意向 / 心跳行定时器 /
 		 * 小账缓存 / 筛选 chip 态 */
 		var ppPendingReportTab = false;
+		/* BUG-A 根修状态位（见 mountWhalePanelPage / openTab 注释）：跨挂载 Tab
+		 * 意向 + 最近一次挂载的 root（识别已游离的旧实例） */
+		var ppPanelWantedTab = null;
+		var ppPanelLiveRoot = null;
 		var ppHbTimer = null;
 		var ppPetLedger = null;
 		var ppRepFailOnly = false;

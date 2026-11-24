@@ -327,7 +327,19 @@
 		var resetAt = warnAt >= PRESSURE_WARN_PCT ? PRESSURE_RESET_PCT : Math.round(warnAt * 0.3);
 		if (pct >= warnAt && !pressureWarned) {
 			pressureWarned = true;
-			say('上下文快挤爆了…建议 /compact 🫠', 5200);
+			var pwMsg = '上下文快挤爆了…建议 /compact 🫠';
+			say(pwMsg, 5200);
+			/* BUG-F（2026-11-24 用户拍板口径 A）：压力提醒**计入红标**——即使正在
+			 * 看该会话也强制入队（forceUnread），气泡消失后仍可从红标读回；
+			 * **不写历史账本**；周报另由 pressureLog 计次（仅页鲸记，避免双窗口重复）。 */
+			try {
+				if (typeof pushReport === 'function' && lastMainSession) {
+					pushReport(pwMsg, 5200, lastMainSession, false, Date.now(), true);
+				}
+			} catch (eRep) { /* 桩环境兜底 */ }
+			try {
+				if (!PET_MODE && typeof recordPressureWarn === 'function') recordPressureWarn(Date.now(), pct);
+			} catch (eLog) { /* 存储不可用：静默 */ }
 		} else if (pct < resetAt) {
 			pressureWarned = false;
 		}

@@ -68,3 +68,32 @@
 			/* ignore */
 		}
 	}
+
+	/* —— 压力提醒日志（BUG-F，2026-11-24 用户拍板口径 A）——
+	 * 口径：上下文压力提醒**计入红标**（未读队列）、**不写历史账本**（历史只收
+	 * 任务事件）、**周报可计次**。这里只维护一条轻量时间线，页鲸侧 localStorage，
+	 * 90 天 / 500 条滚动；周报汇总卡按 7 天窗口计数。 */
+	var PRESSURE_LOG_KEY = 'dsh-whale:pressureLog';
+	var PRESSURE_LOG_CAP = 500;
+	var PRESSURE_LOG_TTL_MS = 90 * 864e5;
+	function recordPressureWarn(at, pct) {
+		var t = typeof at === 'number' ? at : Date.now();
+		var log = safeGet(PRESSURE_LOG_KEY);
+		if (!Array.isArray(log)) log = [];
+		log.push({ at: t, pct: typeof pct === 'number' ? pct : null });
+		var cutoff = t - PRESSURE_LOG_TTL_MS;
+		log = log.filter(function (e) { return e && typeof e.at === 'number' && e.at >= cutoff; });
+		if (log.length > PRESSURE_LOG_CAP) log = log.slice(log.length - PRESSURE_LOG_CAP);
+		safeSet(PRESSURE_LOG_KEY, log);
+		return log.filter(function (e) { return e.at >= t - 604800000; }).length;
+	}
+	function pressureWarnCountSince(sinceMs) {
+		var log = safeGet(PRESSURE_LOG_KEY);
+		if (!Array.isArray(log)) return 0;
+		var since = typeof sinceMs === 'number' ? sinceMs : 0;
+		var n = 0;
+		for (var i = 0; i < log.length; i++) {
+			if (log[i] && typeof log[i].at === 'number' && log[i].at >= since) n++;
+		}
+		return n;
+	}

@@ -238,6 +238,9 @@
 			return history;
 		};
 		window.__dshWhale.pushHistory = pushHistory;
+		/* BUG-C（2026-11-24）：reconcile 后强制全量推一次历史——页面本地可能早已
+		 * 是新标题而不触发「有变化才推」，宿主账本因此永远收不到修正。 */
+		window.__dshWhale._pushCloudHistory = pushCloudHistory;
 		window.__dshWhale.getClearAt = getClearAt;
 		window.__dshWhale.bumpClearAt = bumpClearAt;
 		window.__dshWhale.drawerOpen = function () {

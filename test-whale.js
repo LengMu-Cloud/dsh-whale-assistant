@@ -1655,7 +1655,36 @@ async function main() {
 	muxpTok({ type: 'session/projection', sessionId: 'session-tk1', key: 'tokenUsage', value: { uncachedInputTokens: 30000000, outputTokens: 5000000, cacheReadTokens: 3000000, cacheWriteTokens: 190000 } });
 	muxpTok({ type: 'session/projection', sessionId: 'session-tk1', key: 'contextPressure', value: { pressureTokens: 800000, projectedTokens: 800000, contextWindow: 1000000 } });
 	assert.ok(envTok.bubble().textContent.includes('compact'), `pressure warning shown: ${envTok.bubble().textContent}`);
-	assert.strictEqual(TK.unreadCount(), 0, 'pressure warning never adds unread');
+	/* 【口径变更·BUG-F（2026-11-24 用户拍板）】压力提醒从「不计入红标」改为
+	 * 「计入红标、不写历史、周报计次」——旧断言随之翻转。 */
+	assert.strictEqual(TK.unreadCount(), 1, 'BUG-F: pressure warning now counts as unread (red badge)');
+	const pwLogRaw = envTok.sandbox.localStorage.getItem('dsh-whale:pressureLog');
+	assert.ok(pwLogRaw && JSON.parse(pwLogRaw).data.length === 1, 'BUG-F: pressure warning appends one pressure-log entry (weekly count source)');
+	/* BUG-F（2026-11-24 口径 A）：压力提醒 = 红标算 / 历史不写 / 周报计次 */
+	const histPfBefore = TK.historyList().length;
+	/* 用同一个 80% 值重投（不改变压力快照，避免污染下方「上下文已用 80%」的既有断言） */
+	muxpTok({ type: 'session/projection', sessionId: 'session-tk1', key: 'contextPressure', value: { pressureTokens: 800000, projectedTokens: 800000, contextWindow: 1000000 }, seq: 99 });
+	assert.strictEqual(TK.historyList().length, histPfBefore, 'BUG-F: pressure warning never writes history rows');
+	assert.strictEqual(TK.unreadCount(), 1, 'BUG-F: one-shot — crossing again before relief must not pile up unread');
+	/* 周报计次：压力日志 7 天窗口 → 汇总卡「· 🌡 压力 N 次」 */
+	const envPwRep = makeEnv();
+	envPwRep.ready();
+	envPwRep.sandbox.localStorage.setItem('dsh-whale:pressureLog', JSON.stringify({ v: 1, data: [
+		{ at: Date.now() - 3600 * 1000, pct: 70 },
+		{ at: Date.now() - 7200 * 1000, pct: 65 },
+		{ at: Date.now() - 20 * 864e5, pct: 90 }
+	] }));
+	const hostPwRep = envPwRep.sandbox.document.createElement('div');
+	envPwRep.sandbox.window.__dshWhalePanel.mount(hostPwRep);
+	const pwInner = hostPwRep.children.find((c) => (c.className || '') === 'dsh-whale-pp');
+	const pwTabs = pwInner.children.find((c) => (c.className || '').indexOf('dsh-whale-pp-tabs') >= 0);
+	pwTabs.children.find((b) => (b.textContent || '').indexOf('📊 周报') >= 0)._fire('click', { stopPropagation() {} });
+	const pwContent = pwInner.children.find((c) => (c.className || '').indexOf('dsh-whale-pp-content') >= 0);
+	const pwCard = pwContent.children.find((c) => (c.className || '') === 'dsh-whale-pp-report');
+	const pwList = pwCard && pwCard.children.find((c) => (c.className || '').indexOf('dsh-whale-history-list') >= 0);
+	const pwSum = pwList && pwList.children.find((c) => (c.className || '') === 'dsh-whale-report-summary');
+	assert.ok(pwSum && pwSum.textContent.includes('🌡 压力 2 次'), 'BUG-F: weekly report shows the 7-day pressure count (2 in window, old one excluded): ' + (pwSum && pwSum.textContent));
+
 	/* ⑳ 真机答疑补链（同上）：设置页「压力提醒」的值必须真正驱动 maybeWarn
 	 * 阈值 + 警告一次性 + 回落重臂。观察缝=气泡文本：开工报告替换警告气泡后，
 	 * 未重置时再越线不得重说（一次性），跌破 50% 重置后再越线必须重说（重臂） */
@@ -1725,12 +1754,18 @@ async function main() {
 	assert.ok(!envTok.bubble().textContent.includes('消耗'), 'click summary is token-free');
 	assert.ok(statusTok().textContent.includes('此次任务消耗 3.5M tokens'), 'reading the end report shows the panel');
 	assert.ok(statusTok().textContent.includes('全对话累计消耗 38.2M tokens'), 'end report snapshot keeps the session total');
-	/* click 2: the queue is EMPTY (starts stay out of it) — nothing replays
-	 * and no start report can ever leave a stale panel behind */
+	/* click 2: 队列里还剩 1 条 = BUG-F（2026-11-24 口径变更）新增的压力提醒
+	 * （红标算、不写历史）。读它 → 气泡回到压力警告文案。 */
+	assert.strictEqual(TK.unreadCount(), 2, 'BUG-F: badge = queued pressure report + the end report currently being replayed'); /* reading 也算 1 */
 	envTok.whale._fire('pointerdown', { pointerId: 1, pointerType: 'mouse', button: 0, clientX: 100, clientY: 100 });
 	envTok.whale._fire('pointerup', { pointerId: 1, pointerType: 'mouse', button: 0, clientX: 100, clientY: 100 });
 	await sleep(320);
-	assert.strictEqual(TK.unreadCount(), 0, 'queue drained after one read');
+	assert.ok(envTok.bubble().textContent.includes('compact'), 'click 2 replays the queued pressure warning (BUG-F 红标算)');
+	assert.strictEqual(TK.reportQueue().length, 0, 'queue drained after reading both reports');
+	/* click 3: 队列真空（开工报告永不进队）——不得重放开工 */
+	envTok.whale._fire('pointerdown', { pointerId: 1, pointerType: 'mouse', button: 0, clientX: 100, clientY: 100 });
+	envTok.whale._fire('pointerup', { pointerId: 1, pointerType: 'mouse', button: 0, clientX: 100, clientY: 100 });
+	await sleep(320);
 	assert.ok(!envTok.bubble().textContent.includes('开工了'), 'no start replay (starts stay out of the queue)');
 	TK._setHoldMs(null);
 
@@ -4678,7 +4713,7 @@ try {
 		safeGet: function (key) { const raw = key in coreSandbox.storeB ? coreSandbox.storeB[key] : null; if (raw === null) return null; try { const p = JSON.parse(raw); return (p && p.v === 1) ? p.data : p; } catch (e) { return raw; } },
 		safeSet: function (key, data) { coreSandbox.storeB[key] = JSON.stringify({ v: 1, data: data }); },
 	};
-	vm.runInNewContext(coreSrcB + '\n;globalThis.__ppCore = { ACT_KEY: PP_ACT_KEY, SUM_KEY: PP_SUMMARY_KEY, AWAY: PP_SUMMARY_AWAY_MS, MIN: PP_SUMMARY_MIN_EVENTS, HB_AWAY: PP_HB_AWAY_MS, HB_TICK: PP_HB_TICK_MS, touch: ppTouchActivityAt, readAct: ppReadLastActivity, readRec: ppReadSummaryRec, slotFree: ppSummarySlotFree, writeRec: ppWriteSummaryRec, win: ppNightSummaryWindow, agg: ppAggregateWindow, boot: ppBootNightSummary, ledger: ppLedgerCalc, fmtAway: ppFmtAway, fmtClock: ppFmtClock };', coreSandbox);
+	vm.runInNewContext(coreSrcB + '\n;globalThis.__ppCore = { ACT_KEY: PP_ACT_KEY, SEEN_KEY: PP_SEEN_KEY, SUM_KEY: PP_SUMMARY_KEY, note: ppNoteUserSeen, readSeen: ppReadUserSeen, clearRet: ppClearReturnWindow, returnFrom: function () { return ppReturnFrom; }, AWAY: PP_SUMMARY_AWAY_MS, MIN: PP_SUMMARY_MIN_EVENTS, HB_AWAY: PP_HB_AWAY_MS, HB_TICK: PP_HB_TICK_MS, touch: ppTouchActivityAt, readAct: ppReadLastActivity, readRec: ppReadSummaryRec, slotFree: ppSummarySlotFree, writeRec: ppWriteSummaryRec, win: ppNightSummaryWindow, agg: ppAggregateWindow, boot: ppBootNightSummary, ledger: ppLedgerCalc, fmtAway: ppFmtAway, fmtClock: ppFmtClock };', coreSandbox);
 	const PP = coreSandbox.__ppCore;
 	const seedAct = (t) => { coreSandbox.safeSet('dsh-whale:lastActivityAt', t); };
 
@@ -4757,6 +4792,36 @@ try {
 	coreSandbox.dndActive = function () { return true; };
 	assert.strictEqual(PP.boot(T0B), false, '69: DND suppresses the boot bubble');
 	coreSandbox.dndActive = function () { return false; };
+
+	/* 69b. BUG-E（2026-11-24）：离席水位=用户交互水位，任务事件不再参与 */
+	assert.strictEqual(PP.SEEN_KEY, 'dsh-whale:lastUserSeenAt', '69b: interaction watermark has its own key');
+	delete coreSandbox.storeB['dsh-whale:lastSummary'];
+	/* 用户 30 分钟前刚交互过（任务事件很旧）→ 闸①不过 */
+	coreSandbox.safeSet('dsh-whale:lastUserSeenAt', T0B - 30 * 60 * 1000);
+	seedAct(T0B - 3 * 60 * 60 * 1000);
+	coreSandbox.history.length = 0;
+	for (let bi = 0; bi < 3; bi++) coreSandbox.history.push({ title: 'b' + bi, sessionId: 's-b' + bi, kind: 'done', at: T0B - 20 * 60 * 1000 });
+	assert.strictEqual(PP.win(T0B), null, '69b: a recent USER interaction closes gate1 even when task activity is old');
+	/* 用户 2 小时前最后一次交互、任务事件刚刚才刷新 → 闸①过（旧口径下这是自相矛盾的） */
+	coreSandbox.safeSet('dsh-whale:lastUserSeenAt', T0B - 2 * 60 * 60 * 1000);
+	seedAct(T0B - 60 * 1000);
+	coreSandbox.history.length = 0;
+	for (let bi2 = 0; bi2 < 3; bi2++) coreSandbox.history.push({ title: 'c' + bi2, sessionId: 's-c' + bi2, kind: 'done', at: T0B - 10 * 60 * 1000 });
+	const winE = PP.win(T0B);
+	assert.ok(winE && winE.away >= 2 * 60 * 60 * 1000 && winE.events.length === 3, '69b: gate opens from the interaction watermark even though task events are fresh (the old contradiction is gone)');
+	/* 回位窗口：note 记下离席起点并推进水位；闸之后仍用起点判定；消费后清空 */
+	PP.clearRet();
+	coreSandbox.safeSet('dsh-whale:lastUserSeenAt', T0B - 2 * 60 * 60 * 1000);
+	PP.note(T0B);
+	assert.ok(PP.returnFrom() === T0B - 2 * 60 * 60 * 1000, '69b: returning interaction preserves the absence start for the next gate evaluation');
+	assert.strictEqual(PP.readSeen(), T0B, '69b: and advances the watermark to the return moment');
+	const winE2 = PP.win(T0B + 60000);
+	assert.ok(winE2 && winE2.away >= 2 * 60 * 60 * 1000, '69b: gate still sees the recorded absence window after the watermark advanced');
+	PP.clearRet();
+	assert.strictEqual(PP.returnFrom(), 0, '69b: consuming the window clears it (no repeat)');
+	assert.ok(ppSrcB.includes('dsh-whale:lastUserSeenAt'), '69b: source carries the interaction-watermark key');
+	assert.ok(ppSrcB.includes("document.addEventListener('pointerdown'") && ppSrcB.includes("document.addEventListener('keydown'"), '69b: real gestures feed the watermark');
+	assert.ok(ppSrcB.includes('ppBootNightSummary(Date.now());') && ppSrcB.includes("addEventListener('visibilitychange'"), '69b: returning to the window re-runs the boot summary gate');
 
 	/* 70. 昨夜摘要卡装配（mock-b 批准面源码契约） */
 	assert.ok(ppSrcB.includes("'🐋 昨夜摘要'"), '70: card title via setIconLabel');
@@ -4848,11 +4913,90 @@ try {
 	assert.ok(ppSrcB.includes("'🐋 昨晚 '"), '74: click takeover guards on the summary bubble text prefix (normal notifications untouched)');
 	assert.ok(ppSrcB.includes('ppPendingReportTab'), '74: pending-tab intent bridges the async selectPanel→mount race');
 	assert.ok(ppSrcB.includes('window.__dshWhalePanel.openTab = function (t)'), '74: openTab seam registered per mount (latest instance wins)');
-	assert.ok(ppSrcB.includes("curTab = 'report'"), '74: pending intent lands on the report tab');
+	/* 【契约变更·2026-11-23 BUG-A 真机修复】意向位不再由 openTab 当场清掉：
+	 * 跨挂载 ppPanelWantedTab + 「只有当前挂载实例才消费」是新的正确契约（旧
+	 * 契约允许已卸载实例吞掉意向 → 真机「先设置、几秒后才周报」/永不切换）。 */
+	assert.ok(ppSrcB.includes("ppPanelWantedTab = 'report'") && ppSrcB.includes('var curTab = ppPanelWantedTab ||'), '74: pending intent bridges mounts via ppPanelWantedTab (BUG-A fix)');
+	assert.ok(ppSrcB.includes('ppPanelLiveRoot === root') && ppSrcB.includes('root.isConnected === false'), '74: only the live mount consumes the intent (detached-instance check)');
 	assert.ok(ppSrcB.includes("'周报在 DSH 左侧栏「小鲸鱼助手」页 🐳'"), '74: bridge-absent fallback mirrors the menu copy');
 	assert.ok(ppSrcB.includes('pullCloudHistory(function () { ppBootNightSummary(Date.now()); })'), '74: boot gate runs after the cloud merge (absence events live server-side)');
 
-	console.log('APPENDED TESTS PASSED (0.4.3 阶段 B: 三口径/昨夜摘要/心跳行/周报改版/陪伴小账/直达缝)');
+	/* —— BUG-A 行为级回归（2026-11-23 真机：桌宠点「📊 周报」只到设置 / 不跳）——
+	 * 已卸载实例调 openTab 只留意向；下一次真实挂载必须落在周报 Tab。 */
+	const envTabA = makeEnv();
+	envTabA.ready();
+	const WTabA = envTabA.sandbox.window;
+	const hostA1 = envTabA.sandbox.document.createElement('div');
+	WTabA.__dshWhalePanel.mount(hostA1);
+	const staleOpenTab = WTabA.__dshWhalePanel.openTab;
+	const hostA2 = envTabA.sandbox.document.createElement('div');
+	WTabA.__dshWhalePanel.mount(hostA2); /* remount → hostA1 的闭包成为旧实例 */
+	staleOpenTab('report'); /* 旧实例调用：只留意向，不得吞掉 */
+	const hostA3 = envTabA.sandbox.document.createElement('div');
+	WTabA.__dshWhalePanel.mount(hostA3); /* 下一次真实挂载消费意向 */
+	const tabOnOf = (host) => {
+		const inner = host.children.find((c) => (c.className || '') === 'dsh-whale-pp');
+		const tabs = inner && inner.children.find((c) => (c.className || '').indexOf('dsh-whale-pp-tabs') >= 0);
+		if (!tabs) return '';
+		return tabs.children.filter((b) => b.classList.contains('on')).map((b) => b.textContent).join('|');
+	};
+	assert.ok(tabOnOf(hostA3).includes('周报'), 'BUG-A: detached openTab only records intent — the NEXT mount lands on 周报');
+	assert.ok(!tabOnOf(hostA2).includes('周报'), 'BUG-A: a detached call must not switch the previous live instance');
+	WTabA.__dshWhalePanel.openTab('report'); /* 当前挂载实例的调用仍然立即生效 */
+	assert.ok(tabOnOf(hostA3).includes('周报'), 'BUG-A: live openTab still applies immediately');
+
+	/* —— BUG-B 行为级回归（2026-11-23 真机：可见态双击通知不跳）——
+	 * 窗口 pin 停在目标会话、全局当前会话是别的 → 仍必须调 open（旧代码误判
+	 * sameSession 而跳过 open，只剩翻页点击 = 用户侧「完全没反应」）。 */
+	const envJb = makeEnv();
+	envJb.ready();
+	const JBb = envJb.sandbox.__dshWhale;
+	const openedB = [];
+	JBb.bindJumpSessions({ open: (sid) => openedB.push(sid), scope: () => { throw new Error('no scope'); } });
+	envJb.sandbox.localStorage.setItem('dsh.sessions.current', JSON.stringify({ sessionId: 'session-nowb' }));
+	envJb.sandbox.sessionStorage.setItem('dsh-whale:window-session', 'session-targetb');
+	assert.strictEqual(JBb.openSessionAt('session-targetb'), true, 'BUG-B: jump accepted despite a stale window pin');
+	assert.deepStrictEqual(openedB, ['session-targetb'], 'BUG-B: a stale pin no longer skips the open call');
+
+
+	/* —— BUG-C 行为级回归（2026-11-23 真机：DSH 按对话内容动态改名后，
+	 * 小鲸鱼的历史任务行仍在用旧名；通知气泡也可能残留旧名）—— */
+	const envTc = makeEnv();
+	envTc.ready();
+	const WTc = envTc.sandbox.__dshWhale;
+	const t0c = Date.now();
+	WTc.pushHistory({ title: '旧会话名', sessionId: 'session-c1', kind: 'done', at: t0c, turnTokens: 100 });
+	WTc.pushHistory({ title: '旧会话名', sessionId: 'session-c1', kind: 'done', at: t0c - 60000, turnTokens: 50 });
+	WTc.pushHistory({ title: '别的会话', sessionId: 'session-c2', kind: 'done', at: t0c, turnTokens: 5 });
+	WTc.pushHistory({ title: '未命名任务', sessionId: 'session-c3', kind: 'question', at: t0c, turnTokens: null });
+	WTc._correctReports('session-c1', '新会话名', '旧会话名'); /* 真名 → 新名（动态改名） */
+	WTc._correctReports('session-c3', '真名'); /* 占位 → 真名（既有口径不许回归） */
+	const rowsC = WTc.historyList();
+	const c1rows = rowsC.filter((r) => r.sessionId === 'session-c1');
+	assert.strictEqual(c1rows.length, 2, 'BUG-C: both c1 rows still present');
+	assert.ok(c1rows.every((r) => r.title === '新会话名'), 'BUG-C: every history row follows the renamed session title');
+	assert.strictEqual(rowsC.filter((r) => r.sessionId === 'session-c2')[0].title, '别的会话', 'BUG-C: other sessions keep their own titles');
+	assert.strictEqual(rowsC.filter((r) => r.sessionId === 'session-c3')[0].title, '真名', 'BUG-C: placeholder rows still upgrade to the real name');
+
+	/* —— BUG-C 追溯回填（2026-11-24）：启动时向宿主 /titles 拉现势标题，
+	 * 历史里因动态改名残留的旧行必须被改成新名（宿主清单是唯一现势真相）—— */
+	const envTitles = makeEnv();
+	envTitles.ready();
+	const WTt = envTitles.sandbox.__dshWhale;
+	WTt.pushHistory({ title: '改名前的旧名', sessionId: 'session-c1', kind: 'done', at: Date.now(), turnTokens: 9 });
+	WTt.pushHistory({ title: '别的旧名', sessionId: 'session-c2', kind: 'done', at: Date.now(), turnTokens: 3 });
+	assert.strictEqual(WTt._applyHostTitles({ 'session-c1': '改名后真名' }), 1, 'BUG-C retrofit: exactly one session rewritten');
+	assert.strictEqual(WTt.historyList().filter((r) => r.sessionId === 'session-c1')[0].title, '改名后真名', 'BUG-C retrofit: stale history rows follow the host title list');
+	assert.strictEqual(WTt.historyList().filter((r) => r.sessionId === 'session-c2')[0].title, '别的旧名', 'BUG-C retrofit: untouched sessions keep their titles');
+	assert.strictEqual(WTt._applyHostTitles({ 'session-c1': '改名后真名' }), 0, 'BUG-C retrofit: idempotent (same title rewrites nothing)');
+
+	/* BUG-F（2026-11-24 口径 A）源码契约：红标强制入队 / 周报计次 / 历史不写 */
+	assert.ok(ppSrcB.includes("' · 🌡 压力 '"), 'BUG-F: summary card registers the pressure counter copy');
+	assert.ok(ppSrcB.includes('pressureWarnCountSince(weekAgo)'), 'BUG-F: weekly counter uses the 7-day window');
+	assert.ok(String(WTt._reconcileTitles).indexOf('function') === 0, 'BUG-C retrofit: async boot pull seam is present');
+
+	console.log('APPENDED TESTS PASSED (0.4.3 阶段 B: 三口径/昨夜摘要/心跳行/周报改版/陪伴小账/直达缝 + BUG-A/B/C 回归)');
+
 } catch (err) {
 	console.error('APPENDED TEST FAILED:', err && err.message || err);
 	process.exit(1);

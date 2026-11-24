@@ -168,8 +168,10 @@
 	 * `snapshot === false` stores NO token/pressure data (used for the
 	 * turn/start report — a task that just started has nothing to report).
 	 * `endTime` (ms epoch of the moment this report is about) powers the
-	 * double-click jump: the bubble jump pages the log back to THAT moment. */
-	function pushReport(text, duration, sessionId, snapshot, endTime) {
+	 * double-click jump: the bubble jump pages the log back to THAT moment.
+	 * `forceUnread`（BUG-F 2026-11-24）：压力提醒这类「该动手了」的告警即使
+	 * 用户正在看该会话也必须进未读队列（红标），否则气泡 5 秒消失后毫无痕迹。 */
+	function pushReport(text, duration, sessionId, snapshot, endTime, forceUnread) {
 		/* 通知已读联动（11-14）：报告到达时用户正看着这个会话（本窗口 pin
 		 * 命中）=当场已读——未读不入队（气泡照常弹、历史照记、红标不涨），
 		 * 并 relay 桌宠端同步清（桌宠的同款通知刚到、红标闪 1 即被
@@ -185,7 +187,7 @@
 			pressure: snapshot === false ? null : sessionPressure.get(sessionId),
 			endTime: typeof endTime === 'number' ? endTime : null
 		};
-		if (!viewedNow) {
+		if (!viewedNow || forceUnread) {
 			reportQueue.push(report);
 			/* generous bound: the badge must keep accumulating long past 20 */
 			if (reportQueue.length > REPORT_QUEUE_CAP) reportQueue.shift();
@@ -195,7 +197,7 @@
 		lastShownReport = report;
 		currentSaySession = sessionId || null;
 		renderUnread();
-		if (viewedNow && sessionId && !PET_MODE && typeof fetch === 'function') {
+		if (viewedNow && !forceUnread && sessionId && !PET_MODE && typeof fetch === 'function') {
 			try {
 				fetch('/api/whale-assistant/pet/ctrl', {
 					method: 'POST',

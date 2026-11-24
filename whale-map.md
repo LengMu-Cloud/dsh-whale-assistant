@@ -21,7 +21,7 @@
 
 > Versioned localStorage wrapper (inline module).  Every persisted key is stored as:     { v: 1, data: <payload> }  safeGet  : reads v1, or reads a legacy v0 shape and MIGRATES it to v1            immediately (best-effort write-back). Corruption / private mode            degrade silently to a default.
 
-**safeGet()** · **safeSet()** · **safeRemove()**
+**safeGet()** · **safeSet()** · **safeRemove()** · **recordPressureWarn()** · **pressureWarnCountSince()**
 
 ## **src/utils/session-key.js**
 
@@ -63,7 +63,7 @@
 
 > Server-events consumer (inline module): polls the whale-assistant host's /api/whale-assistant/events route (the host lives in the dsh server's cordis container and buffers session events for EVERY session) and feeds the frames the DOM adapter cannot see:    - turn/start of EVERY session (2026-09-02 
 
-**rememberSeq()** · **petDormantOf()** · **feedEventFrame()** · **registerBackground()** · **lookupTitlesFromHistory()** · **consume()** · **poll()** · **handleSseData()** · **connectSSE()** · **clearSseProbe()** · **startSseProbe()** · **probeSseOnce()** · **petFrameOnce()** · **ackPendingClear()**
+**rememberSeq()** · **petDormantOf()** · **feedEventFrame()** · **registerBackground()** · **lookupTitlesFromHistory()** · **consume()** · **poll()** · **handleSseData()** · **connectSSE()** · **clearSseProbe()** · **startSseProbe()** · **probeSseOnce()** · **applyHostTitles()** · **reconcileTitlesFromHost()** · **petFrameOnce()** · **ackPendingClear()**
 
 ## **src/core/health.js**
 

@@ -60,6 +60,14 @@ const m1 = mergeHistory(
 );
 ok(m1.history.length === 1 && m1.history[0].title === '新', 'exact-key union: newer entry wins at equal richness');
 
+/* 6b. BUG-C（2026-11-24）：同键同富度同 `at` 的标题刷新必须落库——动态改名后
+ * 页鲸推送的新标题不得被账本里的旧标题挡住（equal-time tie → later writer wins） */
+const m1b = mergeHistory(
+	{ clearAt: 0, history: [{ sessionId: 'a', endTime: 'T1', at: 100, kind: 'done', title: '旧名' }] },
+	{ clearAt: 0, history: [{ sessionId: 'a', endTime: 'T1', at: 100, kind: 'done', title: '新名' }] }
+);
+ok(m1b.history.length === 1 && m1b.history[0].title === '新名', 'exact-key equal-time: the pushing (later) title wins — dynamic rename refresh lands');
+
 /* 7. real title beats the 未命名任务 placeholder at the same dedupe key */
 const m2 = mergeHistory(
 	{ clearAt: 0, history: [{ sessionId: 'b', endTime: 'T1', at: 200, kind: 'done', title: '真实标题' }] },

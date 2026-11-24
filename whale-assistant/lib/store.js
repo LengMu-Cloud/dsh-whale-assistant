@@ -258,7 +258,11 @@ export function mergeHistory(existing, incoming) {
 		const prev = seen.get(key);
 		if (prev === undefined) { seen.set(key, e); return; }
 		if (richness(e) > richness(prev)) seen.set(key, e);
-		else if (richness(e) === richness(prev) && (e.at || 0) > (prev.at || 0)) seen.set(key, e);
+		/* BUG-C（2026-11-24 真机）：同键同富度同 `at` 时以**后写入者**为准。
+		 * 页鲸在动态改名后会推送标题刷新的同一条记录；旧策略保留 existing=账本
+		 * 旧标题，导致改名永远落不了库（页内历史已新、宿主账本/桌宠抽屉仍旧）。
+		 * 同键=同一条记录，标题差异只可能是「后写的是新名」，安全。 */
+		else if (richness(e) === richness(prev) && (e.at || 0) >= (prev.at || 0)) seen.set(key, e);
 	};
 	for (const e of (existing && Array.isArray(existing.history) ? existing.history : []).filter(alive)) put(e);
 	for (const e of incoming.history.filter(alive)) put(e);

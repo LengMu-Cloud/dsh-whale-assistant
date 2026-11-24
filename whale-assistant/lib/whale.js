@@ -185,6 +185,35 @@
 		} catch (error) {
 			/* ignore */
 		}
+	}
+
+	/* —— 压力提醒日志（BUG-F，2026-11-24 用户拍板口径 A）——
+	 * 口径：上下文压力提醒**计入红标**（未读队列）、**不写历史账本**（历史只收
+	 * 任务事件）、**周报可计次**。这里只维护一条轻量时间线，页鲸侧 localStorage，
+	 * 90 天 / 500 条滚动；周报汇总卡按 7 天窗口计数。 */
+	var PRESSURE_LOG_KEY = 'dsh-whale:pressureLog';
+	var PRESSURE_LOG_CAP = 500;
+	var PRESSURE_LOG_TTL_MS = 90 * 864e5;
+	function recordPressureWarn(at, pct) {
+		var t = typeof at === 'number' ? at : Date.now();
+		var log = safeGet(PRESSURE_LOG_KEY);
+		if (!Array.isArray(log)) log = [];
+		log.push({ at: t, pct: typeof pct === 'number' ? pct : null });
+		var cutoff = t - PRESSURE_LOG_TTL_MS;
+		log = log.filter(function (e) { return e && typeof e.at === 'number' && e.at >= cutoff; });
+		if (log.length > PRESSURE_LOG_CAP) log = log.slice(log.length - PRESSURE_LOG_CAP);
+		safeSet(PRESSURE_LOG_KEY, log);
+		return log.filter(function (e) { return e.at >= t - 604800000; }).length;
+	}
+	function pressureWarnCountSince(sinceMs) {
+		var log = safeGet(PRESSURE_LOG_KEY);
+		if (!Array.isArray(log)) return 0;
+		var since = typeof sinceMs === 'number' ? sinceMs : 0;
+		var n = 0;
+		for (var i = 0; i < log.length; i++) {
+			if (log[i] && typeof log[i].at === 'number' && log[i].at >= since) n++;
+		}
+		return n;
 	}/* ---- module: src/utils/session-key.js ---- */
 /* Session-key resolution (inline module): ONE copy of the active-conversation
  * id extraction, shared by BOTH event channels — core/alpha-adapter.js (DOM
@@ -601,15 +630,20 @@ function adoptCurrentSessionPin() {
 		pushCloudHistory(); /* write-through: other windows merge on their next pull */
 	}
 
-	/** correctReports hook: a late title rewrites this session's 未命名任务
-	 * rows in place (attention records saved before the LLM name existed).
-	 * The title prefill skips 未命名任务, so an uncorrected row can never
-	 * re-seed the map — this only upgrades the visible record. */
+	/** correctReports hook: every history row of this session follows the
+	 * newest title. Two reasons: (a) attention records saved before the LLM
+	 * name existed carry 未命名任务; (b) BUG-C（2026-11-23 真机）DSH 会按
+	 * 对话内容**动态改名**，而历史行是入账快照——旧口径只升级占位，真名
+	 * 改名后周报/历史列表会一直显示旧名。标题 prefill 跳过占位，所以升级
+	 * 后不会反向污染通讯录。 */
 	function correctHistoryTitle(sessionId, title) {
+		if (!sessionId || !title) return false;
 		var changed = false;
 		for (var i = 0; i < history.length; i++) {
-			if (history[i].sessionId === sessionId && history[i].title === '未命名任务') {
-				history[i].title = title;
+			var row = history[i];
+			if (!row || row.sessionId !== sessionId) continue;
+			if (row.title !== title) {
+				row.title = title;
 				changed = true;
 			}
 		}
@@ -2262,16 +2296,19 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			}
 			if (f.type === 'session/projection') {
 				if (f.key === 'title') {
-					/* 11-14（用户 rc.3 实机「[任务 36] 需要你选择」而侧栏有真名）：
-					 * 「当前会话跳过」在页面语境=标题由 DOM 读取器喂，但桌宠页
-					 * 没有 DOM 读取器——投影帧是唯一真名来源；而 session-key 的
-					 * 缓存扫描兜底会把刚被 feedEventFrame 命名的合成会话
-					 * （session-pet-sN='任务 N'）解析成「当前会话」→ 投影永远
-					 * 被跳过=真名饿死。PET_MODE 下绝不跳过。 */
-					if (f.sessionId !== resolveCurrentSessionId() || PET_MODE) {
+					/* BUG-C（2026-11-23 真机：DSH 按对话内容动态改名，小鲸鱼历史/
+					 * 气泡仍显示旧名）：title 投影**不再对「当前会话」短路**——
+					 * 旧口径假设页面语境的当前会话标题由 DOM 读取器喂，但 DSH 的
+					 * 动态改名帧一旦在这里被跳过就永久丢失（帧不重放），
+					 * sessionTitles 从此停在旧名。改为一律接受投影真值，并把
+					 * 旧名→新名的改名链传给 correctReports（历史行/气泡一起改）。
+					 * 11-14 的占位不压真名约束保持不变。 */
+					{
 						var v = f.value;
 						var title = typeof v === 'string' ? v : (v && typeof v.title === 'string' ? v.title : null);
 						if (title) {
+							var prevTitle = null;
+							try { prevTitle = sessionTitles.get(f.sessionId) || null; } catch (ePrev) {}
 							try { sessionTitles.set(f.sessionId, title); rememberTitle(f.sessionId, title); } catch (e) {}
 							try {
 								var subs = window.__dshWhale && window.__dshWhale.subagentSessions;
@@ -2287,7 +2324,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 							 * _correctReports 幂等（已是真名则 no-op）。 */
 							try {
 								if (typeof window.__dshWhale._correctReports === 'function') {
-									window.__dshWhale._correctReports(f.sessionId, title);
+									window.__dshWhale._correctReports(f.sessionId, title, (prevTitle && prevTitle !== title) ? prevTitle : undefined);
 								}
 							} catch (e2) {}
 						}
@@ -2543,13 +2580,61 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	/* test seam: this whole module is a closure, so exports.js can't see it —
 	 * mirror the _pollConsume pattern and hang the handler on the window seam */
 	if (typeof window !== 'undefined' && window.__dshWhale) window.__dshWhale._sseFrame = handleSseData;
+	/* BUG-C seam: 启动追溯回填可被测试/诊断直接驱动 */
+	try {
+		window.__dshWhale = window.__dshWhale || {};
+		window.__dshWhale._reconcileTitles = reconcileTitlesFromHost;
+		window.__dshWhale._applyHostTitles = applyHostTitles;
+	} catch (eSeam) {}
 
 	/* start as soon as the boot render settles (1.5s); the first polls still
 	 * skip frames that predate the page via the bootAt guards above */
+	/* BUG-C 追溯回填（2026-11-24）：启动时向宿主拉一次现势标题，把历史行/
+	 * 气泡里因 DSH 动态改名残留的旧名统一改写（历史是入账快照；改名帧只在
+	 * 变化时推送，页侧可能整段错过）。失败静默，不影响主链路。 */
+	/* 纯应用层（同步；测试可直接驱动）：把宿主现势标题写进 sessionTitles，
+	 * 并让历史行/排队气泡跟着改名（_correctReports 幂等）。返回改写条数。 */
+	function applyHostTitles(titles) {
+		if (!titles || typeof titles !== 'object') return 0;
+		var applied = 0;
+		for (var sid in titles) {
+			var title = titles[sid];
+			if (typeof title !== 'string' || !title) continue;
+			var prev = null;
+			try { prev = sessionTitles.get(sid) || null; } catch (e0) {}
+			try { sessionTitles.set(sid, title); rememberTitle(sid, title); } catch (e1) {}
+			/* 不管 sessionTitles 是否已是最新，都要驱动一次改名链：历史行是
+			 * 入账快照，可能仍停在旧名（真机 11-24：titles=102 但 applied=0 →
+			 * 历史行 134 条残留旧名）。correctReports 幂等，已一致时不写盘。 */
+			try {
+				if (typeof window.__dshWhale._correctReports === 'function') {
+					window.__dshWhale._correctReports(sid, title, (prev && prev !== title) ? prev : undefined);
+				}
+			} catch (e2) {}
+			if (prev !== title) applied++;
+		}
+		return applied;
+	}
+	function reconcileTitlesFromHost() {
+		if (typeof fetch !== 'function') return;
+		fetch('/api/whale-assistant/titles').then(function (r) {
+			return r && r.ok ? r.json() : null;
+		}).then(function (data) {
+			applyHostTitles(data && data.titles);
+			/* BUG-C 收尾（真机 11-24）：页面本地历史可能早已是新标题（上一轮已改写
+			 * 并落 localStorage），correctHistoryTitle 见「无变化」→ 不会推盘，宿主
+			 * 账本永远收不到修正后的全量。这里在 reconcile 后强制推一次（幂等，
+			 * 宿主 merge 同键同时间以后写入者为准）。 */
+			try {
+				if (typeof window.__dshWhale._pushCloudHistory === 'function') window.__dshWhale._pushCloudHistory();
+			} catch (ePush) {}
+		}).catch(function () {});
+	}
 	setTimeout(function () {
 		setInterval(poll, POLL_MS);
 		poll();
 		connectSSE();
+		reconcileTitlesFromHost(); /* BUG-C：启动追溯回填一次 */
 	}, 1500);
 
 	/* test seam: drive the polled-frame gate directly (active-session skip +
@@ -3020,8 +3105,10 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 	 * `snapshot === false` stores NO token/pressure data (used for the
 	 * turn/start report — a task that just started has nothing to report).
 	 * `endTime` (ms epoch of the moment this report is about) powers the
-	 * double-click jump: the bubble jump pages the log back to THAT moment. */
-	function pushReport(text, duration, sessionId, snapshot, endTime) {
+	 * double-click jump: the bubble jump pages the log back to THAT moment.
+	 * `forceUnread`（BUG-F 2026-11-24）：压力提醒这类「该动手了」的告警即使
+	 * 用户正在看该会话也必须进未读队列（红标），否则气泡 5 秒消失后毫无痕迹。 */
+	function pushReport(text, duration, sessionId, snapshot, endTime, forceUnread) {
 		/* 通知已读联动（11-14）：报告到达时用户正看着这个会话（本窗口 pin
 		 * 命中）=当场已读——未读不入队（气泡照常弹、历史照记、红标不涨），
 		 * 并 relay 桌宠端同步清（桌宠的同款通知刚到、红标闪 1 即被
@@ -3037,7 +3124,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			pressure: snapshot === false ? null : sessionPressure.get(sessionId),
 			endTime: typeof endTime === 'number' ? endTime : null
 		};
-		if (!viewedNow) {
+		if (!viewedNow || forceUnread) {
 			reportQueue.push(report);
 			/* generous bound: the badge must keep accumulating long past 20 */
 			if (reportQueue.length > REPORT_QUEUE_CAP) reportQueue.shift();
@@ -3047,7 +3134,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		lastShownReport = report;
 		currentSaySession = sessionId || null;
 		renderUnread();
-		if (viewedNow && sessionId && !PET_MODE && typeof fetch === 'function') {
+		if (viewedNow && !forceUnread && sessionId && !PET_MODE && typeof fetch === 'function') {
 			try {
 				fetch('/api/whale-assistant/pet/ctrl', {
 					method: 'POST',
@@ -3701,7 +3788,19 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		var resetAt = warnAt >= PRESSURE_WARN_PCT ? PRESSURE_RESET_PCT : Math.round(warnAt * 0.3);
 		if (pct >= warnAt && !pressureWarned) {
 			pressureWarned = true;
-			say('上下文快挤爆了…建议 /compact 🫠', 5200);
+			var pwMsg = '上下文快挤爆了…建议 /compact 🫠';
+			say(pwMsg, 5200);
+			/* BUG-F（2026-11-24 用户拍板口径 A）：压力提醒**计入红标**——即使正在
+			 * 看该会话也强制入队（forceUnread），气泡消失后仍可从红标读回；
+			 * **不写历史账本**；周报另由 pressureLog 计次（仅页鲸记，避免双窗口重复）。 */
+			try {
+				if (typeof pushReport === 'function' && lastMainSession) {
+					pushReport(pwMsg, 5200, lastMainSession, false, Date.now(), true);
+				}
+			} catch (eRep) { /* 桩环境兜底 */ }
+			try {
+				if (!PET_MODE && typeof recordPressureWarn === 'function') recordPressureWarn(Date.now(), pct);
+			} catch (eLog) { /* 存储不可用：静默 */ }
 		} else if (pct < resetAt) {
 			pressureWarned = false;
 		}
@@ -4262,8 +4361,10 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		capMap(sessionTitles, 150);
 	})();
 
-	/** Rewrite queued/visible reports that used the fallback name. */
-	function correctReports(sessionId, title) {
+	/** Rewrite queued/visible reports that used an older name. Fallback
+	 * names are upgraded on any title arrival; a REAL-name rename upgrades
+	 * when prevTitle is known (BUG-C 2026-11-23: DSH 动态改名). */
+	function correctReports(sessionId, title, prevTitle) {
 		correctHistoryTitle(sessionId, title); /* history rows saved pre-name follow too */
 		rememberTitle(sessionId, title); /* and the contact book learns the real name */
 		/* 桌宠占位「[任务 N]」同享晚到改写（11-03）：枚举会话的占位名与
@@ -4276,12 +4377,21 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				? text.replace(/^\[任务 \d+\]/, '[' + title + ']')
 				: text.split('未命名任务').join(title);
 		}
+		/* BUG-C：真名动态改名——把旧名方括号替换为新名（只动本会话条目）。 */
+		function applyRename(text) {
+			if (!prevTitle || prevTitle === title) return text;
+			return text.split('[' + prevTitle + ']').join('[' + title + ']');
+		}
 		var changed = false;
 		for (var i = 0; i < reportQueue.length; i++) {
 			var item = reportQueue[i];
-			if (item.sessionId === sessionId && isFallback(item.text)) {
+			if (item.sessionId !== sessionId) continue;
+			if (isFallback(item.text)) {
 				item.text = applyTitle(item.text);
 				changed = true;
+			} else {
+				var renamed = applyRename(item.text);
+				if (renamed !== item.text) { item.text = renamed; changed = true; }
 			}
 		}
 		/* rewrite the live bubble ONLY when it is showing THIS session's
@@ -4292,8 +4402,9 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		 * only thing a late title can still fix. */
 		if (document && document.querySelector) {
 			var bubble = document.querySelector('.dsh-whale-bubble');
-			if (bubble && currentSaySession === sessionId && isFallback(bubble.textContent)) {
-				bubble.textContent = applyTitle(bubble.textContent);
+			if (bubble && currentSaySession === sessionId) {
+				if (isFallback(bubble.textContent)) bubble.textContent = applyTitle(bubble.textContent);
+				else bubble.textContent = applyRename(bubble.textContent);
 			}
 		}
 	}
@@ -4417,6 +4528,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		}
 		if (frame.key === 'title') {
 			if (typeof frame.value === 'string') {
+				var prevTitle = sessionTitles.get(frame.sessionId) || null;
 				sessionTitles.set(frame.sessionId, frame.value);
 				rememberTitle(frame.sessionId, frame.value);
 				capMap(sessionTitles, 150); /* memory audit: one entry per conversation ever seen */
@@ -4429,7 +4541,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				 * for ANY session, not just registered subagent sessions
 				 * (attention reports name themselves 未命名任务 while the LLM
 				 * title is still generating, 09-05) */
-				correctReports(frame.sessionId, frame.value);
+				correctReports(frame.sessionId, frame.value, (prevTitle && prevTitle !== frame.value) ? prevTitle : undefined);
 			}
 			return;
 		}
@@ -7841,7 +7953,20 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			page.appendChild(tabBar);
 			page.appendChild(content);
 			var TABS = [['settings', '⚙️ 设置'], ['pet', '🐋 小鲸鱼形态'], ['report', '📊 周报'], ['help', '📖 使用说明']];
-			var curTab = 'settings';
+			/* 0.4.3 真机修（BUG-A，2026-11-23）：Tab 意向必须跨挂载存活。病态时序：
+			 * 外部入口（右键「📊 周报」/ 桌宠 pet-open-report 帧 / 摘要气泡）先置
+			 * 意向，但窗口里可能还挂着一个**已卸载的旧面板实例**——它的 openTab
+			 * 被调用后会清掉意向位、只把「周报」画进游离 DOM；随后真正的新挂载
+			 * 从 settings 起步，用户看到「先设置、几秒后才周报」甚至永不切换。
+			 * 修法：意向记在模块级 ppPanelWantedTab，只有**当前挂载实例**当场消费，
+			 * 旧实例只留意向给下一次真实挂载。 */
+			ppPanelLiveRoot = root;
+			if (ppPendingReportTab) {
+				ppPendingReportTab = false;
+				ppPanelWantedTab = 'report';
+			}
+			var curTab = ppPanelWantedTab || 'settings';
+			ppPanelWantedTab = null;
 			var tabBtns = {};
 			TABS.forEach(function (t) {
 				var b = document.createElement('button');
@@ -7852,6 +7977,8 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				setIconLabel(b, t[1]);
 				b.addEventListener('click', function (event) {
 					event.stopPropagation();
+					ppPendingReportTab = false; /* 用户手点=意向已达成，清掉挂账 */
+					ppPanelWantedTab = null;
 					curTab = t[0];
 					render();
 				});
@@ -8356,22 +8483,24 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			 * 由这里消费（selectPanel → React mount 是异步的，意向位补齐时序缝） */
 			try {
 				window.__dshWhalePanel.openTab = function (t) {
+					var known = false;
 					for (var i = 0; i < TABS.length; i++) {
-						if (TABS[i][0] === t) {
-							curTab = t;
-							render();
-							ppPendingReportTab = false;
-							return true;
-						}
+						if (TABS[i][0] === t) { known = true; break; }
 					}
-					return false;
+					if (!known) return false;
+					/* 跨挂载意向（BUG-A 根修）：旧实例调用只记账不消费，下一次真实
+					 * 挂载在 mount 头部把它落地；当前挂载实例则当场切换。 */
+					ppPanelWantedTab = t;
+					var live = ppPanelLiveRoot === root && !(root && root.isConnected === false);
+					if (live) {
+						curTab = t;
+						ppPanelWantedTab = null;
+						ppPendingReportTab = false;
+						render();
+					}
+					return true;
 				};
 			} catch (eOpenTab) {}
-			if (ppPendingReportTab) {
-				ppPendingReportTab = false;
-				curTab = 'report';
-				render();
-			}
 		}
 		/* 📖 使用说明 Tab（11-08 自 openHelp 抽屉迁入；11-13 三层重构——设计者
 		 * 视角 9 区 49 条全量平铺 → 纯用户视角「🚀 三步上手 / 🎮 日常操作 /
@@ -8420,7 +8549,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				{ t: '常驻与自愈', d: '桌面小鲸鱼跟着 DSH 走，开 DSH 就在（关窗≠退出）；宿主每 30 秒体检，意外消失约 1 分钟内自动重生。' },
 				{ t: '设置同步', d: '侧边栏页里改的音色 / 音量 / 免打扰等，约 2 秒内自动下发到桌面的小鲸鱼，不用两边各设。' },
 				{ t: '状态与情绪', d: '任务越多越累、会打瞌睡（拖一拖或双击就醒）；右键菜单标题看得到当前心情和进行中任务数。' },
-				{ cat: '🔔 通知与红标', t: '红标计数规则', d: '完成 / 失败 / 截断 / 中止 / 提问 / 审核 / 定时提醒计入未读；开工、压力提醒、工具提示不计入，99+ 封顶。' },
+				{ cat: '🔔 通知与红标', t: '红标计数规则', d: '完成 / 失败 / 截断 / 中止 / 提问 / 审核 / 定时提醒 / 上下文压力提醒计入未读（压力不写历史任务，次数在周报汇总卡看）；开工、工具提示不计入，99+ 封顶。' },
 				{ t: '定时提醒', d: '右键菜单设的闹钟到点播报；免打扰时段也照常响——自己定的闹钟不受免打扰约束。' },
 				{ t: '中止与开工', d: '任务开始只播报、不算未读；手动中止不算失败，但也计入红标。' },
 				{ t: '用量面板', d: '完成通知下方同时弹出本次消耗 / 全对话累计 / 上下文占用，与气泡同生同灭。' },
@@ -9036,6 +9165,19 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			sumTok.className = 'wh-rnum';
 			sumTok.textContent = fmtK(tb ? tb.tokens : 0) + ' tok · ' + (tb ? Object.keys(tb.sessions).length : 0) + ' 个对话';
 			sumRow.appendChild(sumTok);
+			/* BUG-F（2026-11-24 用户拍板口径 A）：压力提醒**周报计次**（7 天窗口）。
+			 * 口径：红标算、历史任务不算、周报要计——数据源是 pressureLog（不写历史）。 */
+			try {
+				var pwCount = (typeof pressureWarnCountSince === 'function') ? pressureWarnCountSince(weekAgo) : 0;
+				if (pwCount > 0) {
+					sumRow.appendChild(document.createTextNode(' · 🌡 压力 '));
+					var pwNum = document.createElement('span');
+					pwNum.className = 'wh-rnum';
+					pwNum.textContent = String(pwCount);
+					sumRow.appendChild(pwNum);
+					sumRow.appendChild(document.createTextNode(' 次'));
+				}
+			} catch (ePw) { /* 存储不可用：不显示 */ }
 			list.appendChild(sumRow);
 			/* 0.4.3 阶段 B：Tab 头行（📊 周报 sec + 只看失败 chip，mock-b 批准面）
 			 * 与陪伴小账区——都挂在卡片外、随 build 重建；空周也要出（chip 由
@@ -9216,6 +9358,7 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			var headWrap = document.createElement('div');
 			var ledgerWrap = document.createElement('div');
 			var summaryCard = ppBuildNightSummaryCard(card);
+			ppClearReturnWindow(); /* BUG-E：进周报 Tab 即完成一次闸评估，窗口只消费一次 */
 			if (summaryCard) content.appendChild(summaryCard);
 			content.appendChild(headWrap);
 			content.appendChild(card);
@@ -9323,6 +9466,13 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		 * todayKey/PET_MODE——test-whale 追加块整段摘出注入桩做行为断言；
 		 * DOM 装配一律在 mountWhaleReportTab/renderSettings 局部完成）—— */
 		var PP_ACT_KEY = 'dsh-whale:lastActivityAt';
+		/* BUG-E（2026-11-24 真机分析）：昨夜摘要的「离席」必须用**用户交互水位**。
+		 * 旧口径把 lastActivityAt（任务事件水位）当离席起点：任务一跑就刷新，
+		 * 闸①（离席≥1h）与闸②（窗口事件≥3）互为反条件——卡片/气泡真机永不触发。
+		 * 新口径：用户手势/键入/窗口重新可见/开机写这个键；任务事件不碰它。
+		 * ppReturnFrom = 内存里的「这次回位的离席起点」（水位推进后仍供闸消费）。 */
+		var PP_SEEN_KEY = 'dsh-whale:lastUserSeenAt';
+		var ppReturnFrom = 0;
 		var PP_SUMMARY_KEY = 'dsh-whale:lastSummary';
 		var PP_SUMMARY_AWAY_MS = 60 * 60 * 1000; /* 闸①：离席 ≥1h */
 		var PP_SUMMARY_MIN_EVENTS = 3; /* 闸②：离席期间任务事件 ≥3 条 */
@@ -9340,6 +9490,28 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			var v = null;
 			try { v = safeGet(PP_ACT_KEY); } catch (e) { v = null; }
 			return typeof v === 'number' && v > 0 ? v : 0;
+		}
+		/* —— BUG-E：用户交互水位（离席判定唯一数据源） —— */
+		function ppTouchUserSeenAt(now) {
+			if (PET_MODE) return false; /* 桌宠页不落页鲸键 */
+			try { safeSet(PP_SEEN_KEY, typeof now === 'number' ? now : Date.now()); } catch (e) { return false; }
+			return true;
+		}
+		function ppReadUserSeen() {
+			var v = null;
+			try { v = safeGet(PP_SEEN_KEY); } catch (e) { v = null; }
+			return typeof v === 'number' && v > 0 ? v : 0;
+		}
+		/* 一次真实交互到达：若距上次交互已 ≥1h（=刚从离席回来），把旧水位记进
+		 * ppReturnFrom 供摘要闸消费；然后推进水位。连续在场时只是滚动刷新。 */
+		function ppNoteUserSeen(now) {
+			var t = typeof now === 'number' ? now : Date.now();
+			var last = ppReadUserSeen();
+			if (last && t - last >= PP_SUMMARY_AWAY_MS && !ppReturnFrom) ppReturnFrom = last;
+			return ppTouchUserSeenAt(t);
+		}
+		function ppClearReturnWindow() {
+			ppReturnFrom = 0;
 		}
 		function ppReadSummaryRec() {
 			var v = null;
@@ -9359,11 +9531,13 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			try { safeSet(PP_SUMMARY_KEY, rec); } catch (e) {}
 			return rec;
 		}
-		/* 离席窗口判定（闸①②）：lastActivityAt 距今 ≥1h 且窗口 [last, now] 内
+		/* 离席窗口判定（闸①②）：**用户交互水位**距今 ≥1h 且窗口 [last, now] 内
 		 * 任务事件 ≥3 条。数据源=history——cap 已对齐服务端 500 口径，离席期间
-		 * 的记录由 pullCloudHistory 合并补齐（开机胶水在 pull 回调里判闸）。 */
+		 * 的记录由 pullCloudHistory 合并补齐（开机胶水在 pull 回调里判闸）。
+		 * 水位来源优先级：本次回位的离席起点（ppReturnFrom）→ 持久化用户交互
+		 * 水位 → 旧版任务活动键（升级/单测向后兼容兜底）。 */
 		function ppNightSummaryWindow(now) {
-			var last = ppReadLastActivity();
+			var last = ppReturnFrom || ppReadUserSeen() || ppReadLastActivity();
 			if (!last) return null;
 			var away = now - last;
 			if (away < PP_SUMMARY_AWAY_MS) return null;
@@ -9423,10 +9597,11 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			var n = typeof now === 'number' ? now : Date.now();
 			if (!ppSummarySlotFree(ppReadSummaryRec(), 'bubble', todayKey())) return false;
 			var win = ppNightSummaryWindow(n);
-			if (!win) return false;
+			if (!win) { ppClearReturnWindow(); return false; }
 			var agg = ppAggregateWindow(win.events);
 			uiSay('🐋 昨晚 ' + agg.done + ' 完成 · ' + agg.fail + ' 失败 · ' + agg.ask + ' 条待你审核 — 点开看周报', 8000);
 			ppWriteSummaryRec({ bubble: true, from: win.from, to: win.to, events: win.events.length });
+			ppClearReturnWindow(); /* 窗口已消费：不重复出 */
 			return true;
 		}
 		/* 陪伴小账纯计算（mock-b 批准面）：/state.petLedger={days:[{date,pets,wakes}]}
@@ -9604,6 +9779,27 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 				};
 			}
 		} catch (eWrap) { /* 桩环境兜底 */ }
+		/* BUG-E（2026-11-24）：用户交互水位采集——只在真机上由用户手势/键入/
+		 * 窗口重新可见/开机写入；任务事件（touchActivity 漏斗）不写这里。
+		 * 开机=用户刚回来：先 ppNoteUserSeen 记录离席起点并推进水位，随后的
+		 * 开机气泡闸用「起点」判定（ppReturnFrom），所以回位本身不会把闸清零。 */
+		try {
+			if (!PET_MODE) {
+				ppNoteUserSeen(Date.now());
+				var __ppSeenMark = function () {
+					try { ppNoteUserSeen(Date.now()); } catch (eSeen0) {}
+				};
+				document.addEventListener('pointerdown', __ppSeenMark, true);
+				document.addEventListener('keydown', __ppSeenMark, true);
+				document.addEventListener('visibilitychange', function () {
+					try {
+						if (document.hidden) return;
+						ppNoteUserSeen(Date.now());
+						ppBootNightSummary(Date.now());
+					} catch (eVis) {}
+				});
+			}
+		} catch (eSeenGlue) { /* 桩环境兜底 */ }
 		/* 摘要气泡点击 → 打开侧栏页 + 直切周报 Tab（menu.js 设置行同款
 		 * __dshWhaleSelectPanel 桥；桥缺席回落 uiSay 指路）。只接管当前显示中
 		 * 的摘要气泡（文本前缀守卫），普通通知气泡零波及。 */
@@ -9664,6 +9860,10 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 		/* 阶段 B 状态位（uiInit 闭包级）：摘要气泡的 Tab 切换意向 / 心跳行定时器 /
 		 * 小账缓存 / 筛选 chip 态 */
 		var ppPendingReportTab = false;
+		/* BUG-A 根修状态位（见 mountWhalePanelPage / openTab 注释）：跨挂载 Tab
+		 * 意向 + 最近一次挂载的 root（识别已游离的旧实例） */
+		var ppPanelWantedTab = null;
+		var ppPanelLiveRoot = null;
 		var ppHbTimer = null;
 		var ppPetLedger = null;
 		var ppRepFailOnly = false;
@@ -10097,6 +10297,9 @@ function endFiredRecently(sessionId, failMs, anyMs) {
 			return history;
 		};
 		window.__dshWhale.pushHistory = pushHistory;
+		/* BUG-C（2026-11-24）：reconcile 后强制全量推一次历史——页面本地可能早已
+		 * 是新标题而不触发「有变化才推」，宿主账本因此永远收不到修正。 */
+		window.__dshWhale._pushCloudHistory = pushCloudHistory;
 		window.__dshWhale.getClearAt = getClearAt;
 		window.__dshWhale.bumpClearAt = bumpClearAt;
 		window.__dshWhale.drawerOpen = function () {
@@ -10192,8 +10395,19 @@ function openSessionAt(sessionId, atMs) {
 	 * 点击全被 openSession 的异步 replaceMain 重渲染覆盖丢弃（点击落在过渡
 	 * 视图上），页面静止后手工同款 onClick 一次生效——open() 对「当前已打开
 	 * 的会话」本来就是 no-op 切换，跳过它翻页点击直接落在稳定视图上。 */
+	/* 同会话判定必须用**全局当前会话键**（DSH 切会话时写、跨窗口权威），
+	 * 不能用每窗口 pin：pin 只服务用量/未读归属，会过期或指错——真机
+	 * BUG-B（2026-11-23）：可见态双击通知跳转时，pin 若正好停在目标会话，
+	 * sameSession 误判为真 → 跳过 open → 只剩翻页点击 → 用户看到「完全没
+	 * 反应」；关窗重开时 sessionStorage 清空、pin 落回全局值，于是关窗态
+	 * 反而能跳。pin 的钉入口径（下方 pinWindowSession）保持不变。 */
 	var activeNow = null;
-	try { activeNow = (typeof resolveCurrentSessionId === 'function') ? resolveCurrentSessionId() : null; } catch (e) { activeNow = null; }
+	try {
+		activeNow = (typeof resolveGlobalSessionId === 'function') ? resolveGlobalSessionId() : null;
+		if (!isRealSessionId(activeNow)) {
+			activeNow = (typeof resolveCurrentSessionId === 'function') ? resolveCurrentSessionId() : null;
+		}
+	} catch (e) { activeNow = null; }
 	var sameSession = !!activeNow && activeNow === sessionId;
 	/* 异会话的 open settle 权威信号（11-06 二轮，用户实报「有一些历史行
 	 * 只能跳到对话」）：同会话已 skip open；异会话必须 open——但 replaceMain

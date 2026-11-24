@@ -568,16 +568,19 @@
 			}
 			if (f.type === 'session/projection') {
 				if (f.key === 'title') {
-					/* 11-14（用户 rc.3 实机「[任务 36] 需要你选择」而侧栏有真名）：
-					 * 「当前会话跳过」在页面语境=标题由 DOM 读取器喂，但桌宠页
-					 * 没有 DOM 读取器——投影帧是唯一真名来源；而 session-key 的
-					 * 缓存扫描兜底会把刚被 feedEventFrame 命名的合成会话
-					 * （session-pet-sN='任务 N'）解析成「当前会话」→ 投影永远
-					 * 被跳过=真名饿死。PET_MODE 下绝不跳过。 */
-					if (f.sessionId !== resolveCurrentSessionId() || PET_MODE) {
+					/* BUG-C（2026-11-23 真机：DSH 按对话内容动态改名，小鲸鱼历史/
+					 * 气泡仍显示旧名）：title 投影**不再对「当前会话」短路**——
+					 * 旧口径假设页面语境的当前会话标题由 DOM 读取器喂，但 DSH 的
+					 * 动态改名帧一旦在这里被跳过就永久丢失（帧不重放），
+					 * sessionTitles 从此停在旧名。改为一律接受投影真值，并把
+					 * 旧名→新名的改名链传给 correctReports（历史行/气泡一起改）。
+					 * 11-14 的占位不压真名约束保持不变。 */
+					{
 						var v = f.value;
 						var title = typeof v === 'string' ? v : (v && typeof v.title === 'string' ? v.title : null);
 						if (title) {
+							var prevTitle = null;
+							try { prevTitle = sessionTitles.get(f.sessionId) || null; } catch (ePrev) {}
 							try { sessionTitles.set(f.sessionId, title); rememberTitle(f.sessionId, title); } catch (e) {}
 							try {
 								var subs = window.__dshWhale && window.__dshWhale.subagentSessions;
@@ -593,7 +596,7 @@
 							 * _correctReports 幂等（已是真名则 no-op）。 */
 							try {
 								if (typeof window.__dshWhale._correctReports === 'function') {
-									window.__dshWhale._correctReports(f.sessionId, title);
+									window.__dshWhale._correctReports(f.sessionId, title, (prevTitle && prevTitle !== title) ? prevTitle : undefined);
 								}
 							} catch (e2) {}
 						}
@@ -849,13 +852,61 @@
 	/* test seam: this whole module is a closure, so exports.js can't see it —
 	 * mirror the _pollConsume pattern and hang the handler on the window seam */
 	if (typeof window !== 'undefined' && window.__dshWhale) window.__dshWhale._sseFrame = handleSseData;
+	/* BUG-C seam: 启动追溯回填可被测试/诊断直接驱动 */
+	try {
+		window.__dshWhale = window.__dshWhale || {};
+		window.__dshWhale._reconcileTitles = reconcileTitlesFromHost;
+		window.__dshWhale._applyHostTitles = applyHostTitles;
+	} catch (eSeam) {}
 
 	/* start as soon as the boot render settles (1.5s); the first polls still
 	 * skip frames that predate the page via the bootAt guards above */
+	/* BUG-C 追溯回填（2026-11-24）：启动时向宿主拉一次现势标题，把历史行/
+	 * 气泡里因 DSH 动态改名残留的旧名统一改写（历史是入账快照；改名帧只在
+	 * 变化时推送，页侧可能整段错过）。失败静默，不影响主链路。 */
+	/* 纯应用层（同步；测试可直接驱动）：把宿主现势标题写进 sessionTitles，
+	 * 并让历史行/排队气泡跟着改名（_correctReports 幂等）。返回改写条数。 */
+	function applyHostTitles(titles) {
+		if (!titles || typeof titles !== 'object') return 0;
+		var applied = 0;
+		for (var sid in titles) {
+			var title = titles[sid];
+			if (typeof title !== 'string' || !title) continue;
+			var prev = null;
+			try { prev = sessionTitles.get(sid) || null; } catch (e0) {}
+			try { sessionTitles.set(sid, title); rememberTitle(sid, title); } catch (e1) {}
+			/* 不管 sessionTitles 是否已是最新，都要驱动一次改名链：历史行是
+			 * 入账快照，可能仍停在旧名（真机 11-24：titles=102 但 applied=0 →
+			 * 历史行 134 条残留旧名）。correctReports 幂等，已一致时不写盘。 */
+			try {
+				if (typeof window.__dshWhale._correctReports === 'function') {
+					window.__dshWhale._correctReports(sid, title, (prev && prev !== title) ? prev : undefined);
+				}
+			} catch (e2) {}
+			if (prev !== title) applied++;
+		}
+		return applied;
+	}
+	function reconcileTitlesFromHost() {
+		if (typeof fetch !== 'function') return;
+		fetch('/api/whale-assistant/titles').then(function (r) {
+			return r && r.ok ? r.json() : null;
+		}).then(function (data) {
+			applyHostTitles(data && data.titles);
+			/* BUG-C 收尾（真机 11-24）：页面本地历史可能早已是新标题（上一轮已改写
+			 * 并落 localStorage），correctHistoryTitle 见「无变化」→ 不会推盘，宿主
+			 * 账本永远收不到修正后的全量。这里在 reconcile 后强制推一次（幂等，
+			 * 宿主 merge 同键同时间以后写入者为准）。 */
+			try {
+				if (typeof window.__dshWhale._pushCloudHistory === 'function') window.__dshWhale._pushCloudHistory();
+			} catch (ePush) {}
+		}).catch(function () {});
+	}
 	setTimeout(function () {
 		setInterval(poll, POLL_MS);
 		poll();
 		connectSSE();
+		reconcileTitlesFromHost(); /* BUG-C：启动追溯回填一次 */
 	}, 1500);
 
 	/* test seam: drive the polled-frame gate directly (active-session skip +

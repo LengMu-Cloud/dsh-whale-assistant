@@ -170,15 +170,20 @@
 		pushCloudHistory(); /* write-through: other windows merge on their next pull */
 	}
 
-	/** correctReports hook: a late title rewrites this session's 未命名任务
-	 * rows in place (attention records saved before the LLM name existed).
-	 * The title prefill skips 未命名任务, so an uncorrected row can never
-	 * re-seed the map — this only upgrades the visible record. */
+	/** correctReports hook: every history row of this session follows the
+	 * newest title. Two reasons: (a) attention records saved before the LLM
+	 * name existed carry 未命名任务; (b) BUG-C（2026-11-23 真机）DSH 会按
+	 * 对话内容**动态改名**，而历史行是入账快照——旧口径只升级占位，真名
+	 * 改名后周报/历史列表会一直显示旧名。标题 prefill 跳过占位，所以升级
+	 * 后不会反向污染通讯录。 */
 	function correctHistoryTitle(sessionId, title) {
+		if (!sessionId || !title) return false;
 		var changed = false;
 		for (var i = 0; i < history.length; i++) {
-			if (history[i].sessionId === sessionId && history[i].title === '未命名任务') {
-				history[i].title = title;
+			var row = history[i];
+			if (!row || row.sessionId !== sessionId) continue;
+			if (row.title !== title) {
+				row.title = title;
 				changed = true;
 			}
 		}

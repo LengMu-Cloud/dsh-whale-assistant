@@ -76,8 +76,19 @@ function openSessionAt(sessionId, atMs) {
 	 * 点击全被 openSession 的异步 replaceMain 重渲染覆盖丢弃（点击落在过渡
 	 * 视图上），页面静止后手工同款 onClick 一次生效——open() 对「当前已打开
 	 * 的会话」本来就是 no-op 切换，跳过它翻页点击直接落在稳定视图上。 */
+	/* 同会话判定必须用**全局当前会话键**（DSH 切会话时写、跨窗口权威），
+	 * 不能用每窗口 pin：pin 只服务用量/未读归属，会过期或指错——真机
+	 * BUG-B（2026-11-23）：可见态双击通知跳转时，pin 若正好停在目标会话，
+	 * sameSession 误判为真 → 跳过 open → 只剩翻页点击 → 用户看到「完全没
+	 * 反应」；关窗重开时 sessionStorage 清空、pin 落回全局值，于是关窗态
+	 * 反而能跳。pin 的钉入口径（下方 pinWindowSession）保持不变。 */
 	var activeNow = null;
-	try { activeNow = (typeof resolveCurrentSessionId === 'function') ? resolveCurrentSessionId() : null; } catch (e) { activeNow = null; }
+	try {
+		activeNow = (typeof resolveGlobalSessionId === 'function') ? resolveGlobalSessionId() : null;
+		if (!isRealSessionId(activeNow)) {
+			activeNow = (typeof resolveCurrentSessionId === 'function') ? resolveCurrentSessionId() : null;
+		}
+	} catch (e) { activeNow = null; }
 	var sameSession = !!activeNow && activeNow === sessionId;
 	/* 异会话的 open settle 权威信号（11-06 二轮，用户实报「有一些历史行
 	 * 只能跳到对话」）：同会话已 skip open；异会话必须 open——但 replaceMain

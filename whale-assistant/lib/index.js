@@ -169,6 +169,11 @@ let frameSeq = 0;
  * previous generation would silently drop every new frame */
 const bootId = globalThis.crypto?.randomUUID?.() || 'boot-' + Date.now();
 const sseClients = new Set(); /* EventSource responses (0.4.0 push channel) */
+/* BUG-D（2026-11-23 真机「双鲸」）：最近一次 apply 的自清理器。插件开关/热
+ * 重载时 DSH 可能在上一个实例尚未 dispose 的情况下再 apply 一次——旧实例
+ * 的桌宠进程树无人回收、新实例又 spawn 一只 => 桌面出现两个小鲸鱼（外加
+ * 路由/事件/心跳各双份）。应用入口先自清理上一实例，杜绝重复拉起。 */
+let activeApplyDispose = null;
 
 function pushFrame(frame) {
 	frame.seq = ++frameSeq;
@@ -199,8 +204,58 @@ function pushFrame(frame) {
 }
 
 function apply(ctx) {
+	if (typeof activeApplyDispose === 'function') {
+		try { activeApplyDispose(); } catch (e) {
+			console.warn('[dsh-whale-assistant] previous instance dispose failed: ' + String(e && e.message || e));
+		}
+		activeApplyDispose = null;
+	}
+	/* 本实例在 disposers 数组建立之前挂的 ctx 监听/注入，统一收进这里，
+	 * 让自清理器也能摘掉它们（否则热重载后事件帧会双份）。 */
+	const earlyDisposers = [];
+	/* BUG-C 追溯回填（2026-11-24）：宿主侧会话清单的**现势标题**（与桌宠
+	 * 预填同一数据源 sessionController.list）。页鲸启动时拉一次，把历史行/
+	 * 气泡里因 DSH 动态改名残留的旧名统一改写。只读、失败静默。 */
+	/* DSH 0.2.2 形状（2026-11-24 核 source：api-session-controller/src/index.ts:282）：
+	 *   sessionController.list(request, signal) -> { items: SessionSummary[] }
+	 *   SessionSummary.sessionId / .projections.values.title（title 投影键）
+	 * 旧实现把 signal 当 request 传、把返回值当数组 → 永远空表。 */
+	const sessionTitlesProbe = () => {
+		const diag = { hasSc: false, listType: 'none', resultType: 'none', itemCount: 0, firstItemKeys: [], projectionKeys: [], titleSample: '', error: '' };
+		const sc = ctx.sessionController;
+		if (!sc || typeof sc.list !== 'function') {
+			diag.listType = typeof (sc && sc.list);
+			return Promise.resolve({ titles: {}, diag: diag });
+		}
+		diag.hasSc = true;
+		diag.listType = 'function';
+		return Promise.resolve(sc.list({}, AbortSignal.timeout(5000))).then((value) => {
+			diag.resultType = value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
+			let items = [];
+			if (value && Array.isArray(value.items)) items = value.items;
+			else if (Array.isArray(value)) items = value; /* 兼容旧返回形状 */
+			diag.itemCount = items.length;
+			if (items[0]) {
+				diag.firstItemKeys = Object.keys(items[0]).slice(0, 20);
+				const pr = items[0].projections;
+				diag.projectionKeys = pr && pr.values ? Object.keys(pr.values).slice(0, 20) : [];
+				if (pr && pr.values && typeof pr.values.title === 'string') diag.titleSample = pr.values.title.slice(0, 40);
+			}
+			const titles = {};
+			for (const it of items) {
+				if (!it || typeof it.sessionId !== 'string') continue;
+				const t = it.projections && it.projections.values && it.projections.values.title;
+				if (typeof t === 'string' && t) titles[it.sessionId] = t;
+			}
+			return { titles: titles, diag: diag };
+		}).catch((e) => {
+			diag.error = String(e && e.message || e).slice(0, 160);
+			return { titles: {}, diag: diag };
+		});
+	};
+	const currentSessionTitles = () => sessionTitlesProbe().then((r) => r.titles);
 	try {
-		ctx.on('session/event', (session, event) => {
+		const offSessionEvent = ctx.on('session/event', (session, event) => {
 			if (!session || !event) return;
 			/* assistant/chunk 是逐 token 的流式噪声（一轮可产生上百帧）：
 			 * 不加过滤它会在 3s 轮询窗口内把环形缓冲里排在前面的
@@ -223,6 +278,7 @@ function apply(ctx) {
 				try { petCtl.announceTitle(session.id); } catch (e) { /* title is best-effort */ }
 			}
 		});
+		if (typeof offSessionEvent === 'function') earlyDisposers.push(offSessionEvent);
 	} catch (e) { /* events unavailable on this host version */ }
 	try {
 		/* 0.3.3: inject 而非裸取——投影服务与本插件的激活顺序无保证，服务未挂载时
@@ -230,20 +286,22 @@ function apply(ctx) {
 		 * （真机验尸：真实任务后事件环 20 帧、零投影帧 = 转发代码存在但从未触发）。
 		 * 投影服务文档明确要求 inject 声明；照本文件 jobs 订阅同款模式，
 		 * 服务就绪后再挂 onChanged，签名 (session, key, value, seq)。 */
-		ctx.inject(['sessionProjections'], (spCtx) => {
+		const offProj = ctx.inject(['sessionProjections'], (spCtx) => {
 			spCtx.sessionProjections?.onChanged((session, key, value) => {
 				if (!session) return;
 				pushFrame({ type: 'session/projection', sessionId: session.id, key, value });
 			});
 		});
+		if (typeof offProj === 'function') earlyDisposers.push(offProj);
 	} catch (e) { /* projections unavailable */ }
 	try {
-		ctx.inject(['jobs'], (jobsCtx) => {
+		const offJobs = ctx.inject(['jobs'], (jobsCtx) => {
 			jobsCtx.jobs?.onJobsChanged?.((owner) => {
 				if (!owner) return;
 				pushFrame({ type: 'session/jobs', sessionId: owner.id !== undefined ? owner.id : String(owner), jobs: [] });
 			});
 		});
+		if (typeof offJobs === 'function') earlyDisposers.push(offJobs);
 	} catch (e) { /* jobs service unavailable */ }
 
 	/* the pet host attaches AFTER route registration (it needs the live
@@ -347,6 +405,31 @@ function apply(ctx) {
 					'cache-control': 'no-store'
 				});
 				res.end(JSON.stringify({ css, svg }));
+			}
+		},
+		{
+			kind: 'exact',
+			path: '/api/whale-assistant/titles',
+			handler: (req, res) => {
+				/* BUG-C 追溯回填（2026-11-24）：只读现势标题清单，供页鲸启动时
+				 * 修正历史行/气泡里的旧会话名（历史是入账快照，动态改名不回写）。 */
+				if (req.method !== 'GET') {
+					res.writeHead(405, { 'cache-control': 'no-store' });
+					res.end();
+					return;
+				}
+				if (!isAllowed(req)) {
+					res.writeHead(403, { 'cache-control': 'no-store' });
+					res.end('{"titles":{}}');
+					return;
+				}
+				sessionTitlesProbe().then((r) => {
+					res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+					res.end(JSON.stringify({ titles: r.titles, count: Object.keys(r.titles).length, diag: r.diag }));
+				}).catch(() => {
+					res.writeHead(500, { 'cache-control': 'no-store' });
+					res.end('{"titles":{}}');
+				});
 			}
 		},
 		{
@@ -632,7 +715,7 @@ function apply(ctx) {
 		];
 		/* dev-say stays off production servers (see DEV_ENDPOINTS above) */
 		const activeRoutes = DEV_ENDPOINTS ? routes : routes.filter((r) => r.path !== '/api/whale-assistant/dev-say');
-		const disposers = [];
+		const disposers = earlyDisposers; /* BUG-D：包含本实例早挂的 ctx 监听/注入 */
 		for (const route of activeRoutes) {
 		try {
 			disposers.push(ctx.webServer.register(route));
@@ -724,30 +807,20 @@ function apply(ctx) {
 		 * sessionController.list() 是侧栏正在用的同一份会话清单（含冷会话
 		 * 的标题投影缓存），从这里拿全量 真实会话→现势标题。失败静默回落
 		 * 账本路径；真实 id 仍只在宿主内存，pet 层码本转码后下发。 */
-		listSessionTitles: () => {
-			const sc = ctx.sessionController;
-			if (!sc || typeof sc.list !== 'function') return Promise.resolve({});
-			return Promise.resolve(sc.list(AbortSignal.timeout(5000))).then((items) => {
-				const out = {};
-				if (Array.isArray(items)) {
-					for (const it of items) {
-						if (!it || typeof it.sessionId !== 'string') continue;
-						const t = it.projections && it.projections.values && it.projections.values.title;
-						if (typeof t === 'string' && t) out[it.sessionId] = t;
-					}
-				}
-				return out;
-			}).catch(() => ({}));
-		},
+		listSessionTitles: currentSessionTitles, /* BUG-C：与 /titles 路由同一实现（单一数据源） */
 		/* 桌宠历史抽屉（11-05）：账本目录（loadStore/saveStoreAtomic 的落点），
 		 * /pet/history 读 + clear-history 写都走这里——目录语义不重复实现。 */
 		ledgerDir: () => storeDir()
 	});
 	disposers.push(() => { petCtl.dispose(); });
 
-	return () => {
-		for (const dispose of disposers) dispose();
+	const disposeSelf = () => {
+		for (const dispose of disposers) {
+			try { dispose(); } catch (e) { /* already gone */ }
+		}
 	};
+	activeApplyDispose = disposeSelf;
+	return disposeSelf;
 }
 
 /* isTrustedRequest is exported for test-host-store.js — the fence deserves

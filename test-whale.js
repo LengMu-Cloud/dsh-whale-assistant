@@ -5372,6 +5372,23 @@ try {
 	/* 11-24 用户新需求「重启小鲸鱼」：菜单行 + /pet/ctrl restart 动作 */
 	assert.ok(menuSrcC.includes("'🔄 重启小鲸鱼'") && menuSrcC.includes("action: 'restart'"), '86b: menu carries 重启小鲸鱼 row posting {action:restart}');
 	assert.ok(styleSrcC.includes('transform: translateY(0) scale(1);'), '86c: shown bubble pins the animation end pose (尾巴不再压红标)');
+	/* 86d. 11-24 用户三轮定稿「保留对话框小尖端，且尖直接接在红标上」：桌宠页
+	   把 ::after 三角从 base 8px 收小到 6px，锚点从 right:18px 挪到红标圆心列；
+	   全形态 right:2px/bottom:+6px、气泡形态 right:-2px/bottom:+30px——尖点
+	   正好落在红标 2px 深色底环外缘（无头 Edge 实测 -0.2/-0.3px，相接无缝） */
+	const petPageD = fs.readFileSync(path.join(__dirname, 'whale-assistant', 'pet', 'page.html'), 'utf8');
+	assert.ok(petPageD.includes('.dsh-whale-bubble::after {\n    right: 3px;\n    border-width: 6px;\n  }'), '86d: pet bubble keeps a 6px dialog tip anchored over the badge column');
+	assert.ok(petPageD.includes('right: 2px;\n    bottom: calc(100% + 6px);') &&
+		petPageD.includes('body.pet-form-bubble .dsh-whale-bubble {\n    right: -2px;\n    bottom: calc(100% + 30px);\n  }'),
+	'86d: both pet forms touch the tip onto the badge ring (full right2/bottom+6, bubble-form right-2/bottom+30)');
+	/* 86e. 沙漏尾根因（11-24 用户实报「倒三角的尖下面又接了一个正三角形」）：
+	   桌宠页此前给 ::after 同时上 border-top 与 border-bottom 两侧颜色 → 非
+	   flip 状态两个方向的三角同时渲染。现在按朝向分开上色：常规只朝下、flip
+	   只朝上，任何状态都只有一个尖端。 */
+	assert.ok(petPageD.includes('border-top-color: #2c2c2e !important; border-bottom-color: transparent !important;') &&
+		petPageD.includes('.dsh-whale-bubble.dsh-whale-bubble-flip::after') &&
+		petPageD.includes('border-top-color: transparent !important; border-bottom-color: #2c2c2e !important;'),
+	'86e: pet tail colours ONLY the active orientation (no hourglass tail: down tip OR flip up tip, never both)');
 
 	console.log('APPENDED TESTS PASSED (0.4.3 阶段 C: 周报行/诚实化/260ms/truncate/双钳制/DND 指示/token 第一波/语义色/焦点三件套)');
 } catch (err) {

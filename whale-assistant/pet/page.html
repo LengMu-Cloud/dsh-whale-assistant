@@ -52,8 +52,17 @@
     filter: none !important;
     backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
   }
+  /* 尖端配色必须**按朝向分开**（11-24 用户实报：「倒三角形的尖下面又接了一个
+     正三角形，再由正三角形最底部的长边接到红标上」）。根因：::after 是同一个
+     元素用「border-top 画朝下的尖、border-bottom 画朝上的尖」，此前这里把
+     top/bottom 两侧都给了 #2c2c2e !important → 非 flip 状态**同时渲染出朝下
+     + 朝上两个三角**（沙漏尾），沙漏尾的底边正好压在红标上。现在只给当前朝向
+     上色：常规只画朝下的尖端，flip（贴屏顶翻到鲸下）只画朝上的尖端。 */
   .dsh-whale-bubble::after, .dsh-whale-note::after {
-    border-top-color: #2c2c2e !important; border-bottom-color: #2c2c2e !important;
+    border-top-color: #2c2c2e !important; border-bottom-color: transparent !important;
+  }
+  .dsh-whale-bubble.dsh-whale-bubble-flip::after {
+    border-top-color: transparent !important; border-bottom-color: #2c2c2e !important;
   }
   .dsh-whale-menu, .dsh-whale-menu-sub, .dsh-whale-settings, .dsh-whale-wardrobe, .dsh-whale-history,
   .dsh-whale-status, .dsh-whale-status-report {
@@ -84,6 +93,34 @@
   body.pet-form-bubble .dsh-whale-badge {
     top: -22px;
     right: -8px;
+  }
+  /* 11-24 深夜（用户三轮定稿）：通知气泡保留**对话框式小尖端**，且尖端要
+     **直接顶到红标上**（连成一体，中间不悬空）。做法：base 的 ::after 三角
+     在桌宠语境收小到 6px，水平锚点挪到「红标圆心那一列」，气泡底缘抬高到让
+     尖点**正好落在红标 2px 深色底环的外缘**（尖→红标圆环无缝，尖→红标红面
+     2px）——读起来就是气泡的小尖"接"在红标上，红标成了尖的端点。
+     两形态红标位置不同，分别给（几何实测值，无头 Edge 真渲染量取）：
+       · 全形态：红标圆心 = 鲸右缘-11.1px（top:2/right:2 盒 18.2px）
+         → 气泡 right:2px（右缘对齐红标右缘）+ bottom:calc(100% + 6px)；
+         尖 6px → 尖点 = 鲸顶 = 红标底环外缘（gap 0），尖中心=红标圆心。
+       · 气泡形态：红标外置在卡顶上方（top:-22/right:-8，圆心=卡右缘-1.1px）
+         → 气泡 right:-2px + bottom:calc(100% + 30px)；尖点 = 卡顶-24px =
+         红标底环外缘（gap 0）。
+     flip（贴屏顶翻到鲸下）沿用 base 的镜像规则（尖头朝上）。 */
+  .dsh-whale-bubble {
+    right: 2px;
+    bottom: calc(100% + 6px);
+  }
+  .dsh-whale-bubble::after {
+    right: 3px;
+    border-width: 6px;
+  }
+  body.pet-form-bubble .dsh-whale-bubble {
+    right: -2px;
+    bottom: calc(100% + 30px);
+  }
+  body.pet-form-bubble .dsh-whale-bubble::after {
+    right: -3px;
   }
   /* 气泡形态（第一批三态之一；10-31 用户反馈重做）：不是把鲸鱼缩小——
      鲸鱼实体收进一枚「玻璃圆角卡」：半透明深色玻璃渐变+高光描边+内投影
